@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "gokaku",
+    "slug": "gokaku",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "gokaku",
+    "userInterfaceStyle": "light",
+    "platforms": ["ios"],
+    "ios": {
+      "bundleIdentifier": "com.example.gokaku",
+      "supportsTablet": false
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

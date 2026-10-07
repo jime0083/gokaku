@@ -1,0 +1,78 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# generated native folders (Continuous Native Generation: npx expo prebuild / run:ios で再生成する)
+/ios
+/android
+
+# Native build artifacts
+.kotlin/
+*.orig.*
+*.ipa
+*.app
+*.dSYM/
+*.dSYM.zip
+build/
+DerivedData/
+xcuserdata/
+
+# Secrets (絶対にコミットしない)
+.env
+.env.*
+!.env.example
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+*.keystore
+GoogleService-Info.plist
+google-services.json
+service-account*.json
+*-service-account*.json
+*firebase-adminsdk*.json
+credentials.json
+.runtimeconfig.json
+functions/.secret.local
+functions/.env*
+
+# Firebase
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+database-debug.log*
+pubsub-debug.log*
+ui-debug.log*
+emulator-data/
+firebase-export-*/
+functions/lib/
+
+# Tests / E2E outputs
+coverage/
+e2e-artifacts/
+.maestro/screenshots/
+.maestro/output/
+test-results/
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+
+# typescript
+*.tsbuildinfo

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "moduleResolution": "nodenext",
+    "esModuleInterop": true,
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "sourceMap": true,
+    "outDir": "lib",
+    // shared/(アプリと共有するドメインロジック)も出力に含めるため、リポジトリ直下を rootDir にする
+    // 出力: lib/functions/src/*.js と lib/shared/*.js(package.json の main は lib/functions/src/index.js)
+    "rootDir": "..",
+    "types": ["node", "jest"]
+  },
+  "include": ["src"],
+  "compileOnSave": true
+}

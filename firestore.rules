@@ -1,0 +1,21 @@
+rules_version = '2';
+
+// アクセス権限方針(requirements.md 5)の最小版。
+// - 本人は自分の users/{uid} 配下のみ読み取り可
+// - 書き込みの細かい許可(設定・目標・セッション追記のみ等)は Phase 3-5 以降で追加する。現時点では全て拒否
+// - それ以外(xTokens を含む)はクライアントから一切アクセス不可(デフォルト拒否)
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      match /{document=**} {
+        allow read: if isOwner(uid);
+      }
+    }
+  }
+}

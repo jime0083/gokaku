@@ -1,0 +1,274 @@
+# 合格ウォッチ(仮) - 問題管理 (problem.txt)
+# 運用ルール:
+# - 開発中に見つかった問題(想定した動きをしない、デザイン崩れ等)や修正要望は全てここに記録する
+# - 修正プロセス(CLAUDE.md「問題修正プロセス」参照・省略禁止):
+#   問題共有 → problem.txtに記録 → 原因を徹底調査 → 原因特定 →
+#   タスクを切り出しprogress.txt/manual-work.txtに追加 → 修正作業 → 解決済みに更新
+# - 問題IDは P-001 から連番で付与する
+# - 原因調査・特定・切り出しタスクの欄を埋めずに修正作業を開始してはならない
+# - テストデータの変更等で問題を回避しただけの場合は「解決済み」にしない
+
+=====================================
+記録フォーマット(コピーして使用)
+=====================================
+## P-XXX: (問題タイトル)
+- 記録日: YYYY-MM-DD
+- 状態: 調査中 | 仕様確認中 | 修正中 | 解決済み
+- 発生箇所: (画面/機能/タスクID)
+- 問題内容:
+  想定した動き:
+  実際の動き:
+- 再現手順:
+  1. ...
+- 原因調査:
+  (調査した内容・確認したコード・データフローの追跡結果・採取したデータ)
+- 特定した原因:
+  (根本原因。根拠付きで。調査完了までは空欄)
+- 切り出したタスク:
+  (progress.txt / manual-work.txt に追加したタスクID)
+- 解決日: YYYY-MM-DD
+- 解決内容:
+  (実施した修正と検証結果)
+
+=====================================
+問題一覧
+=====================================
+
+## P-001: npm audit で依存パッケージの脆弱性警告(high 46 / moderate 15)
+- 記録日: 2026-10-07
+- 状態: 解決済み(リスク受け入れ。リリース前に再確認)
+- 発生箇所: Phase 1-1(Expo 初期化時の依存パッケージ)
+- 問題内容:
+  想定した動き: 依存パッケージに既知の脆弱性がない、またはリスクを評価済みである
+  実際の動き: `npm audit --omit=dev` で 61件(15 moderate, 46 high)。@expo/config-plugins / @expo/config /
+              @expo/prebuild-config / @expo/inline-modules など Expo のビルド用ツール経由のもの
+- 再現手順:
+  1. `npm ci`
+  2. `npm audit --omit=dev`
+- 原因調査(2026-10-07 メインエージェント):
+  npm audit の元になっている advisory は5件。それぞれの経路を npm ls で追った。
+  - braces(high, DoS): expo → @expo/metro → metro-file-map → micromatch。開発・ビルド時のみ
+  - node-forge(high, 署名検証): expo → @expo/cli(@expo/code-signing-certificates)。開発・ビルド時の CLI のみ
+  - uuid(moderate): expo → @expo/config-plugins → xcode。prebuild 時のみ
+  - sprintf-js(moderate, DoS): react-native → @react-native/jest-preset → babel-jest → … js-yaml。テスト時のみ
+  - decode-uri-component(moderate, DoS): expo-router → query-string。アプリのバンドルに含まれる。
+    不正な % エンコードの URL(ディープリンク)を受け取ると処理が重くなる可能性がある。影響は利用者の端末上のアプリだけで、データ漏えいはない
+  残りの61件は、上の5件に依存している Expo 系パッケージの数え上げ。
+  `npx expo install --check` の結果は「Dependencies are up to date」(Expo SDK 57 の推奨どおり)。
+  `npm audit fix --force` は Expo の推奨版から外れる破壊的変更になるため、使わない
+- 特定した原因:
+  Expo SDK 57 が依存しているツール群の推移的依存。プロジェクト側では、Expo の推奨版を保ったままでは修正できない
+- 対応方針(2026-10-07 ユーザー承認):
+  - 開発・ビルド時のみのもの(4件)は、リスクを受け入れる
+  - decode-uri-component は影響が小さいので現時点では受け入れ、Phase 8 のリリース前に Expo の更新で解消されたかを再確認する
+- 切り出したタスク:
+  progress.txt 8-5(リリース前の依存脆弱性の再確認)
+- 解決日: 2026-10-07
+- 解決内容:
+  ユーザー承認のうえでリスクを受け入れた。リリース前に 8-5 で再確認する
+
+## P-002: Cloud Functions の Node バージョン(engines: 22)とローカル(Node 24)の不一致
+- 記録日: 2026-10-07
+- 状態: 調査中
+- 発生箇所: Phase 1-2(functions/package.json の engines)
+- 問題内容:
+  想定した動き: ローカルの Emulator と本番の Functions が同じ Node バージョンで動く
+  実際の動き: engines は node 22、ホストは Node v24.9.0。Emulator が「Using node@24 from host」と警告して Node 24 で動く
+- 再現手順:
+  1. `npm run test:functions` を実行し、Emulator のログを見る
+- 原因調査:
+  (未着手。Cloud Functions for Firebase が対応する Node のバージョンを公式で確認し、本番ランタイムを決める。
+   ローカルを合わせる方法(nvm 等)も確認する。期限: Phase 8-2 本番デプロイ前)
+- 特定した原因:
+- 切り出したタスク:
+- 解決日:
+- 解決内容:
+
+## P-003: Homebrew で Maestro をインストールできない(Command Line Tools が古い)
+- 記録日: 2026-10-07
+- 状態: 仕様確認中(ユーザーの対応待ち)
+- 発生箇所: Phase 1-3 開始前(Maestro の導入)
+- 問題内容:
+  想定した動き: `brew install mobile-dev-inc/tap/maestro` で Maestro が入る
+  実際の動き: 「Error: Your Command Line Tools are too outdated.」で中断。依存(openjdk 等)は入ったが maestro 本体は未導入
+- 再現手順:
+  1. `brew install mobile-dev-inc/tap/maestro`
+- 原因調査:
+  `pkgutil --pkg-info=com.apple.pkg.CLTools_Executables` の結果は version 16.4.0。
+  Xcode は 26.5 で、Homebrew は Command Line Tools for Xcode 26.6 を要求している。
+  Homebrew が、ビルド前に Command Line Tools の版をチェックしているため。
+- 特定した原因:
+  Command Line Tools(16.4)が Xcode(26.x)より古く、Homebrew の要求を満たしていない
+- 切り出したタスク:
+  manual-work W11(Command Line Tools の更新)
+- 解決日:
+- 解決内容:
+
+## P-004: shared/ の lint ルールで shared/ の外への相対 import を検出できない
+- 記録日: 2026-10-07
+- 状態: 解決済み
+- 発生箇所: Phase 2-1(eslint.config.js の shared/ 用 no-restricted-imports)
+- 問題内容:
+  想定した動き: shared/ からは shared/ 内の相対 import 以外を import するとエラーになる(アプリ・Functions 両方で動く純粋なコードを保つため)
+  実際の動き: `import x from '../src/app/index'` のように shared/ の外を指す相対 import がエラーにならない
+- 再現手順:
+  1. shared/x.ts に `import x from '../src/app/index';` と書く
+  2. `npx eslint shared/x.ts` → 終了コード 0
+- 原因調査:
+  2-1 のレビューで発見。eslint.config.js の該当ルールを確認した。
+  パターンは regex `^(?!\.{1,2}/)` で、「./ か ../ で始まらないもの」だけを禁止している。
+  そのため ../ で始まるパスは、どこを指していても許可される。
+- 特定した原因:
+  正規表現がパスの開始文字だけを見ており、解決後の場所が shared/ 内かを判定していない
+- 切り出したタスク:
+  progress.txt 2-1b
+- 解決日: 2026-10-07
+- 解決内容:
+  import 元ファイルの位置から解決先を判定するローカルルール gokaku/shared-imports-only に置き換えた。
+  tests/lint(27件)で恒久的に検証している。ルールを無効化すると、エラーを期待する19件が失敗することを確認済み(2-1b レビューPASS)
+
+## P-005: shared/ の import 制限が .ts 以外のファイルに掛からない
+- 記録日: 2026-10-07
+- 状態: 解決済み
+- 発生箇所: eslint.config.js(gokaku/shared-imports-only の files 指定)
+- 問題内容:
+  想定した動き: shared/ のどのファイルからも、外部への import はエラーになる
+  実際の動き: shared/x.tsx や shared/x.js で react-native を import してもエラーにならない
+- 再現手順:
+  1. shared/x.tsx に `import { View } from 'react-native'` と書く
+  2. npx eslint shared/x.tsx → エラーなし
+- 原因調査:
+  2-1b のレビューで発見。ルールの files 指定が ['shared/**/*.ts'] だけになっていた
+- 特定した原因:
+  files の拡張子指定が .ts のみ
+- 切り出したタスク:
+  progress.txt 2-1c
+- 解決日: 2026-10-07
+- 解決内容:
+  files を shared/**/*.{ts,tsx,js,jsx,mjs,cjs} に拡大した。tests/lint に11件を追加(2-1c レビューPASS)
+
+## P-006: `npm run lint` が shared/・functions/・tests/ を検査していない
+- 記録日: 2026-10-07
+- 状態: 解決済み
+- 発生箇所: package.json の lint スクリプト(expo lint)
+- 問題内容:
+  想定した動き: `npm run lint` でリポジトリ内の全ソース(アプリ・shared・functions・テスト・設定)が検査される
+  実際の動き: expo lint は引数なしだと src/app/components しか検査しない。shared/ に違反 import があっても `npm run lint` は緑になる。
+              リポジトリ全体に `npx eslint .` を実行すると、eslint.config.js:7 の `'__dirname' is not defined (no-undef)` で失敗する
+- 再現手順:
+  1. `npx eslint . --max-warnings=0` → exit 1(eslint.config.js の __dirname)
+  2. shared/ に外部 import を書いて `npm run lint` → 緑のまま
+- 原因調査:
+  2-1c の実装担当の報告をきっかけに、メインエージェントが package.json を確認した(lint = "expo lint")。
+  `npx eslint .` も実行し、上の失敗を再現した。
+  1-1〜2-1c の各レビューで「lint 全緑」としてきたのは expo lint の範囲だけの結果だった。
+  shared/ の import 制限は、tests/lint のテストでのみ担保されていた。
+- 特定した原因:
+  lint スクリプトが expo lint の既定の検査範囲に依存している。eslint.config.js は Node の CommonJS として書かれているが、Node のグローバル変数の設定がない
+- 切り出したタスク:
+  progress.txt 2-1d
+- 解決日: 2026-10-07
+- 解決内容:
+  lint を `eslint . --max-warnings=0` に変更した。Node で動くファイルにだけ globals.node を設定し、__dirname のエラーを解消した。
+  検査範囲が shared/・functions/src・tests/・src/・設定ファイルであることを確認した(2-1d レビューPASS)
+
+## P-007: npm ls で react の peer 依存の不一致(react-reconciler が react ^19.3.0 を要求、実体は 19.2.3)
+- 記録日: 2026-10-07
+- 状態: 解決済み
+- 発生箇所: 依存関係(node_modules/test-renderer/node_modules/react-reconciler)
+- 問題内容:
+  想定した動き: `npm ls --all` で invalid が出ない
+  実際の動き: `react@19.2.3 deduped invalid: "^19.3.0" from node_modules/test-renderer/node_modules/react-reconciler`。テストは通っている
+- 再現手順:
+  1. `npm ls --all | grep invalid`
+- 原因調査(2026-10-07 メインエージェント):
+  `npm ls test-renderer react-reconciler` の経路は @testing-library/react-native@14.0.1 → test-renderer@1.3.0 → react-reconciler@0.34.0。
+  react-reconciler@0.34.0 の peer は react ^19.3.0。
+  アプリの react は 19.2.3 で、Expo SDK 57 の推奨版(`npx expo install --check` は up to date)。
+  @testing-library/react-native@13 系の peer は react >=18.2.0 / react-test-renderer >=18.2.0
+- 特定した原因:
+  テスト用ライブラリ @testing-library/react-native 14 が、Expo SDK 57 の react(19.2.3)より新しい react を前提にしている
+- 切り出したタスク:
+  progress.txt 2-6
+- 解決日: 2026-10-07
+- 解決内容:
+  devDependencies に test-renderer ~1.2.0 を追加し、React 19.2 系向けの react-reconciler 0.33 に揃えた。根拠は RNTL v14 移行ガイド。
+  npm ci からのやり直しでも invalid 0 を確認した(2-6 レビューPASS)
+
+## P-008: 実装担当が `pkill -f "cat"` を実行し、ユーザーの無関係なプロセスを終了させた
+- 記録日: 2026-10-07
+- 状態: 解決済み(再発防止ルールを追加。ユーザーのアプリへの影響はユーザー確認待ち)
+- 発生箇所: Phase 2-3 の実装作業中(gokaku-impl)
+- 問題内容:
+  想定した動き: 作業中に止まったコマンドだけを終了させる
+  実際の動き: `pkill -f "cat" -U <uid>` で、コマンドラインに "cat" を含むユーザーの全プロセスが終了した
+             ("Application Support"・"ApplicationServices" を含むもの)。
+             VS Code のヘルパーと fontd が 02:55:12 に再起動した。Claude Code の IDE 連携(MCP)も切断された
+- 再現手順: (再現させない)
+- 原因調査:
+  実装担当の報告による。終了対象を PID で指定せず、文字列一致で一括終了させた。
+  サブエージェントの定義に、プロセス終了の方法に関する禁止事項がなかった
+- 特定した原因:
+  プロセス操作の安全ルールが未定義だった
+- 切り出したタスク:
+  ルール追加(CLAUDE.md 安全ルール、gokaku-impl / gokaku-review / gokaku-security の厳守ルール)。メインエージェントが実施済み
+- 解決日: 2026-10-07
+- 解決内容:
+  PID 指定以外のプロセス終了を禁止するルールを追加した。リポジトリのファイルへの影響はない
+
+## P-009: ホーム集計(homeSummary)の小さな不整合
+- 記録日: 2026-10-07
+- 状態: 解決済み
+- 発生箇所: shared/homeSummary.ts(Phase 2-4)
+- 問題内容:
+  (1) 同じ goalId で開始日より前の日付の dailyResults があると、積み上げと経過日数に数えられる(セッション側は開始日で絞っている)。
+      通常のデータでは発生しない
+  (2) 不正セッションを除外する collectSessions が、dailyJudgement.ts の同名の非公開関数と同じ形の重複コードになっている
+  (3) コメントが古い(判定しなかった日の扱いを「要確認」としたまま。2026-10-07 に決定済み)
+- 再現手順:
+  (1) 開始日より前の日付の dailyResults を渡して calculateHomeSummary を呼ぶ
+- 原因調査:
+  2-4 のレビューでコードを読んで発見した。(1) は dailyResults を goalId だけで絞り、日付範囲では絞っていない
+- 特定した原因:
+  (1) dailyResults の日付範囲チェックが漏れていた。(2) 2-3 と 2-4 で別々に実装した。(3) 仕様決定後にコメントを更新していない
+- 切り出したタスク:
+  progress.txt 2-4b
+- 解決日: 2026-10-07
+- 解決内容:
+  (1) 開始日より前の dailyResults を除外し、テストを追加した。(2) shared/sessionFilter.ts の partitionGoalSessions に共通化した。(3) コメントを更新した(2-4b レビューPASS)
+
+## P-010: P-001 の後に増えた依存の脆弱性警告(firebase-tools 由来、functions の uuid)
+- 記録日: 2026-10-07
+- 状態: 解決済み(リスク受け入れ。リリース前に再確認)
+- 発生箇所: ルートの devDependencies(firebase-tools、1-2 で追加)、functions の本番依存
+- 問題内容:
+  想定した動き: P-001 で受け入れた5件以外に脆弱性がない
+  実際の動き: `npm audit`(dev を含む)で 79件(high 60 / moderate 19)。P-001 の5件に加えて、次の4件が元になっている
+    - @grpc/grpc-js(high)・basic-ftp(high)・@opentelemetry/core(moderate)・re2(moderate)
+  また functions の本番依存で、`npm --prefix functions audit --omit=dev` が uuid(moderate)を1件報告する
+- 再現手順:
+  1. `npm audit`
+  2. `npm --prefix functions audit --omit=dev`
+- 原因調査(2026-10-07 メインエージェント):
+  - 追加の4件は、すべて firebase-tools(Emulator・デプロイ用 CLI、devDependency)の推移的依存。
+    経路は cloud-sql-connector / pubsub / proxy-agent / superstatic。アプリのバンドルにも、デプロイされる Functions にも含まれない
+  - P-001 の調査は `--omit=dev` だったので、これらは件数に入っていなかった
+  - functions の uuid は firebase-admin → @google-cloud/storage → gaxios 経由。デプロイされるサーバーのコードに含まれる。
+    npm audit では fixAvailable=true(破壊的でない更新で直せる)。
+    脆弱性が起きるのは uuid v3/v5/v6 に buf を渡したときだけで、gaxios での使われ方は未確認
+- 特定した原因:
+  firebase-tools と firebase-admin の推移的依存
+- 対応方針(2026-10-07 ユーザー承認):
+  - firebase-tools 由来の4件は開発時のみなので、P-001 と同じく受け入れる。8-5 のリリース前確認の対象に含める
+  - functions の uuid は、`npm --prefix functions audit fix`(破壊的でない更新)で直すタスクを切り出す
+- 切り出したタスク:
+  progress.txt 2-7(functions の uuid 更新)、8-5(リリース前の再確認に firebase-tools 由来の4件を追加)
+- 追加調査(2026-10-07 2-7 実装担当の報告をメインエージェントが npm view / npm ls / コードで確認):
+  `npm audit fix` を実行したが lock は無変更だった。npm audit の fixAvailable 表示は実態と合っていない。
+  firebase-admin 14.5.0 と @google-cloud/storage 8.2.0 はどちらも最新版。storage が gaxios ^6.0.2 を要求しており、
+  6.x の最新 6.7.1 が uuid ^9.0.1(脆弱版)に依存している。解消するには gaxios 7.x が必要で、これは非破壊更新の範囲外。
+  また gaxios のコードで uuid を使うのは `v4()`(引数なし)だけ。脆弱性の条件(v3/v5/v6 に buf を渡す)に当たらず、悪用できない
+- 解決日: 2026-10-07
+- 解決内容:
+  2-7 は中止した(非破壊更新では解消できないため)。ユーザー承認のうえで uuid のリスクを受け入れた。
+  firebase-tools 由来の4件とあわせて、8-5(リリース前の再確認)の対象にする
