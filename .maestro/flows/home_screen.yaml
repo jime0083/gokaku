@@ -1,0 +1,21 @@
+# サンプルフロー: アプリを起動し「合格ウォッチ」が表示されることを確認してスクリーンショットを撮る。
+# appId・接続先(開発ビルドの Metro URL)はハードコードせず、scripts/e2e.js が -e で注入する。
+appId: ${APP_ID}
+---
+# expo-dev-client(開発ビルド)はディープリンクで Metro(開発サーバー)の URL を明示しないと
+# 自動で接続できないため、起動後に DEV_CLIENT_URL を開いて接続する
+- launchApp
+- openLink: ${DEV_CLIENT_URL}
+# 初回接続時はシミュレータの「"gokaku"で開きますか?」確認ダイアログや、接続直後の開発メニューが
+# 前面に出ることがある(出ない場合もある)。出ていれば閉じる(出ていなければ何もせず進む)
+- tapOn:
+    text: "開く"
+    optional: true
+- tapOn:
+    text: "Open"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- assertVisible: "合格ウォッチ"
+- takeScreenshot: home

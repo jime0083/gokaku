@@ -66,6 +66,9 @@
 - 解決日: 2026-10-07
 - 解決内容:
   ユーザー承認のうえでリスクを受け入れた。リリース前に 8-5 で再確認する
+- 追記(2026-10-07): 1-4 で @bacons/apple-targets(package.json の dependencies に入っているが、使うのは prebuild 時のみ。アプリのバンドルには含まれない)を追加した。
+  これに含まれる @expo/config-plugins → xcode → uuid 系により、`npm audit --omit=dev` が 61 → 65件(moderate 15→17、high 46→48)になった。
+  同じ系統(ビルドツール由来)なので、この方針の範囲として受け入れる。8-5 で再確認する
 
 ## P-002: Cloud Functions の Node バージョン(engines: 22)とローカル(Node 24)の不一致
 - 記録日: 2026-10-07
@@ -86,7 +89,7 @@
 
 ## P-003: Homebrew で Maestro をインストールできない(Command Line Tools が古い)
 - 記録日: 2026-10-07
-- 状態: 仕様確認中(ユーザーの対応待ち)
+- 状態: 解決済み
 - 発生箇所: Phase 1-3 開始前(Maestro の導入)
 - 問題内容:
   想定した動き: `brew install mobile-dev-inc/tap/maestro` で Maestro が入る
@@ -101,8 +104,9 @@
   Command Line Tools(16.4)が Xcode(26.x)より古く、Homebrew の要求を満たしていない
 - 切り出したタスク:
   manual-work W11(Command Line Tools の更新)
-- 解決日:
+- 解決日: 2026-10-07
 - 解決内容:
+  ユーザーが Command Line Tools for Xcode 26.6 を導入した(W11)。その後 `brew install mobile-dev-inc/tap/maestro` が成功し、Maestro 2.11.0 が入った
 
 ## P-004: shared/ の lint ルールで shared/ の外への相対 import を検出できない
 - 記録日: 2026-10-07
@@ -272,3 +276,79 @@
 - 解決内容:
   2-7 は中止した(非破壊更新では解消できないため)。ユーザー承認のうえで uuid のリスクを受け入れた。
   firebase-tools 由来の4件とあわせて、8-5(リリース前の再確認)の対象にする
+
+## P-011: 1-4 の技術検証で未確認・不具合だった点(ライブアクティビティが停止後に残る 他)
+- 記録日: 2026-10-07
+- 状態: 修正中(5-3 で対応)
+- 発生箇所: targets/widget(StopStudyIntent)、ControlWidget、通知アクション
+- 問題内容:
+  (1) 停止ボタンで stop はサーバーに記録されるが、StopStudyIntent.perform() 内の Activity<StudyActivityAttributes>.activities が空配列を返し、
+      activity.end() が実行されない。そのため停止後もライブアクティビティの表示が残る
+  (2) iOS 18 のロック画面コントロールからの「開始」は、シミュレータの操作を自動化できず未確認
+  (3) 通知アクション「勉強中」のタップ → サーバー反映は未確認(Maestro で通知許可ダイアログの操作が安定しなかった)
+  (4) ロック画面そのもののスクリーンショットは未取得(この Mac でシミュレータへのキー送信に必要なアクセシビリティ権限がない)。
+      同じ ActivityConfiguration から描画される Dynamic Island で代わりに確認した
+- 再現手順: .evidence/1-4/README.md
+- 原因調査:
+  (1) 実装担当の調査: Activity.request() はアプリのプロセスでは成功している(state: active)。
+      同じシミュレータで再インストールを繰り返したことによる ActivityKit の状態のずれ、またはシミュレータ特有の制約の可能性がある。原因は確定していない
+- 特定した原因:
+  (未確定。5-3 で、Activity の id を Intent のパラメータとして渡す方式に変えて実機で再検証する)
+- 切り出したタスク:
+  progress.txt 5-3(完了条件に追加)
+- 解決日:
+- 解決内容:
+
+## P-012: 1-4 の証跡の手順どおりに再現すると、開始の送信が失敗する(送信: false、syncEvents 0件)
+- 記録日: 2026-10-07
+- 状態: 解決済み(候補の原因を修正。元の失敗は修正後に一度も再現しない)
+- 発生箇所: 1-4(modules/study-sync・targets/widget の Keychain 書き込み/読み取り、nativeSync の認証)
+- 問題内容:
+  想定した動き: .evidence/1-4/README.md の手順どおりに、トークン発行 → 開始 → Firestore に start が記録される
+  実際の動き: 既にインストールされているアプリのまま手順を行うと「送信: false」になり、syncEvents は 0件だった。
+    deviceTokens のハッシュは新しいトークンで更新されている。nativeSync は認証で拒否(401 相当)された。
+    アンインストールして入れ直した後は成功した(start・stop とも記録された)
+- 再現手順:
+  1. 前の検証でアプリがインストールされたままのシミュレータ(iPhone 16 Pro Max iOS 18.6)で、検証画面を開く
+  2. 「デバイストークンを発行」→「開始」 → 送信: false
+- 原因調査:
+  - レビュー担当は「署名されたエンタイトルメントが空(codesign の結果が <dict></dict>)」を原因と推定した。
+    メインエージェントが確認したところ、シミュレータ用のビルドでは、エンタイトルメントは署名ではなく実行ファイルの __TEXT,__entitlements セクションに埋め込まれる。
+    gokaku.debug.dylib にはアプリグループ group.com.jime0083.gokakuwatch と keychain-access-groups が正しく入っていた。
+    このため、エンタイトルメントが空という推定は根拠にならない(シミュレータでは codesign の結果が空でも通常どおり)
+  - modules/study-sync/ios/StudySyncCore.swift の write() は delete → SecItemAdd の順に呼んでいるが、どちらの戻り値(OSStatus)も確認していない。
+    targets/widget 側も同じ実装。書き込みに失敗すると古いトークンが残り、送信時の認証に失敗する可能性がある(未確定)
+- 特定した原因(2026-10-07 実装担当の再調査):
+  - 確定した事実: Keychain の write() は SecItemDelete・SecItemAdd の OSStatus を一切見ていなかった。
+    devIssueDeviceToken は端末の Keychain の状態に関係なく、サーバー側のハッシュを常に新しいトークンで上書きする。
+    そのため書き込みに失敗すると「サーバーは新トークン、端末は旧トークン」の不一致になり、nativeSync が 401 を返す。これはレビュー担当が見た症状と一致する
+  - 未確定の点: 修正後のビルドで、既存インストールのまま「発行→開始→停止」を8回続けて行ったが、Keychain の書き込み失敗は起きなかった。
+    レビュー時に失敗した具体的な OSStatus は分かっていない(環境に依存する一時的なものだった可能性がある)
+  - 意図的に不一致を作ると(サーバー側だけ発行し直す)、修正後の画面には「送信: false(理由: サーバーが 401 を返した)」と表示される。syncEvents にも書き込まれないことを確認した
+- 切り出したタスク:
+  progress.txt 1-4 の差し戻し。OSStatus を確認して JS に例外を返すようにし、送信に失敗した理由を表示するようにした。証跡は既存インストールと新規インストールの両方で取り直した
+- 解決日: 2026-10-07
+- 解決内容:
+  Keychain の OSStatus を確認し、失敗を例外として JS に返すようにした。送信に失敗した理由も表示するようにした。
+  再レビューでは、既存インストールのまま3回、新規インストールで1回、いずれも成功した。意図的に不一致を作った場合は 401 の理由が表示された(1-4 再レビュー PASS)。
+  元の失敗の具体的な OSStatus は分かっていない。再発した場合は、画面とエラーの理由から追跡する
+
+## P-013: Maestro の extendedWaitUntil visible が、表示されているのに失敗することがある
+- 記録日: 2026-10-07
+- 状態: 調査中
+- 発生箇所: Maestro の E2E フロー(1-4 の検証中)
+- 問題内容:
+  想定した動き: 画面にテキストが表示されれば extendedWaitUntil: visible が通る
+  実際の動き: スクリーンショットではテキストが表示されているのに、まれに FAILED になる(実装担当の報告では複数回)
+- 再現手順(1-4 再レビューで判明した条件):
+  iPhone 16 Pro Max(iOS 18.6)で、ScrollView の中に React の state 更新で末尾に追加された Text(ログ行)を、
+  textRegex の部分一致で assertVisible / extendedWaitUntil(8000ms)すると、一度も一致せずに FAILED になる。
+  直後のスクリーンショットと hierarchy JSON には、そのテキストが正しい座標・内容で存在していた。
+  静的なボタンのラベルへの tapOn は、同じ条件でも成功する
+- 原因調査:
+  (未着手。Phase 3 の E2E を本格的に書き始める前に、どのフロー・機種・条件で起きるかを記録し、
+   Maestro 側の要素検出のタイミングかアプリ側の描画かを切り分ける)
+- 特定した原因:
+- 切り出したタスク:
+- 解決日:
+- 解決内容:

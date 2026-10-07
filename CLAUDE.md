@@ -136,5 +136,5 @@ manual-work.txt(手動作業)に追加
 | npm run emulators | Firebase Emulator Suite 起動 |
 | npm run test:functions | Cloud Functions のテスト(Emulator上) |
 | npm run test:rules | Firestoreセキュリティルールのテスト(Emulator上) |
-| npm run e2e | Maestro E2E(iOSシミュレータ。.maestro/ 配下) |
+| npm run e2e | Maestro E2E。.maestro/devices.json の各シミュレータで .maestro/flows/ を実行する(事前に `npx expo run:ios` でビルド・インストール済みであること。実行中は Metro を自動起動・終了する) |
 ※ Phase 1 で導入するまでコマンドは存在しない

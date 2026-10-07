@@ -1,0 +1,7 @@
+{
+  "_comment": "npm run e2e が対象にする iOS シミュレータ。UDID はマシンごとに変わるため、機種名+iOSバージョンで指定し、実行時に scripts/e2e.js が xcrun simctl から UDID を解決する。対象シミュレータが存在しない場合は Xcode で作成すること",
+  "devices": [
+    { "name": "iPhone SE (3rd generation)", "osVersion": "18.6" },
+    { "name": "iPhone 16 Pro Max", "osVersion": "18.6" }
+  ]
+}

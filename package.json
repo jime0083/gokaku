@@ -3,6 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
+    "@bacons/apple-targets": "^5.0.0",
     "expo": "~57.0.27",
     "expo-build-properties": "~57.0.22",
     "expo-constants": "~57.0.21",
@@ -39,8 +40,9 @@
     "test": "jest && npm run test:tz",
     "test:tz": "TZ=America/Los_Angeles jest shared && TZ=UTC jest shared",
     "emulators": "npm --prefix functions run build && firebase emulators:start",
-    "test:functions": "npm --prefix functions run build && firebase emulators:exec --only functions \"npm --prefix functions test\"",
-    "test:rules": "firebase emulators:exec --only firestore \"jest -c jest.rules.config.js\""
+    "test:functions": "npm --prefix functions run build && firebase emulators:exec --only functions,firestore \"npm --prefix functions test\"",
+    "test:rules": "firebase emulators:exec --only firestore \"jest -c jest.rules.config.js\"",
+    "e2e": "node scripts/e2e.js"
   },
   "private": true,
   "jest": {

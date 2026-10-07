@@ -8,8 +8,16 @@
     "userInterfaceStyle": "light",
     "platforms": ["ios"],
     "ios": {
-      "bundleIdentifier": "com.example.gokaku",
-      "supportsTablet": false
+      "bundleIdentifier": "com.jime0083.gokakuwatch",
+      "appleTeamId": "78G6667N9J",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSSupportsLiveActivities": true
+      },
+      "entitlements": {
+        "com.apple.security.application-groups": ["group.com.jime0083.gokakuwatch"],
+        "keychain-access-groups": ["$(AppIdentifierPrefix)group.com.jime0083.gokakuwatch"]
+      }
     },
     "plugins": [
       "expo-router",
@@ -20,7 +28,8 @@
             "deploymentTarget": "17.0"
           }
         }
-      ]
+      ],
+      "@bacons/apple-targets"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -78,8 +78,13 @@ module.exports = defineConfig([
     ],
   },
   {
-    // Node.js で実行されるファイル(設定ファイル・Cloud Functions・Emulator 上のテスト)。Node のグローバル変数(__dirname 等)を定義する(problem P-006)
-    files: ['*.config.{js,cjs,mjs}', 'functions/**/*.{ts,js,cjs,mjs}', 'tests/**/*.{ts,js,cjs,mjs}'],
+    // Node.js で実行されるファイル(設定ファイル・Cloud Functions・Emulator 上のテスト・開発用スクリプト)。Node のグローバル変数(__dirname 等)を定義する(problem P-006)
+    files: [
+      '*.config.{js,cjs,mjs}',
+      'functions/**/*.{ts,js,cjs,mjs}',
+      'tests/**/*.{ts,js,cjs,mjs}',
+      'scripts/**/*.{js,cjs,mjs}',
+    ],
     languageOptions: {
       globals: globals.node,
     },

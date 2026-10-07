@@ -89,3 +89,88 @@ describe('デフォルト拒否', () => {
     await assertFails(setDoc(doc(db, 'users', OWNER_UID), { checkEnabled: false }));
   });
 });
+
+// Phase 1-4 技術検証(gokaku-security によるルール検証): デバイストークン(ハッシュ)と
+// ネイティブ→サーバー同期のイベントログは、クライアントから一切読み書きできてはならない
+// (deviceTokens はサーバー(Cloud Functions の Admin SDK)だけが読み書きし、
+//  syncEvents はサーバーだけが書き込み、本人は自分の分だけ読める)
+describe('deviceTokens(Phase 1-4 技術検証: ネイティブ同期用デバイストークンのハッシュ)', () => {
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'deviceTokens', OWNER_UID), { tokenHash: 'dummy-hash' });
+    });
+  });
+
+  it('本人でも deviceTokens を読めない', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'deviceTokens', OWNER_UID)));
+  });
+
+  it('他人も deviceTokens を読めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'deviceTokens', OWNER_UID)));
+  });
+
+  it('本人でも deviceTokens に書き込めない(トークンのハッシュ上書き・なりすましの防止)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(setDoc(doc(db, 'deviceTokens', OWNER_UID), { tokenHash: 'attacker-hash' }));
+  });
+
+  it('未ログインは deviceTokens を読めない', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+
+    await assertFails(getDoc(doc(db, 'deviceTokens', OWNER_UID)));
+  });
+});
+
+describe('users/{uid}/syncEvents(Phase 1-4 技術検証: ロック画面・通知アクションからの同期イベント)', () => {
+  const EVENT_ID = 'evt-1';
+
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID), {
+        action: 'stop',
+        source: 'live_activity',
+      });
+    });
+  });
+
+  it('本人は自分の syncEvents を読める(サーバーが書き込んだ記録の確認用)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertSucceeds(getDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID)));
+  });
+
+  it('他人は syncEvents を読めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID)));
+  });
+
+  it('本人でも syncEvents に書き込めない(クライアントからの偽イベント注入・改ざんの防止。記録はサーバーのnativeSyncのみ)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(
+      setDoc(doc(db, 'users', OWNER_UID, 'syncEvents', 'evt-forged'), {
+        action: 'start',
+        source: 'app',
+      }),
+    );
+  });
+
+  it('本人でも既存の syncEvents を書き換えられない(過去の記録の改ざん防止)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(
+      setDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID), {
+        action: 'start',
+        source: 'app',
+      }),
+    );
+  });
+});

@@ -27,17 +27,22 @@ Phase 1: 開発基盤
     ※完了(2026-10-07): レビューPASS(demo-gokaku の Emulator で test:functions 2件・test:rules 7件パス、ルールを緩めると他人/未ログイン/xTokens のテストが落ちることを確認、
       emulators 起動と health 応答を確認、typecheck/lint/test 全緑。アプリ側 Firebase SDK は 3-5 で導入)
 
-[ ] 1-3 Maestro E2E 基盤
+[x] 1-3 Maestro E2E 基盤
     内容: Maestro を導入し、.maestro/ 配下にサンプルフローと `npm run e2e` を作る。スクリーンショットはリポジトリ外(または gitignore 済みの場所)に保存する
     完了条件: `npm run e2e` で iPhone SE・iPhone Pro Max の各シミュレータでサンプルフローがパスし、スクリーンショットが保存される
+    ※完了(2026-10-07): レビューPASS(scripts/e2e.js + .maestro/。2機種でフレッシュインストール含め3回連続PASS、Metro は PID 指定で停止、Maestro の匿名統計は無効化、appId は app.json から注入)
 
-[ ] 1-4 技術検証: ロック画面操作とサーバー同期  【セキュリティ確認】
+[x] 1-4 技術検証: ロック画面操作とサーバー同期  【セキュリティ確認】
     ※開始前確認: manual-work W2(Bundle ID)完了必須
-    内容: Swift のネイティブ拡張(App Group、ライブアクティビティの「勉強中」表示と停止ボタン、iOS 18 のロック画面コントロールでの開始、
+    内容: app.json の仮の Bundle ID(com.example.gokaku)を com.jime0083.gokakuwatch に差し替える(manual-work W2 で決定)。
+          Swift のネイティブ拡張(App Group = group.com.jime0083.gokakuwatch、ライブアクティビティの「勉強中」表示と停止ボタン、iOS 18 のロック画面コントロールでの開始、
           通知アクション「勉強中」)を最小構成で作る。アプリを開かずに行った開始・停止・確認応答を、ネイティブ側から
           Cloud Functions(Emulator)へ認証付きで送る方式を実装して確かめる。採用した方式を requirements.md 3-2 に追記する(ユーザー承認後)
     完了条件: シミュレータで、アプリを終了した状態でロック画面から停止した記録が Emulator の Firestore に反映される(手順と結果を証跡として保存)。
               iOS 17 シミュレータではコントロールが出ずにエラーにならない。gokaku-security が認証方式を PASS
+    ※完了(2026-10-07): レビューPASS(1回目 FAIL(P-012)→修正後に再レビュー PASS。既存インストール3回・新規インストール1回とも、アプリ終了状態で
+      ライブアクティビティの停止が Firestore に記録された。不一致時は 401 の理由を表示。iOS 17.5 でクラッシュなし)、
+      セキュリティ PASS(端末トークン方式。Firestore ルールのテストを15件に拡充)。未確認・不具合は P-011 として 5-3 に引き継ぐ
 
 =====================================
 Phase 2: ドメインロジック(アプリと Functions で共有)
@@ -130,6 +135,7 @@ Phase 3: オンボーディング・認証
 
 [ ] 3-5 Sign in with Apple と目標の保存  【セキュリティ確認】
     ※開始前確認: manual-work W3(Apple Developer)・W4(Firebase本番)完了必須
+    ※ Sign in with Apple の App ID 登録は Xcode の自動署名で行う(App Store Connect のアプリ登録=W6 は不要)
     内容: 「OK、登録する」で Sign in with Apple → Firebase Auth → users / goals を保存する。
           初回画面の「アカウントをお持ちの方」ログイン。Firestore ルール(本人のみ・項目の入力チェック)
     完了条件: Emulator 上でログイン〜保存のテストとルールのテストがパスする。シミュレータでのログイン動作の証跡
@@ -143,7 +149,7 @@ Phase 4: 課金
     完了条件: StoreKit 設定ファイルを使い、シミュレータで購入・復元・キャンセルの各ケースが動く(E2E またはテスト手順の証跡)
 
 [ ] 4-2 サーバーでの契約状態の管理  【セキュリティ確認】
-    ※開始前確認: manual-work W6 手順1〜3 完了必須
+    ※W6 は不要(2026-10-07 W6 を後ろに移動)。App Store Server API・Server Notifications V2 はモック(テスト用の署名鍵・証明書)で検証し、本物の鍵との接続は 8-2 で行う
     内容: 購入後に App Store Server API で確認して users.subscription を更新する Function、Server Notifications V2 を受ける Function(署名検証)
           返金・取り消し(revocation)など expiresAt だけで表せない状態の扱いを決め、2-3 の判定(expiresAt で課金中を判断)と整合させる
     完了条件: Emulator 上で、更新・解約・期限切れ・不正な署名の通知のテストがパスする。クライアントから subscription を書けないことをルールのテストで確認
@@ -167,6 +173,19 @@ Phase 5: タイマー
 [ ] 5-3 ロック画面の開始・停止(本実装)  【セキュリティ確認】
     内容: 1-4 の検証結果をもとに、ライブアクティビティ(iOS 17+)とロック画面コントロール(iOS 18+)、通知アクションを本実装し、サーバーへ同期する
     完了条件: iOS 17・18 以降の各シミュレータで、アプリを閉じた状態の開始/停止/確認応答がサーバーに反映される証跡。アプリ内表示とずれない
+              加えて(1-4 で未確認・不具合だった点。problem P-011): 停止後にライブアクティビティが終了すること、
+              iOS 18 のロック画面コントロールからの開始、通知アクション「勉強中」のタップがサーバーに反映されること。
+              デバイストークンの有効期限・失効・作り直し(requirements 3-2)。
+              modules/study-sync と targets/widget に重複している Swift の送信処理を一本化する
+              セキュリティ(1-4 の gokaku-security の指摘):
+                - デバイストークンは、Firebase の ID トークン(Sign in with Apple 後)を検証してから、その uid 向けにだけ発行する。devIssueDeviceToken(検証用)は使わない
+                - Keychain の kSecAttrAccessible を明示する。実機で、画面がロックされた状態のまま操作がサーバーに反映されることを確認する
+                - 送信先を本番の HTTPS エンドポイントにする(URL は設定から読む。http://127.0.0.1 の直書きをやめる)
+                - トークンのハッシュ比較を crypto.timingSafeEqual にする
+                - goalId が本人の実在する目標かを検証する。idempotencyKey の形式・最大長を制限する
+                - ログアウト・アカウント削除時にデバイストークンを失効させる
+                - 盗まれたトークンでの乱打を防ぐ手段(レート制限・App Check 等)を入れる
+                - StopStudyIntent も StartStudyIntent と同じく、Keychain から読んだ uid を基準にする
 
 =====================================
 Phase 6: ホーム・編集・アカウント管理
@@ -193,7 +212,7 @@ Phase 7: X連携・0:00判定・自動投稿
 =====================================
 
 [ ] 7-1 X連携(OAuth 2.0 PKCE)と確認画面・投稿許可  【セキュリティ確認】
-    ※開始前確認: manual-work W7 完了必須
+    ※開始前確認: manual-work W7 手順1〜3 完了必須(手順4・5 はこのタスクの中で Claude が設定値を案内して行う)
     内容: X の認可 → Functions でトークン交換・暗号化保存 → 連携アカウントの確認画面 → 投稿許可ダイアログ(requirements 4-5)。編集ポップアップからの再連携・アカウント変更
     完了条件: X のモックで、連携・別アカウント・許可する/しない・再連携のテストがパスする。xTokens にクライアントから触れないことをルールのテストで確認
 
@@ -203,7 +222,7 @@ Phase 7: X連携・0:00判定・自動投稿
 
 [ ] 7-3 自動投稿と失敗時の扱い
     ※開始前確認: manual-work W8(投稿文承認)完了必須
-    内容: 投稿が必要な結果だけを X に投稿(承認済みの定型文、URLなし)、最大3回の再試行、失敗時の xNotice 記録とアプリでの表示、トークンの更新
+    内容: 投稿が必要な結果だけを X に投稿(承認済みの定型文と「#今月N回目」「#累計M回目」の計算(requirements 3-3)、URLなし。将来の画像添付に備えて文章と画像を分けて組み立てる)、最大3回の再試行、失敗時の xNotice 記録とアプリでの表示、トークンの更新
     完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れのテストがパスし、二重投稿しないことを確認
 
 =====================================
@@ -216,7 +235,9 @@ Phase 8: リリース準備
     完了条件: Hosting Emulator で表示を確認。本番確認(読み取りのみ): 公開URLが表示される
 
 [ ] 8-2 本番設定とデプロイ  【セキュリティ確認】
-    内容: 本番の Firestore ルール・Functions・シークレット・Scheduler をデプロイする手順を用意し、ユーザー承認のうえで実行する
+    ※開始前確認: manual-work W6(App Store Connect)・W7 手順6(X API クレジット)完了必須
+    内容: 本番の Firestore ルール・Functions・シークレット(App Store の .p8 キー、X Client Secret 等)・Scheduler をデプロイする手順を用意し、ユーザー承認のうえで実行する。
+          App Store Server Notifications V2 の URL 設定(W6 手順4)もこの時に行う
     完了条件: 本番確認(読み取りのみ): Functions とスケジュールが登録され、ルールがデプロイ済みであることをコンソール/CLIで確認
 
 [ ] 8-3 費用の見える化

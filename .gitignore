@@ -61,6 +61,7 @@ coverage/
 e2e-artifacts/
 .maestro/screenshots/
 .maestro/output/
+.evidence/
 test-results/
 
 # Metro
