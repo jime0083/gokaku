@@ -200,7 +200,7 @@ function stopMetro(metroProcess) {
   metroProcess.kill('SIGTERM');
 }
 
-function runMaestro(udid, appId, devClientUrl, outputDir) {
+function runMaestro(udid, appId, devClientUrl, appScheme, outputDir, isPrimary) {
   fs.rmSync(outputDir, { recursive: true, force: true });
   const result = spawnSync(
     'maestro',
@@ -212,8 +212,12 @@ function runMaestro(udid, appId, devClientUrl, outputDir) {
       `APP_ID=${appId}`,
       '-e',
       `DEV_CLIENT_URL=${devClientUrl}`,
+      '-e',
+      `APP_SCHEME=${appScheme}`,
       '--test-output-dir',
       outputDir,
+      // single-device タグのフロー(2機種で確認する必要がないもの)は primary の機種だけで実行する
+      ...(isPrimary ? [] : ['--exclude-tags', 'single-device']),
       FLOWS_DIR,
     ],
     {
@@ -301,7 +305,7 @@ async function main() {
       const udid = resolveUdid(device, simulators);
       console.log(`\n=== ${device.name} (iOS ${device.osVersion}) ===`);
       const outputDir = path.join(OUTPUT_ROOT_DIR, device.slug);
-      const passed = runMaestro(udid, bundleIdentifier, devClientUrl, outputDir);
+      const passed = runMaestro(udid, bundleIdentifier, devClientUrl, scheme, outputDir, device.primary === true);
       const screenshotDir = path.join(SCREENSHOTS_ROOT_DIR, device.slug);
       const screenshotCount = collectScreenshots(outputDir, screenshotDir);
       const ok = passed && screenshotCount > 0;

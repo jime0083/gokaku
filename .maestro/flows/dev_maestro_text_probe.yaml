@@ -1,0 +1,29 @@
+# problem P-013 の回帰防止フロー。
+# src/app/dev-maestro-text-probe.tsx(開発ビルド専用。本番の画面遷移からは到達しない)を使い、
+# ScrollView の末尾に state 更新で追加された Text を、testID(id セレクタ・完全一致)で検出できることを確認する。
+# P-013 の原因は、assertVisible / extendedWaitUntil の text/textRegex が Kotlin の Regex.matches()
+# (要素のテキスト全体に対する完全一致)で評価されており、部分一致ではなかったこと
+# (`.maestro/tests/` に残っていた実際の失敗記録: `textRegex: "Keychain"` が
+# 「...Keychain(App Group)に保存した」という長い1文に完全一致せず、8秒待っても一度も一致しなかった)。
+# 対処として、動的に追加される要素は testID を付けて `id:` セレクタで判定する
+# (文字列の一部だけを判定したい場合は、text/textRegex を `.*...*.` で囲んで全体一致させる)。
+appId: ${APP_ID}
+---
+- launchApp
+- openLink: ${DEV_CLIENT_URL}
+- tapOn:
+    text: "開く"
+    optional: true
+- tapOn:
+    text: "Open"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- openLink: "${APP_SCHEME}://dev-maestro-text-probe"
+- tapOn:
+    id: "probe-add-button"
+- extendedWaitUntil:
+    visible:
+      id: "probe-line-1"
+    timeout: 8000

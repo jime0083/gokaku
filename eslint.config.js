@@ -84,6 +84,7 @@ module.exports = defineConfig([
       'functions/**/*.{ts,js,cjs,mjs}',
       'tests/**/*.{ts,js,cjs,mjs}',
       'scripts/**/*.{js,cjs,mjs}',
+      'plugins/**/*.{js,cjs,mjs}',
     ],
     languageOptions: {
       globals: globals.node,

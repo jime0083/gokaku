@@ -22,6 +22,8 @@ describe('getFirebaseEmulatorConfig', () => {
       authPort: emulators.auth.port,
       firestorePort: emulators.firestore.port,
       functionsPort: emulators.functions.port,
+      // functions/src/config.ts の FUNCTIONS_REGION と一致させる(app/functions は別ワークスペースのため値を直書き)
+      functionsRegion: 'asia-northeast1',
     });
     expect(emulators.firestore.host).toBe(FIREBASE_EMULATOR_CONFIG.host);
     expect(emulators.functions.host).toBe(FIREBASE_EMULATOR_CONFIG.host);

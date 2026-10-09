@@ -1,4 +1,10 @@
-import { calculatePace, type PaceInput, targetHoursToMinutes } from '../pace';
+import {
+  calculatePace,
+  DAILY_MINUTES_RANGE,
+  isValidDailyMinutes,
+  type PaceInput,
+  targetHoursToMinutes,
+} from '../pace';
 
 const jst = (iso: string): number => Date.parse(`${iso}+09:00`);
 
@@ -176,5 +182,20 @@ describe('targetHoursToMinutes', () => {
   it('時間 → 分', () => {
     expect(targetHoursToMinutes(1)).toBe(60);
     expect(targetHoursToMinutes(20_000)).toBe(1_200_000);
+  });
+});
+
+describe('isValidDailyMinutes(入力画面のチェック用)', () => {
+  it('範囲内・10分刻みは true', () => {
+    expect(isValidDailyMinutes(DAILY_MINUTES_RANGE.min)).toBe(true);
+    expect(isValidDailyMinutes(DAILY_MINUTES_RANGE.max)).toBe(true);
+    expect(isValidDailyMinutes(60)).toBe(true);
+  });
+
+  it('0分(0時間0分)・16時間10分以上・10分刻みでない・範囲外は false', () => {
+    expect(isValidDailyMinutes(0)).toBe(false);
+    expect(isValidDailyMinutes(DAILY_MINUTES_RANGE.max + 10)).toBe(false);
+    expect(isValidDailyMinutes(25)).toBe(false);
+    expect(isValidDailyMinutes(-10)).toBe(false);
   });
 });

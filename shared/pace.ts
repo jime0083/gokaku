@@ -25,6 +25,26 @@ export const REQUIRED_DAILY_MINUTES_STEP = 10;
 /** 1時間の分数 */
 export const MINUTES_PER_HOUR = 60;
 
+/**
+ * 1日の最低・努力目標勉強時間の入力範囲(mokuhyo.txt 1。共通)。
+ * 10分〜16時間(960分)、10分刻み。0時間0分と16時間10分以上は選べない
+ */
+export const DAILY_MINUTES_RANGE = {
+  min: 10,
+  max: 16 * MINUTES_PER_HOUR,
+  step: 10,
+} as const;
+
+/** 1日の最低・努力目標勉強時間が DAILY_MINUTES_RANGE(10分〜16時間、10分刻み)内か(入力画面のチェック用) */
+export function isValidDailyMinutes(value: number): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    value >= DAILY_MINUTES_RANGE.min &&
+    value <= DAILY_MINUTES_RANGE.max &&
+    value % DAILY_MINUTES_RANGE.step === 0
+  );
+}
+
 export type PaceInput = {
   /** 目標勉強時間(時間。goals.targetHours) */
   targetHours: number;

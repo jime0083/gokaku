@@ -1,0 +1,158 @@
+# progress.txt 3-1: オンボーディング(受験ルート)を、ペース確認画面(3-3・未実装)の手前の
+# 1日の最低・努力目標勉強時間の入力画面まで、有効な入力で進められることを確認する。
+#
+# ドラムロール(@react-native-picker/picker)・カレンダー(@react-native-community/datetimepicker)の
+# 操作方法(problem 調査済み。報告済み):
+# - カレンダーの日付セルは文字(id セレクタの `text:`)で判定・タップできる
+#   (UICalendarView の日付セルはアクセシビリティ上も個別の text/accessibilityText を持つため)
+# - ドラムロール(UIPickerView)はアクセシビリティ上「現在選択されている値」しか露出せず、行ごとの
+#   要素が存在しないため、`tapOn: { text: "1時間" }` のような文字判定ではタップできない。
+#   `swipe`(方向指定・絶対座標指定のいずれも)でも反応しない。
+#   `tapOn: { id: <pickerのtestID>, point: "50%,75%" }`(要素の相対座標でのタップ)であれば、
+#   中央(選択中の行。50%)から1行下(75%)をタップでき、実機のUIPickerViewと同じく
+#   「選択中の行の次の行をタップして選ぶ」操作として機能する(複数回タップすると1行ずつ進む)
+# - 1日の時間(P-014 対応)は行をタップすると画面下からドラムロールが現れ、「完了」で確定する
+#   (値を動かさずに完了しても、表示中の値(0時間10分)で確定する)
+#
+# 登録前の入力は端末に一時保存される(requirements 4-1)ため、他のフロー・前回の実行結果の影響を
+# 受けないよう、先頭で clearState して端末の保存領域を空にする
+appId: ${APP_ID}
+---
+- clearState
+- launchApp
+- openLink: ${DEV_CLIENT_URL}
+- tapOn:
+    text: "開く"
+    optional: true
+- tapOn:
+    text: "Open"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+
+# 0. 初回起動画面
+- assertVisible:
+    id: "onboarding-start-button"
+- takeScreenshot: onboarding_exam_00_launch
+- tapOn:
+    id: "onboarding-start-button"
+
+# 1. 受験/資格の選択(資格は 3-2 まで押せない)
+- extendedWaitUntil:
+    visible:
+      id: "route-select-exam-button"
+    timeout: 8000
+- assertVisible:
+    id: "route-select-cert-button"
+- takeScreenshot: onboarding_exam_01_route_select
+- tapOn:
+    id: "route-select-exam-button"
+
+# 2. 目標大学
+- extendedWaitUntil:
+    visible:
+      id: "university-input"
+    timeout: 8000
+- tapOn:
+    id: "university-input"
+- inputText: "合格大学"
+- takeScreenshot: onboarding_exam_02_university
+- tapOn:
+    id: "university-next-button"
+
+# 3. 偏差値・受験科目数
+- extendedWaitUntil:
+    visible:
+      id: "target-deviation-input"
+    timeout: 8000
+- tapOn:
+    id: "target-deviation-input"
+- inputText: "60.0"
+- tapOn:
+    id: "current-deviation-input"
+- inputText: "50.0"
+- tapOn:
+    id: "subject-count-increment-button"
+- takeScreenshot: onboarding_exam_03_deviation
+- tapOn:
+    id: "deviation-next-button"
+
+# 4. 必要勉強時間の概算(3科目 50.0→60.0 = 約1,080〜1,800時間。mokuhyo.txt の例)
+- extendedWaitUntil:
+    visible:
+      id: "estimate-range-text"
+    timeout: 8000
+- assertVisible:
+    id: "estimate-disclaimer-text"
+- takeScreenshot: onboarding_exam_04_estimate
+- tapOn:
+    id: "estimate-next-button"
+
+# 5. 目標勉強時間・試験日
+- extendedWaitUntil:
+    visible:
+      id: "target-hours-input"
+    timeout: 8000
+- takeScreenshot: onboarding_exam_05_target_before_date
+- tapOn:
+    id: "exam-date-select-button"
+- extendedWaitUntil:
+    visible:
+      id: "exam-date-picker"
+    timeout: 8000
+- takeScreenshot: onboarding_exam_06_target_calendar_open
+- tapOn:
+    text: "8"
+# 選んだ日が「試験日: ○年○月○日(あと○日)」と大きく表示されることを確認する(requirements 4-1)
+- assertVisible:
+    id: "exam-date-display"
+- takeScreenshot: onboarding_exam_07_target_date_selected
+# カレンダーを開いた状態は画面の小さい機種では「次へ」までスクロールしないと届かないことがある
+# (カレンダーはドラムロールと異なり、スクロール操作と競合しない)
+- scrollUntilVisible:
+    element:
+      id: "target-next-button"
+    direction: DOWN
+- tapOn:
+    id: "target-next-button"
+
+# 6. 1日の最低・努力目標勉強時間(P-014 対応: 行をタップ→下からドラムロール→完了で確定)
+- extendedWaitUntil:
+    visible:
+      id: "min-daily-time-row"
+    timeout: 8000
+- takeScreenshot: onboarding_exam_08_daily_time_before
+- tapOn:
+    id: "min-daily-time-row"
+- extendedWaitUntil:
+    visible:
+      id: "min-hour-picker"
+    timeout: 8000
+- tapOn:
+    id: "min-hour-picker"
+    point: "50%,75%"
+- tapOn:
+    id: "daily-time-sheet-done-button"
+- tapOn:
+    id: "goal-daily-time-row"
+- extendedWaitUntil:
+    visible:
+      id: "goal-hour-picker"
+    timeout: 8000
+- tapOn:
+    id: "goal-hour-picker"
+    point: "50%,75%"
+- tapOn:
+    id: "daily-time-sheet-done-button"
+# 「次へ」まで画面内(またはスクロールで)届き、有効な入力になっている(エラーが出ていない)ことを確認する
+- assertNotVisible:
+    id: "min-daily-minutes-error"
+- assertNotVisible:
+    id: "goal-daily-minutes-error"
+- assertNotVisible:
+    id: "goal-vs-min-error"
+- assertVisible:
+    id: "daily-time-next-button"
+    enabled: true
+- takeScreenshot: onboarding_exam_09_daily_time_valid

@@ -4,10 +4,18 @@
   "version": "1.0.0",
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/datetimepicker": "9.1.0",
+    "@react-native-firebase/app": "^26.4.0",
+    "@react-native-firebase/auth": "^26.4.0",
+    "@react-native-firebase/firestore": "^26.4.0",
+    "@react-native-firebase/functions": "^26.4.0",
+    "@react-native-picker/picker": "2.11.4",
     "expo": "~57.0.27",
     "expo-build-properties": "~57.0.22",
     "expo-constants": "~57.0.21",
     "expo-dev-client": "~57.0.19",
+    "expo-iap": "^5.8.3",
     "expo-linking": "~57.0.12",
     "expo-router": "~57.0.25",
     "expo-status-bar": "~57.0.1",
@@ -36,7 +44,7 @@
     "start": "expo start",
     "ios": "expo run:ios",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/rules && tsc --noEmit -p tests/lint && npm --prefix functions run typecheck",
+    "typecheck": "expo customize tsconfig.json && tsc --noEmit && tsc --noEmit -p tests/rules && tsc --noEmit -p tests/lint && npm --prefix functions run typecheck",
     "test": "jest && npm run test:tz",
     "test:tz": "TZ=America/Los_Angeles jest shared && TZ=UTC jest shared",
     "emulators": "npm --prefix functions run build && firebase emulators:start",
@@ -51,6 +59,9 @@
       "<rootDir>/src",
       "<rootDir>/shared",
       "<rootDir>/tests/lint"
+    ],
+    "setupFiles": [
+      "<rootDir>/jest.setup.ts"
     ]
   }
 }

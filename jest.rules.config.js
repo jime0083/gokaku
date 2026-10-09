@@ -5,4 +5,8 @@ module.exports = {
   transform: {
     '\\.ts$': ['babel-jest', { presets: ['babel-preset-expo'] }],
   },
+  // tsconfig.json の paths(@shared/*)と同じ解決を babel-jest(tsconfig の paths を見ない)でも行う
+  moduleNameMapper: {
+    '^@shared/(.*)$': '<rootDir>/shared/$1',
+  },
 };

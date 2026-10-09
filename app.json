@@ -6,17 +6,24 @@
     "orientation": "portrait",
     "scheme": "gokaku",
     "userInterfaceStyle": "light",
-    "platforms": ["ios"],
+    "platforms": [
+      "ios"
+    ],
     "ios": {
       "bundleIdentifier": "com.jime0083.gokakuwatch",
       "appleTeamId": "78G6667N9J",
       "supportsTablet": false,
+      "googleServicesFile": "./config/GoogleService-Info.emulator.plist",
       "infoPlist": {
         "NSSupportsLiveActivities": true
       },
       "entitlements": {
-        "com.apple.security.application-groups": ["group.com.jime0083.gokakuwatch"],
-        "keychain-access-groups": ["$(AppIdentifierPrefix)group.com.jime0083.gokakuwatch"]
+        "com.apple.security.application-groups": [
+          "group.com.jime0083.gokakuwatch"
+        ],
+        "keychain-access-groups": [
+          "$(AppIdentifierPrefix)group.com.jime0083.gokakuwatch"
+        ]
       }
     },
     "plugins": [
@@ -25,11 +32,17 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "17.0"
+            "deploymentTarget": "17.0",
+            "useFrameworks": "dynamic"
           }
         }
       ],
-      "@bacons/apple-targets"
+      "@bacons/apple-targets",
+      "@react-native-community/datetimepicker",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "expo-iap",
+      "./plugins/withStoreKitConfig"
     ],
     "experiments": {
       "typedRoutes": true,

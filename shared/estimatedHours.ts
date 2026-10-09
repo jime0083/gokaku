@@ -85,6 +85,33 @@ function assertSubjectCount(value: number): void {
   }
 }
 
+/** 偏差値(目標・現在共通)が DEVIATION_RANGE(25.0〜80.0、0.1刻み)内か(入力画面のチェック用。例外を投げない) */
+export function isValidDeviationValue(value: number): boolean {
+  try {
+    deviationToTenths(value, 'deviation');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 受験科目数が SUBJECT_COUNT_RANGE(1〜8の整数)内か(入力画面のチェック用。例外を投げない) */
+export function isValidSubjectCount(value: number): boolean {
+  try {
+    assertSubjectCount(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 目標勉強時間が TARGET_HOURS_RANGE(1〜20,000の整数)内か(入力画面のチェック用。例外を投げない) */
+export function isValidTargetHours(value: number): boolean {
+  return (
+    Number.isSafeInteger(value) && value >= TARGET_HOURS_RANGE.min && value <= TARGET_HOURS_RANGE.max
+  );
+}
+
 /** tenths(偏差値 × 10)が属する帯の係数(× 10)を返す */
 function bandCoefficientTenTimes(tenths: number): number {
   let band = 0;

@@ -1,6 +1,9 @@
 import {
   calculateExamEstimatedHours,
   DEVIATION_RANGE,
+  isValidDeviationValue,
+  isValidSubjectCount,
+  isValidTargetHours,
   resolveInitialTargetHours,
   SUBJECT_COUNT_RANGE,
   TARGET_HOURS_RANGE,
@@ -123,5 +126,47 @@ describe('resolveInitialTargetHours', () => {
     expect(() => resolveInitialTargetHours(0)).toThrow(RangeError);
     expect(() => resolveInitialTargetHours(-1)).toThrow(RangeError);
     expect(() => resolveInitialTargetHours(1.5)).toThrow(RangeError);
+  });
+});
+
+describe('isValidDeviationValue(入力画面のチェック用)', () => {
+  it('範囲内・0.1刻みは true', () => {
+    expect(isValidDeviationValue(DEVIATION_RANGE.min)).toBe(true);
+    expect(isValidDeviationValue(DEVIATION_RANGE.max)).toBe(true);
+    expect(isValidDeviationValue(60.5)).toBe(true);
+  });
+
+  it('範囲外・0.1刻みでない・NaN は false(例外を投げない)', () => {
+    expect(isValidDeviationValue(DEVIATION_RANGE.min - 0.1)).toBe(false);
+    expect(isValidDeviationValue(DEVIATION_RANGE.max + 0.1)).toBe(false);
+    expect(isValidDeviationValue(60.55)).toBe(false);
+    expect(isValidDeviationValue(NaN)).toBe(false);
+  });
+});
+
+describe('isValidSubjectCount(入力画面のチェック用)', () => {
+  it('範囲内の整数は true', () => {
+    expect(isValidSubjectCount(SUBJECT_COUNT_RANGE.min)).toBe(true);
+    expect(isValidSubjectCount(SUBJECT_COUNT_RANGE.max)).toBe(true);
+  });
+
+  it('範囲外・整数でない場合は false', () => {
+    expect(isValidSubjectCount(SUBJECT_COUNT_RANGE.min - 1)).toBe(false);
+    expect(isValidSubjectCount(SUBJECT_COUNT_RANGE.max + 1)).toBe(false);
+    expect(isValidSubjectCount(3.5)).toBe(false);
+  });
+});
+
+describe('isValidTargetHours(入力画面のチェック用)', () => {
+  it('範囲内の整数は true', () => {
+    expect(isValidTargetHours(TARGET_HOURS_RANGE.min)).toBe(true);
+    expect(isValidTargetHours(TARGET_HOURS_RANGE.max)).toBe(true);
+  });
+
+  it('範囲外・整数でない・NaN の場合は false', () => {
+    expect(isValidTargetHours(0)).toBe(false);
+    expect(isValidTargetHours(TARGET_HOURS_RANGE.max + 1)).toBe(false);
+    expect(isValidTargetHours(100.5)).toBe(false);
+    expect(isValidTargetHours(NaN)).toBe(false);
   });
 });

@@ -7,6 +7,7 @@
 # - 仕様の根拠は requirements.md を参照
 # - Phaseの全タスク完了時に git commit と git push を行う(リモート名: gokaku)
 # - 完了時は「※完了(YYYY-MM-DD): レビューPASS(検証内容の要約)」を追記する
+# - 2026-10-08 から: 各タスクの合否は速いテスト(Jest・renderRouter・Emulator)で決める。完了条件中の「E2E」「2機種のスクショ」は Phase 末の X-E2E タスクでまとめて確認する
 
 =====================================
 Phase 1: 開発基盤
@@ -116,76 +117,255 @@ Phase 2: ドメインロジック(アプリと Functions で共有)
 Phase 3: オンボーディング・認証
 =====================================
 
-[ ] 3-1 オンボーディング: 受験ルート
+[x] 3-0 Maestro の表示判定が不安定な原因の調査と対処(problem P-013)
+    内容: ScrollView の中で state 更新により後から追加された Text を、assertVisible / extendedWaitUntil で判定すると、
+          表示されているのに FAILED になる原因を特定する(Maestro が使うアクセシビリティ階層に要素が出ているか、テキストの結合のされ方、
+          testID の有無など)。原因に応じて、Phase 3 以降の画面と E2E フローの書き方の決まり(例: 判定する要素には testID を付ける)を決める
+    完了条件: 原因と根拠を problem.txt P-013 に記録できる材料がそろっている。再現用の最小フローで、対処後は動的に追加した文字を
+              10回連続で安定して判定できる(2機種)。決めた書き方の決まりを CLAUDE.md に追記する案を報告する(追記はメインエージェント)
+    ※完了(2026-10-07): レビューPASS(原因は text/id セレクタが完全一致であること。逆コンパイルと公式ドキュメントで確認。id: セレクタで2機種とも10/10 PASS、npm run e2e に回帰フローを追加。CLAUDE.md に書き方の決まりを追記)
+
+[x] 3-1 オンボーディング: 受験ルート
     ※開始前確認: manual-work W5(概算データ承認)完了必須
     内容: 受験/資格の選択 → 大学 → 偏差値 → 概算 → 目標時間・受験日 → 1日の時間(requirements 4-1, 4-2)。入力チェック、戻っても値を保持
     完了条件: Maestro E2E で受験ルートをペース確認画面の手前まで進められ、不正な入力でエラーが出る(2機種のスクショ)
+    ※完了(2026-10-09): レビューPASS(1回目 FAIL(P-015 戻るが効かない)→ステップ順から戻り先を決める方式に修正。renderRouter で通常・最初のステップ・再起動後の再開の戻るを確認、304件全緑。
+      P-014 解消を確認。E2E は 3-E2E でまとめて確認(P-016 保留))
 
-[ ] 3-2 オンボーディング: 資格ルート
-    内容: 資格選択(その他=自由入力・概算スキップ)→ 概算 → 目標時間・試験日 → 1日の時間(requirements 4-3)
-    完了条件: Maestro E2E で一覧から選ぶ場合と「その他」の場合の両方を進められる(2機種のスクショ)
+[-] 3-1x 調査: npm run e2e でだけ「戻る」のフローが失敗する原因(problem P-016) ※保留(2026-10-09。E2E を Phase 末にまとめる方針に変更。3-E2E で扱う)
+    内容: npm run e2e 経由では onboarding_exam_route_back が毎回失敗し、maestro を手で実行すると緑になる原因を特定する。
+          どの機種で失敗するか、手での実行との違い(実行順・引数・Metro の状態・アプリのインストール方法・フローの前後関係)を1つずつ揃えて切り分ける。
+          原因が「戻る」の実装側にあれば修正し、テストの仕組み側にあれば仕組みを直す(タイムアウトの延長などで隠さない)
+    完了条件: 原因と根拠が problem.txt P-016 に記録できる材料がそろう。npm run e2e を2回続けて全フローが緑
 
-[ ] 3-3 ペース確認画面
-    内容: requirements 4-4 の表示、警告、「修正する」で戻る、「OK、登録する」
-    完了条件: Maestro E2E で、届くケース・届かないケース(警告と必要時間の表示)・修正して戻るケースがパスする
+[x] 3-4a デザインの土台: カラートークンと共通部品
+    内容: 白基調+ブルー、進捗用のグリーン系のカラートークン・文字サイズ・余白を src/theme に定義し、共通部品(ボタン・入力欄・カード・エラー文言)と
+          オンボーディング共通の「ステップ画面の型」(見出し・戻る・次へ・エラー表示・iPhone SE での収まり)を作る。画面への適用は 3-4b
+    完了条件: 共通部品の画面テストが緑。部品の見本画面(開発ビルドのみ)を2機種でスクショし、崩れがない。typecheck/lint/test 全緑
+    ※完了(2026-10-09): レビューPASS(src/theme・共通部品・StepScreen。部品テスト11件+既存304件全緑、2機種スクショで崩れなし、SE でキーボード表示中も「次へ」が見える)
 
-[ ] 3-4 デザインの土台
-    内容: 白基調+ブルーのアクセント、進捗用のグリーン系のカラートークン・文字サイズ・共通部品(ボタン・入力・カード)を定義し、3-1〜3-3 の画面に適用する
-    完了条件: 3-1〜3-3 の E2E が引き続きパスし、2機種のスクショで崩れがない
+[x] 3-4b-1 デザインの適用: 受験/資格の選択・目標大学の画面
+    ※2026-10-09 タスクの大きさの基準(画面2つまで)に合わせて 3-4b を3つに分割
+    内容: src/app/onboarding/index.tsx・university.tsx を 3-4a の StepScreen・共通部品に置き換える(動きは変えない)
+    完了条件: 2画面の既存の画面テスト・backNavigation テストが緑のまま。typecheck/lint/test 全緑。SE のスクショ1枚ずつで崩れなし
+    ※完了(2026-10-09): レビューPASS(university は StepScreen+TextField、選択画面は部品・トークンのみ(3-2a で型に合わせる)。315件全緑、SE スクショ3枚で崩れなし)
 
-[ ] 3-5 Sign in with Apple と目標の保存  【セキュリティ確認】
-    ※開始前確認: manual-work W3(Apple Developer)・W4(Firebase本番)完了必須
+[x] 3-4b-2 デザインの適用: 偏差値・概算の画面
+    内容: src/app/onboarding/deviation.tsx・estimate.tsx を StepScreen・共通部品に置き換える(動きは変えない)
+    完了条件: 2画面の既存の画面テスト・backNavigation テストが緑のまま。typecheck/lint/test 全緑。SE のスクショ1枚ずつで崩れなし
+    ※完了(2026-10-09): レビューPASS(deviation は StepScreen+TextField、estimate は StepScreen+Card。315件全緑、SE スクショ2枚で崩れなし。カンマなしは P-017/3-4c)
+
+[x] 3-4b-3 デザインの適用: 目標時間・試験日・1日の時間の画面
+    内容: src/app/onboarding/target.tsx・daily-time.tsx を StepScreen・共通部品に置き換える(動きは変えない。カレンダーと下から出るドラムロールの決まりは維持)
+    完了条件: 2画面の既存の画面テスト・backNavigation テストが緑のまま。typecheck/lint/test 全緑。SE のスクショ1枚ずつで崩れなし(ドラムロール表示中も含む)
+    ※完了(2026-10-09): レビューPASS(target は StepScreen+TextField、daily-time は StepScreen+Card+兄弟の下シート(Modal 不使用)。322件全緑、SE スクショ3枚で崩れなし)
+
+[x] 3-4c 時間の数値に3桁区切りのカンマを入れる(problem P-017)
+    内容: 時間の数値を3桁ごとにカンマ区切りで表示する共通の関数を shared/displayNumber.ts に追加し、概算画面(estimate.tsx)の表示に使う。
+          画面テストの期待値を mokuhyo.txt「2」の例(約1,080〜1,800時間)に直す。以後の画面(資格の概算・ペース確認・ホーム)でも同じ関数を使う
+    完了条件: 関数のユニットテスト(0・999・1,000・20,000)と、概算画面のテストが「約1,080〜1,800時間」で緑。typecheck/lint/test 全緑
+    ※完了(2026-10-09): レビューPASS(formatWithThousandsSeparator。322件全緑、概算画面は「約1,080〜1,800時間」)
+
+[x] 3-2a オンボーディング: 資格の選択画面
+    内容: requirements 4-3 の 2(2026-10-09 決定の画面構成)のとおり、資格名で絞り込む入力欄+26資格の一覧(目安の上限が少ない順)+「その他」。
+          資格をタップするとすぐ概算画面(/onboarding/cert-estimate)へ。概算画面の中身は 3-2b で作るので、このタスクでは選んだ資格名と「次へ」(目標時間・試験日へ)だけの仮の画面にする。
+          「その他」は資格名の入力欄(1〜50文字)と「次へ」で目標時間・試験日の画面へ。選択画面の「資格」ボタンを押せるようにする。
+          資格ルートのステップ順を navigation.ts に追加し、戻る・再開を受験ルートと同じ仕組みで動かす。
+          ステップ画面の型(StepScreen)に「次へ」を出さない設定を追加し、受験/資格の選択画面(onboarding/index.tsx)と資格の選択画面で使う
+    完了条件: renderRouter の画面テストで、絞り込み(一部一致・0件の表示)・資格のタップで概算画面へ・その他の入力チェックと次へ・戻る・再開後の戻るが緑。
+              typecheck/lint/test 全緑。SE のスクショ(一覧・0件・その他入力)で崩れなし
+    ※完了(2026-10-09): レビューPASS(cert-select・仮の cert-estimate・資格ルートの戻る/再開を renderRouter で確認、344件全緑、SE スクショ3枚で崩れなし)
+
+[x] 3-2b オンボーディング: 資格ルートの概算と後続画面への合流
+    内容: 資格の概算画面(範囲あり「約○〜○時間」/1つの値「約○時間」・出典・あくまで目安)。「その他」は概算をスキップ。
+          その後は受験ルートと同じ目標時間・試験日・1日の時間の画面に合流する(初期値は上限、その他は空欄)
+          時間の数値は shared/displayNumber.ts の formatWithThousandsSeparator で3桁区切りにする(P-017)
+          出典は「出典: フォーサイト(2026-08-02 更新)」のように文字だけで表示し、リンクは付けない(2026-10-09 決定)。
+          3-2a のレビュー指摘: validateCertOtherName の境界値ユニットテスト(ちょうど50文字・空白のみ等)を追加する
+          (2026-10-09 追加)概算の決め手(偏差値・科目数・資格)を戻って変えた場合、目標勉強時間が前の概算の上限のまま(ユーザーが書き換えていない)なら新しい上限に更新。受験ルートの estimate.tsx も同じ動きにする
+    完了条件: 画面テストで範囲あり・1つの値・その他の3パターン。E2E 正常系(一覧/その他)が2機種で緑
+    ※完了(2026-10-09): レビューPASS(cert-estimate 本実装・出典は文字のみ、目標勉強時間の自動更新(未編集なら新しい上限・その他で空欄)を renderRouter 4件で確認、367件全緑)
+
+[x] 3-3 ペース確認画面
+    内容: requirements 4-4 の表示、警告、「修正する」で戻る、「OK、登録する」(登録処理は 3-5c。ここではボタンまで)
+          時間の数値は shared/displayNumber.ts の formatWithThousandsSeparator で3桁区切りにする(P-017)
+    完了条件: 画面テストで届く/届かない(警告と必要時間)/修正して戻る。E2E 正常系が2機種で緑
+    ※完了(2026-10-09): レビューPASS(pace.tsx。届く/届かない/修正して戻る/両ルート/再開を renderRouter で確認、%と必要時間を手計算で照合、379件全緑。登録ボタンは 3-5c まで無動作)
+
+[x] 3-6 typecheck を生成物に依存せず通るようにする(problem P-018)
+    内容: npm run typecheck の前に expo-router の型付きルート(.expo/types/router.d.ts)を生成する手順を組み込む。Expo SDK 57 の公式に案内された方法を調べて使い、出典を報告する
+          (公式の生成方法がなく、Metro の起動が必要な場合は、その旨を報告して止まる)
+    完了条件: .expo/types を削除した状態から npm run typecheck が通る。新しい画面ファイルを一時的に追加しても npm run typecheck が型を作り直して通る(一時ファイルは削除)。lint/test 全緑
+    ※完了(2026-10-09): レビューPASS(typecheck の先頭に `expo customize tsconfig.json`(Expo 公式 typed routes の Type generation に記載の方法)。.expo/types 削除からの通過・新ルート追加時の再生成を確認)
+
+[x] 3-5a 検証: React Native Firebase の導入と Emulator 接続
+    内容: @react-native-firebase(app・auth・firestore)を導入し、開発ビルドで Emulator(demo-gokaku)に接続できることを確かめる。
+          JS SDK(テスト専用で入れている firebase)との共存・ビルド時間・既知の制約を報告する
+    完了条件: 開発ビルドから Emulator の Firestore に読み書きできる証跡。typecheck/lint/test/e2e が緑のまま
+    ※完了(2026-10-09): レビューPASS(@react-native-firebase 26.4.0、useFrameworks dynamic(rnfirebase.io の Expo 手順)、Emulator 専用のダミー plist(config/GoogleService-Info.emulator.plist)。
+      SE の開発ビルドから Auth/Firestore Emulator への読み書きを REST で独立確認。本番 plist への切り替えは 3-5b(W13 後))
+
+[ ] 3-5b Sign in with Apple でのログインとユーザー作成  【セキュリティ確認】
+    ※開始前確認: manual-work W3(Apple Developer)・W4(Firebase本番)・W13(Firebase へのアプリ登録と Apple ログインの有効化)完了必須
     ※ Sign in with Apple の App ID 登録は Xcode の自動署名で行う(App Store Connect のアプリ登録=W6 は不要)
-    内容: 「OK、登録する」で Sign in with Apple → Firebase Auth → users / goals を保存する。
-          初回画面の「アカウントをお持ちの方」ログイン。Firestore ルール(本人のみ・項目の入力チェック)
-    完了条件: Emulator 上でログイン〜保存のテストとルールのテストがパスする。シミュレータでのログイン動作の証跡
+    内容: Sign in with Apple → Firebase Auth → users/{uid} の作成。初回起動画面に「アカウントをお持ちの方」のログイン導線を追加。
+          users のセキュリティルール(本人のみ)
+    完了条件: Emulator 上でログインと users 作成のテスト、ルールのテストが緑。シミュレータでのログイン動作の証跡
+
+[x] 3-5c-1 目標の保存処理とセキュリティルール  【セキュリティ確認】
+    ※2026-10-09 W13 待ちのため 3-5c を分割。Emulator(Auth のテストユーザー)だけで進める
+    内容: draft(受験・資格)から goals/{goalId} を作り、users/{uid} の activeGoalId を設定する保存処理(src/features 側。画面には未接続)。
+          保存後に一時保存(3-1)を消す関数を呼ぶ。goals と users(activeGoalId など本人が書ける項目)のセキュリティルール(本人のみ・mokuhyo.txt「1」の範囲チェック)
+    完了条件: Emulator 上で、受験・資格・その他の保存テストと、ルールのテスト(範囲外の値・他人の書き込み・subscription 等サーバー専用項目の書き込みが拒否される)が緑。typecheck/lint/test 全緑
+    ※完了(2026-10-09): レビューPASS・セキュリティPASS(1回目 セキュリティ FAIL(P-021 日付のサーバー側検査なし)→年月日分解で実在日付・登録日=日本時間の今日・試験日>登録日をルールで検査。
+      ルールのテスト71件(閏年・月末・形式違い含む)、GoalRejectedByServerError で端末時計のずれを区別)
+
+[ ] 3-5c-2 「OK、登録する」からの登録の流れ
+    ※開始前確認: 3-5b 完了必須
+    内容: ペース確認の「OK、登録する」→ Sign in with Apple(3-5b)→ 3-5c-1 の保存処理 → 一時保存の削除 → 次の画面(課金画面 src/app/paywall.tsx。4-1b で作成済み。router.replace('/paywall') でつなぐ)
+    完了条件: 画面テスト(renderRouter、ログインはモック)で登録の流れが通る。typecheck/lint/test 全緑
+
+[ ] 3-E2E Phase 3 の E2E まとめ
+    内容: Phase 3 の各タスクの完了条件にある E2E(正常系2機種、エラー系は SE)を npm run e2e でまとめて流し、失敗を problem.txt に記録して直す。
+          P-016(npm run e2e でだけ「戻る」のフローが失敗)の扱いもここで決める(手がかり: 文字入力直後の「次へ」とキーボードの片付けの競合、2機種同時起動)
+    完了条件: npm run e2e が全フロー緑、または失敗がすべて problem.txt に記録され、原因と方針が決まっている
 
 =====================================
 Phase 4: 課金
 =====================================
 
-[ ] 4-1 課金画面と購入(StoreKit テスト環境)
-    内容: 月額/年額の表示、購入、購入の復元、規約リンク。製品IDを提案して requirements に追記
-    完了条件: StoreKit 設定ファイルを使い、シミュレータで購入・復元・キャンセルの各ケースが動く(E2E またはテスト手順の証跡)
+[x] 4-1a 検証: expo-iap と StoreKit 設定ファイル
+    内容: expo-iap を導入し、Xcode の StoreKit 設定ファイル(月額300円・年額3,000円、製品IDを提案して requirements に追記)で、
+          シミュレータで商品情報の取得・購入・復元ができることを確かめる。既知の制約を報告する
+    完了条件: シミュレータで購入・復元が動く証跡。typecheck/lint/test/e2e が緑のまま
+    ※完了(2026-10-09): レビューPASS。expo-iap 5.8.3・config/gokaku.storekit・plugins/withStoreKitConfig.js(prebuild でスキームに設定)・dev-iap-probe。
+      CLI 起動では StoreKit 設定が使われない制約を特定(P-022)。購入情報(transactionId・originalTransactionIdentifierIOS・purchaseToken=JWS)が取れることを型で確認
 
-[ ] 4-2 サーバーでの契約状態の管理  【セキュリティ確認】
-    ※W6 は不要(2026-10-07 W6 を後ろに移動)。App Store Server API・Server Notifications V2 はモック(テスト用の署名鍵・証明書)で検証し、本物の鍵との接続は 8-2 で行う
-    内容: 購入後に App Store Server API で確認して users.subscription を更新する Function、Server Notifications V2 を受ける Function(署名検証)
-          返金・取り消し(revocation)など expiresAt だけで表せない状態の扱いを決め、2-3 の判定(expiresAt で課金中を判断)と整合させる
-    完了条件: Emulator 上で、更新・解約・期限切れ・不正な署名の通知のテストがパスする。クライアントから subscription を書けないことをルールのテストで確認
+[x] 4-1b 課金画面
+    内容: 月額/年額の表示、購入、購入の復元、規約リンクの画面(requirements 3-4・4-5。2026-10-09 決定の画面構成: できること3つ、初めは未選択・年額に枠と「○%お得」(切り捨て)、戻るなし)
+    完了条件: expo-iap をモックにした画面テストで、商品表示・購入・復元・キャンセル・エラーの各ケースが動く
+          (2026-10-09 ユーザー決定。実際の購入シートでの確認は 4-E2E でユーザーが Xcode の Run で行う。problem P-022)
+    ※完了(2026-10-09): レビューPASS(差し戻し1回: P-023 requestPurchase の直接失敗で処理中のまま止まる→修正)。
+      src/app/paywall.tsx・src/features/billing/(billingClient・discount・purchaseHandoff)・src/config/legalLinks.ts。テスト432件緑。
+      成功後の行き先は仮に "/"(NEXT_ROUTE_AFTER_PURCHASE。4-3 で差し替え)。finishTransaction は未呼び出し(4-2a)
 
-[ ] 4-3 課金切れ時のロック
-    内容: 起動時に契約状態を確認し、課金切れなら課金画面のみ表示(requirements 3-4)。オンボーディング後の課金画面 → X連携への遷移
-    完了条件: Maestro E2E で課金中はホームへ、課金切れは課金画面のみになる
+[x] 4-2a-0 検証: @apple/app-store-server-library
+    内容: functions に Apple 公式ライブラリを入れ、本物の鍵なし(W6 は後回し)で次を確かめる。
+          (1) App Store Server API の呼び出し(getTransactionInfo 等)をテストでモックに差し替えられるか
+          (2) SignedDataVerifier で署名を検証する仕組みを、テストで自前の証明書に差し替えられるか(Apple のルート証明書の置き方も含む)
+          (3) 本番→テスト用(Sandbox)の順に問い合わせる方法 (4) appAccountToken を uid から UUID で決める方法(expo-iap の requestPurchase に渡せるか)。既知の制約を報告する
+    完了条件: 上の4点の結果と出典の報告。typecheck/lint/test/test:functions が緑のまま
+    ※完了(2026-10-09): レビューPASS。functions に @apple/app-store-server-library 3.1.0。テスト専用証明書チェーンで SignedDataVerifier の検証を確認
+      (functions/src/__tests__/appStoreServerVerification.test.ts)。分かった制約:
+      - API 呼び出しは AppStoreServerAPIClient.prototype.makeFetchRequest を差し替えてモックにする
+      - クライアントと検証器は環境ごとに固定。本番で「見つからない」(404・errorCode 4040010)ときだけ Sandbox に問い合わせる
+      - PRODUCTION では appAppleId(App Store Connect のアプリ番号。W6)が必須
+      - Environment.XCODE / LOCAL_TESTING は署名検証を行わないので本番の経路で使わない
+      - enableOnlineChecks はテストでは false
+      - uid→UUID v5 は自前実装で可。expo-iap の requestPurchase に appAccountToken を渡せる
+      - テストで jsonwebtoken を直接使っているが package.json に書かれていない(P-024)
+
+[x] 4-2a 購入後の契約状態の確認(Cloud Functions)  【セキュリティ確認】
+    ※W6 は不要。App Store Server API はモックで検証し、本物の鍵との接続は 8-2 で行う
+    内容: requirements 3-4「購入のサーバー確認」(2026-10-09 決定)のとおり、購入の取引をサーバーで確認して users.subscription を更新する Function を1つ作る。
+          appAccountToken の一致確認、appleSubscriptions による持ち主の固定、Production/Sandbox の両対応。
+          クライアントから subscription・appleSubscriptions を書けないルール
+    完了条件: Emulator 上で、正常な取引・署名が不正・appAccountToken が違う・別アカウントが持ち主の購入・期限切れの取引のテストと、ルールのテストが緑
+    ※完了(2026-10-09): レビューPASS・セキュリティPASS(差し戻し1回: P-025 最新の状態が取れないとき古い取引で代用していた→失敗させる)。
+      functions/src/applePurchase/(verifyApplePurchase・config・appleRootCertificates)、shared/appAccountToken.ts・billingProducts.ts。
+      エラーコード: verification-unavailable / invalid-transaction / owned-by-other-account。返す値 { status: active|expired, expiresAt }。
+      設定: シークレット APPLE_IAP_SIGNING_KEY・APPLE_IAP_KEY_ID・APPLE_IAP_ISSUER_ID、params APPLE_IAP_APP_APPLE_ID(8-2 で W6 の値を入れる)。
+      8-2 で本物の Apple の署名で Apple Root CA - G3 による検証が通ることを必ず確認する。test:functions 56件・test:rules 76件
+
+[x] 4-2c-0 検証: @react-native-firebase/functions
+    内容: 技術スタック(React Native Firebase)の functions モジュールを入れ、開発用の確認画面から Emulator の Callable Function(verifyApplePurchase 等)を
+          呼べること、エラーコード(HttpsError の code・details)をアプリ側で受け取れること、Jest でモックにできることを確かめる。既知の制約を報告する
+    完了条件: SE シミュレータで Emulator の Function を呼べた証跡、エラーコードの受け取り方の報告。typecheck/lint/test が緑のまま
+    ※完了(2026-10-09): レビューPASS。@react-native-firebase/functions 26.4.0、Functions Emulator への接続(src/config/firebase.ts)、jest.setup.ts のモック。
+      分かったこと:
+      - error.code に接頭辞は付かない(例: 'invalid-argument')
+      - 独自の理由は error.details.reason で届く
+      - getFunctions(app, 'asia-northeast1') の region 指定が必須(省略すると us-central1)
+      - config plugin は不要
+      ※検証用の devCallablePing は 4-2c で削除する
+      ※Pro Max のシミュレータのアプリは 4-E2E の前に作り直す(P-019)
+
+[x] 4-2c 課金画面とサーバー確認の接続  【セキュリティ確認】
+    内容: 購入時に appAccountToken を渡す。購入・復元のあと 4-2a の Function を呼び、確認できたら finishTransaction して次の画面へ進む。
+          確認の失敗・別アカウントが持ち主の場合は requirements 3-4 の文言を表示する(4-1b の purchaseHandoff を使う)
+    完了条件: expo-iap と Function 呼び出しをモックにした画面テストで次が緑
+          - 成功(finishTransaction が呼ばれる)
+          - 確認失敗(finishTransaction が呼ばれない・文言)
+          - 別アカウント(文言)
+          - 期限切れの復元(文言)
+          あわせて、検証用の devCallablePing と確認画面のボタンを削除する
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - 前の担当が利用上限で途中終了したため、新しい担当が引き継いだ
+      - レビューで不正な取引のときの文言が仕様にないと指摘された(P-026)。ユーザーが決定し、requirements に追記した
+      - src/features/billing/verifyPurchase.ts・billingClient.ts(appAccountToken・finishPurchaseTransaction)・paywall.tsx
+      - shared/functionsRegion.ts を追加
+      - devCallablePing を削除
+      - npm test 460件
+
+[x] 4-2b 契約の変化の通知(Server Notifications V2)  【セキュリティ確認】
+    内容: Server Notifications V2 を受ける Function(署名検証)で、更新・解約・期限切れを subscription に反映する。
+          返金・取り消し(revocation)は取り消された時点で課金切れ(2026-10-09 決定。requirements 3-4)。2-3 の判定(expiresAt で課金中を判断)と整合させる
+    完了条件: Emulator 上で更新・解約・期限切れ・不正な署名の通知のテストが緑
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - functions/src/applePurchase/appleServerNotification.ts(POST のみ)と appleClients.ts(4-2a と共通)を追加
+      - 応答: 不正は 400、TEST・持ち主なしは 200、最新の状態が取れないときは 503
+      - Apple に登録する URL の形: https://asia-northeast1-syuchyuchyu.cloudfunctions.net/appleServerNotification(8-2 のデプロイ後に確定)
+      - レビューの軽微な指摘: appleServerNotification.ts の peekUnverifiedEnvironment 付近のコメントが実装と少しずれている。
+        「検証後の値として扱う」旨に直す(次に functions を触るタスクで扱う)
+      - 8-2 で確認すること: 本物の TEST 通知の形と、Apple が再送するときの応答の条件
+
+※4-3・4-E2E は 7-1b の後に移動した(2026-10-10 ユーザー決定。行き先のホーム(6-1)と X 連携(7-1b)ができてから作る)
 
 =====================================
 Phase 5: タイマー
 =====================================
 
-[ ] 5-1 下部タブとタイマー画面
-    内容: ホーム/タイマーのタブ、開始/停止、今日の勉強時間と進捗、セッションの保存(オフライン時は端末に記録して後で送信)
-    完了条件: Maestro E2E で開始→停止で今日の勉強時間が増え、Emulator にセッションが保存される。機内モード相当の状態からの復帰でも送信される
+[ ] 5-1a 下部タブとタイマー画面
+    内容: ホーム/タイマーのタブ、開始/停止、今日の勉強時間と進捗の表示(記録は端末内。サーバー保存は 5-1b)。画面構成は requirements 4-6「タイマー」(2026-10-09 決定)
+    完了条件: 画面テストで開始→停止で今日の勉強時間が増える。E2E 正常系が2機種で緑
+
+[ ] 5-1b セッションのサーバー保存とオフライン再送
+    内容: 開始/停止を sessions に保存。オフライン時は端末に記録して通信回復時に送信(requirements 3-2 の時刻の扱いを含む)
+    完了条件: Emulator 上で保存・オフライン後の再送・二重記録なしのテストが緑
 
 [ ] 5-2 「勉強中？」確認
     内容: 60分ごとのローカル通知とアプリ内ダイアログ、10分無応答で通知時刻に停止、ON/OFF 設定(2-2 のロジックを使う)
-    完了条件: 時刻を短縮するテスト用設定で、応答あり・なしの動きを E2E またはテスト手順で確認。本番の設定値が60分/10分であることをテストで確認
+    完了条件: 時刻を短縮するテスト用設定で、応答あり・なしの動きを画面テストまたは手順で確認。本番の設定値が60分/10分であることをテストで確認
 
-[ ] 5-3 ロック画面の開始・停止(本実装)  【セキュリティ確認】
-    内容: 1-4 の検証結果をもとに、ライブアクティビティ(iOS 17+)とロック画面コントロール(iOS 18+)、通知アクションを本実装し、サーバーへ同期する
-    完了条件: iOS 17・18 以降の各シミュレータで、アプリを閉じた状態の開始/停止/確認応答がサーバーに反映される証跡。アプリ内表示とずれない
-              加えて(1-4 で未確認・不具合だった点。problem P-011): 停止後にライブアクティビティが終了すること、
-              iOS 18 のロック画面コントロールからの開始、通知アクション「勉強中」のタップがサーバーに反映されること。
-              デバイストークンの有効期限・失効・作り直し(requirements 3-2)。
-              modules/study-sync と targets/widget に重複している Swift の送信処理を一本化する
-              セキュリティ(1-4 の gokaku-security の指摘):
-                - デバイストークンは、Firebase の ID トークン(Sign in with Apple 後)を検証してから、その uid 向けにだけ発行する。devIssueDeviceToken(検証用)は使わない
-                - Keychain の kSecAttrAccessible を明示する。実機で、画面がロックされた状態のまま操作がサーバーに反映されることを確認する
-                - 送信先を本番の HTTPS エンドポイントにする(URL は設定から読む。http://127.0.0.1 の直書きをやめる)
-                - トークンのハッシュ比較を crypto.timingSafeEqual にする
-                - goalId が本人の実在する目標かを検証する。idempotencyKey の形式・最大長を制限する
-                - ログアウト・アカウント削除時にデバイストークンを失効させる
-                - 盗まれたトークンでの乱打を防ぐ手段(レート制限・App Check 等)を入れる
-                - StopStudyIntent も StartStudyIntent と同じく、Keychain から読んだ uid を基準にする
+[ ] 5-3a デバイストークンの正式な発行と失効  【セキュリティ確認】
+    内容: Firebase の ID トークン(Sign in with Apple 後)を検証してから、その uid 向けにだけデバイストークンを発行する Function。
+          有効期限・作り直し、ログアウト・アカウント削除時の失効。devIssueDeviceToken(検証用)は使わない(requirements 3-2)
+    完了条件: Emulator 上で発行・期限切れ・失効・他人の uid での発行拒否のテストが緑
+
+[ ] 5-3b nativeSync の守りの強化  【セキュリティ確認】
+    内容: ハッシュ比較を crypto.timingSafeEqual に、goalId が本人の実在する目標かの検証、idempotencyKey の形式・最大長の制限、
+          時刻の補正(requirements 3-2: 未来・判定確定済みの日は受信時刻に置き換え)、乱打を防ぐ手段(レート制限 または App Check。着手前にどちらにするか確認)
+          ※4-2a セキュリティ指摘: verifyApplePurchase(Apple API を呼ぶ)にも同じ手段を適用するか、あわせて確認する
+          ※4-2b セキュリティ指摘: 認証なしで呼べる appleServerNotification に、maxInstances や本文の大きさの上限を付けるか、あわせて確認する
+    完了条件: Emulator 上で各ケースのテストが緑
+
+[ ] 5-3c Swift の送信処理の一本化と本番接続の設定
+    内容: modules/study-sync と targets/widget に重複している送信処理を1か所にまとめる。送信先 URL を設定から読む(http://127.0.0.1 の直書きをやめる)。
+          Keychain の kSecAttrAccessible を明示。StopStudyIntent も Keychain の uid を基準にする
+    完了条件: ビルドが通り、1-4 の手順(アプリ終了状態で停止 → Firestore に記録)がシミュレータで再現できる
+
+[ ] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))
+    内容: StopStudyIntent で Activity.activities が空になる原因を調べ、修正方針を報告する(Activity の id を Intent のパラメータで渡す案の検証を含む)
+    完了条件: 原因と根拠を problem.txt に記録できる材料がそろう。修正が小さければ修正し、シミュレータで停止後に表示が消える証跡
+
+[ ] 5-3e ロック画面コントロールの開始・通知アクションの確認(problem P-011 (2)(3))
+    内容: iOS 18 のロック画面コントロールからの開始と、通知アクション「勉強中」のタップがサーバーに反映されることを確かめ、問題があれば直す
+    完了条件: シミュレータでそれぞれサーバーに反映される証跡(自動化できない操作は手順とスクショ)
+
+[ ] 5-3f 実機での確認(画面ロック中の操作)
+    ※開始前確認: manual-work W12(実機での確認)完了必須
+    内容: ユーザーの実機で、画面ロック中にライブアクティビティの停止・ロック画面コントロールの開始がサーバーに反映されることを確認する手順を用意し、結果を記録する
+    完了条件: 実機での確認結果(ユーザー報告とサーバーの記録)が problem.txt P-011 にそろう
 
 =====================================
 Phase 6: ホーム・編集・アカウント管理
@@ -193,37 +373,77 @@ Phase 6: ホーム・編集・アカウント管理
 
 [ ] 6-1 ホーム画面
     内容: requirements 4-6 の表示(積み上げ・%・グリーン系スライダー・達成日数・あと○日・残り必要時間・お知らせ)
-    完了条件: Emulator のテストデータで Maestro E2E がパスし、0件・100%超・試験日以降の表示を確認(2機種のスクショ)
+          時間の数値は shared/displayNumber.ts の formatWithThousandsSeparator で3桁区切りにする(P-017)
+    完了条件: 画面テストで0件・100%超・試験日以降。E2E 正常系(Emulator のテストデータ)が2機種で緑
 
-[ ] 6-2 編集ポップアップ(数値・設定)
-    内容: 目標の数値変更と再計算、確認ON/OFF、X投稿ON/OFF、サブスクの管理画面を開く、規約・問い合わせ(requirements 4-7)
-    完了条件: Maestro E2E で各数値を変えるとホームの表示が再計算される
+[ ] 6-2a 編集ポップアップ: 目標の数値の変更
+    内容: 目標勉強時間・試験日・最低/努力目標・偏差値・科目数の変更と、ホームの再計算(requirements 4-7・mokuhyo「5」)
+          (3-5c-1 セキュリティ指摘)goals の update を許可する場合は、本人のみ・変えられない項目(type・startDate 等)の保護・日付と範囲の再検査をルールで行い、
+          「既存の目標を不正な内容に書き換えられない」ことを明示するルールのテストを追加する
+    完了条件: 画面テストで各数値の変更と再計算。E2E 正常系が2機種で緑
 
-[ ] 6-3 目標の変更と試験日後の画面
-    内容: 目標そのものの変更(確認ダイアログ → 目標入力のやり直し → 積み上げ0から、旧目標は replaced)、試験日以降の「次の目標を設定」
-    完了条件: Maestro E2E で目標変更後に積み上げが0になり、旧目標のデータが残っていることを Emulator で確認
+[ ] 6-2b 編集ポップアップ: 設定とリンク
+    内容: 「勉強中？」確認 ON/OFF、X投稿 ON/OFF、サブスクの管理画面を開く、規約・問い合わせのリンク
+    完了条件: 画面テストで各設定が保存される。E2E 正常系が2機種で緑
+
+[ ] 6-3a 目標そのものの変更
+    内容: 確認ダイアログ → 目標入力のやり直し → 積み上げ0から、旧目標は replaced
+          あわせて(3-5c-1 のセキュリティ指摘): goals の作成時に「有効な目標がまだないこと」と、users.activeGoalId が自分の実在する目標であることをルールで検査する
+          (3-5c-1 セキュリティ指摘)goals の update を許可する場合は、本人のみ・変えられない項目(type・startDate 等)の保護・日付と範囲の再検査をルールで行い、
+          「既存の目標を不正な内容に書き換えられない」ことを明示するルールのテストを追加する
+    完了条件: Emulator 上で旧目標のデータが残り、新目標の積み上げが0になるテストが緑。E2E 正常系が2機種で緑
+
+[ ] 6-3b 試験日以降の画面
+    内容: 試験日当日以降のホームに「お疲れさまでした」と「次の目標を設定」を表示し、目標入力のやり直しへ進む
+    完了条件: 画面テストで試験日前日/当日/以降の表示が切り替わる
 
 [ ] 6-4 ログアウトとアカウント削除  【セキュリティ確認】
-    内容: ログアウト、アカウント削除(確認ダイアログ、Firestore の全データ・Xトークン削除、Firebase Auth のユーザー削除)
+    内容: ログアウト、アカウント削除(確認ダイアログ、Firestore の全データ・Xトークン・デバイストークン削除、Firebase Auth のユーザー削除)
     完了条件: Emulator 上で削除後にデータとトークンが残っていないことをテストで確認
 
 =====================================
 Phase 7: X連携・0:00判定・自動投稿
 =====================================
 
-[ ] 7-1 X連携(OAuth 2.0 PKCE)と確認画面・投稿許可  【セキュリティ確認】
+[ ] 7-1a X連携: 認可とトークンの保存(Cloud Functions)  【セキュリティ確認】
     ※開始前確認: manual-work W7 手順1〜3 完了必須(手順4・5 はこのタスクの中で Claude が設定値を案内して行う)
-    内容: X の認可 → Functions でトークン交換・暗号化保存 → 連携アカウントの確認画面 → 投稿許可ダイアログ(requirements 4-5)。編集ポップアップからの再連携・アカウント変更
-    完了条件: X のモックで、連携・別アカウント・許可する/しない・再連携のテストがパスする。xTokens にクライアントから触れないことをルールのテストで確認
+    内容: OAuth 2.0 PKCE の開始(state・PKCE)→ Functions でトークン交換 → 暗号化して xTokens に保存。xTokens にクライアントから触れないルール
+    完了条件: X のモックで、連携成功・state 不一致・交換失敗のテストと、ルールのテストが緑
+
+[ ] 7-1b X連携: 確認画面と投稿許可ダイアログ
+    内容: 連携アカウント(アイコン・@ユーザー名)の確認画面、「別のアカウントにする」、投稿許可ダイアログ(requirements 4-5)
+    完了条件: 画面テストで許可する/しない・別のアカウント。E2E 正常系(モック)が2機種で緑
+
+[ ] 4-3 課金切れ時のロック
+    ※2026-10-10 ユーザー決定で 7-1b の後に移動。確認の時期・通信できないときの扱いは requirements 3-4 に追記済み
+    内容: 起動時と他のアプリから戻ったときに契約状態を確認し、課金切れなら課金画面のみ表示(requirements 3-4)。オンボーディング後の課金画面 → X連携への遷移
+    完了条件: 画面テストで課金中はホームへ、課金切れは課金画面のみ。E2E 正常系が2機種で緑
+
+[ ] 4-E2E Phase 4 の最終確認
+    内容: Maestro E2E(課金画面の表示まで。商品の取得・購入は P-022 のため対象外)。
+          ユーザーが Xcode の Run でシミュレータを起動し、課金画面で商品表示・購入・復元・キャンセルを確認する(手順は Claude が用意する)
+    完了条件: E2E が緑、ユーザーの確認結果が OK
+
+[ ] 7-1c X連携: 編集ポップアップからの再連携
+    内容: 再連携・アカウント変更(古いトークンの削除を含む)
+    完了条件: X のモックで再連携・アカウント変更のテストが緑
 
 [ ] 7-2 0:00 の判定
     内容: Cloud Scheduler で毎日0:00(Asia/Tokyo)に全ユーザーの前日分を判定して dailyResults に書く(2-3 のロジックを使う)。1,000人規模で時間内に終わる作り
     完了条件: Emulator で時刻を注入し、達成/未達成/計測中/試験日以降/課金切れのユーザーが正しく判定される
 
-[ ] 7-3 自動投稿と失敗時の扱い
+[ ] 7-3a 投稿文の組み立て
+    内容: 承認済みの定型文と「#今月N回目」「#累計M回目」の計算(requirements 3-3)を shared のロジックにする。文章と画像を分けて組み立てる形(将来の画像添付用)
+    完了条件: 月またぎ・目標変更後の数え直し・投稿しなかった未達成日を含むユニットテストが緑
+
+[ ] 7-3b 自動投稿と再試行
     ※開始前確認: manual-work W8(投稿文承認)完了必須
-    内容: 投稿が必要な結果だけを X に投稿(承認済みの定型文と「#今月N回目」「#累計M回目」の計算(requirements 3-3)、URLなし。将来の画像添付に備えて文章と画像を分けて組み立てる)、最大3回の再試行、失敗時の xNotice 記録とアプリでの表示、トークンの更新
-    完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れのテストがパスし、二重投稿しないことを確認
+    内容: 投稿が必要な結果(pending)だけを X に投稿、最大3回の再試行、二重投稿の防止、アクセストークンの更新
+    完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れ・二重投稿なしのテストが緑
+
+[ ] 7-3c 投稿失敗のお知らせ
+    内容: 失敗時の xNotice 記録と、ホームでのお知らせ表示(X連携切れは再連携を促す)
+    完了条件: 画面テストでお知らせの表示・再連携への導線。Emulator 上で xNotice の記録テストが緑
 
 =====================================
 Phase 8: リリース準備

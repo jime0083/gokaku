@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Firebase Emulator Suite 専用のダミー設定ファイル(3-5a)。
+  秘密情報は含まない(全て架空の値)。projectId は Firebase 公式が Emulator 用に推奨する
+  "demo-" プレフィックス(本番に接続しないことを保証する目印。出典: Firebase Emulator Suite 公式ドキュメント
+  https://firebase.google.com/docs/emulator-suite/connect_and_prototype#tips-for-prototyping)。
+  本番の plist(manual-work W13 で /Users/jime0083/gokaku/GoogleService-Info.plist に配置。.gitignore 済み)が
+  用意できたら、app.json の expo.ios.googleServicesFile をそちらのパスに差し替える(3-5b で実施)。
+  GOOGLE_APP_ID の形式は firebase-ios-sdk(FIRApp.m)の検証(バージョン:プロジェクト番号:ios:16進数。
+  16進数以外の文字(g-z等)が混じると起動時に例外で落ちる。3-5a で実機確認済み)を満たす架空の値。
+  API_KEY は FirebaseInstallations が "AIzaSy" + 33文字 = 39文字ちょうどであることを検証するため、
+  架空だが39文字の値にする(これも短いと起動時に例外で落ちることを 3-5a で確認済み)。
+-->
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>000000000000-demogokakuemulator0000000.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.000000000000-demogokakuemulator0000000</string>
+	<key>API_KEY</key>
+	<string>AIzaSyodJFCrnl2edlBDdz1C5Jau2RJtBRnlWmT</string>
+	<key>GCM_SENDER_ID</key>
+	<string>000000000000</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.jime0083.gokakuwatch</string>
+	<key>PROJECT_ID</key>
+	<string>demo-gokaku</string>
+	<key>STORAGE_BUCKET</key>
+	<string>demo-gokaku.appspot.com</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<false></false>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:000000000000:ios:00000000deadbeef00</string>
+</dict>
+</plist>

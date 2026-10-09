@@ -2,20 +2,150 @@ rules_version = '2';
 
 // アクセス権限方針(requirements.md 5)の最小版。
 // - 本人は自分の users/{uid} 配下のみ読み取り可
-// - 書き込みの細かい許可(設定・目標・セッション追記のみ等)は Phase 3-5 以降で追加する。現時点では全て拒否
-// - それ以外(xTokens を含む)はクライアントから一切アクセス不可(デフォルト拒否)
+// - 書き込みの細かい許可(設定・目標・セッション追記のみ等)は Phase 3-5 以降で順に追加する
+// - それ以外(xTokens・appleSubscriptions・deviceTokens を含む)はクライアントから一切アクセス不可(デフォルト拒否。
+//   明示的な match を書かないため、どの match にも当たらず拒否される。4-2a: appleSubscriptions はサーバー(Admin SDK)のみ読み書き可)
 service cloud.firestore {
   match /databases/{database}/documents {
     function isOwner(uid) {
       return request.auth != null && request.auth.uid == uid;
     }
 
+    // 数値が int/float のどちらであっても範囲チェックできるようにするヘルパー
+    function isNumberInRange(value, minValue, maxValue) {
+      return (value is int || value is float) && value >= minValue && value <= maxValue;
+    }
+
+    // 1日の最低・努力目標勉強時間(mokuhyo.txt 1: 10分〜960分、10分刻み)
+    function isValidDailyMinutes(value) {
+      return value is int && value >= 10 && value <= 960 && value % 10 == 0;
+    }
+
+    // 自由入力の文字列(mokuhyo.txt 1: 1〜50文字)
+    function isValidFreeText(value) {
+      return value is string && value.size() >= 1 && value.size() <= 50;
+    }
+
+    // 'YYYY-MM-DD' の日付キーが、実在する日付であるかの検査(problem P-021)。
+    // timestamp.value(dateKey + 'T00:00:00+09:00') は閏日等の実在しない日付も丸めて成功してしまう
+    // ことを Emulator で確認したため(2026-10-09)、年月日を分解して暦として検査する方式にする
+    function isLeapYear(year) {
+      return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    }
+
+    function daysInMonth(year, month) {
+      return month == 2
+        ? (isLeapYear(year) ? 29 : 28)
+        : ((month == 4 || month == 6 || month == 9 || month == 11) ? 30 : 31);
+    }
+
+    // 文字列かつ 'YYYY-MM-DD' の形式か(isCalendarDate で年月日に分解する前に、
+    // && の短絡評価で文字列以外(split 等が使えない値)を弾く)
+    function isDateKeyShaped(value) {
+      return value is string && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    // 'YYYY-MM-DD' 形式の文字列を暦として検査する(isDateKeyShaped が true のものにだけ使う)
+    function isCalendarDate(value) {
+      let parts = value.split('-');
+      let year = int(parts[0]);
+      let month = int(parts[1]);
+      let day = int(parts[2]);
+      return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+    }
+
+    // 'YYYY-MM-DD' かつ実在する日付の文字列か
+    function isRealDateKey(value) {
+      return isDateKeyShaped(value) && isCalendarDate(value);
+    }
+
+    // 日付キーを年月日の比較用の整数値にする(isRealDateKey で実在することを確認済みのものに対して使う)
+    function dateKeyValue(value) {
+      let parts = value.split('-');
+      return int(parts[0]) * 10000 + int(parts[1]) * 100 + int(parts[2]);
+    }
+
+    // request.time(UTC)を日本時間の日付キーの比較用整数値にする
+    function jstTodayValue() {
+      let jstNow = request.time + duration.value(9, 'h');
+      return jstNow.year() * 10000 + jstNow.month() * 100 + jstNow.day();
+    }
+
+    // goals ドキュメントの型に関わらない共通フィールドのチェック(mokuhyo.txt 1, requirements 5)。
+    // startDate は書き込み時点の日本時間の今日、examDate は startDate より後の実在する日付であること(problem P-021)
+    function isValidGoalCommonFields(data) {
+      return data.status == 'active'
+        && data.targetHours is int && data.targetHours >= 1 && data.targetHours <= 20000
+        && isRealDateKey(data.examDate)
+        && isRealDateKey(data.startDate)
+        && dateKeyValue(data.startDate) == jstTodayValue()
+        && dateKeyValue(data.examDate) > dateKeyValue(data.startDate)
+        && isValidDailyMinutes(data.minDailyMinutes)
+        && isValidDailyMinutes(data.goalDailyMinutes)
+        && data.goalDailyMinutes >= data.minDailyMinutes
+        && 'estimatedHours' in data
+        && 'createdAt' in data;
+    }
+
+    // 受験ルートの goal ドキュメント(requirements 4-2, 5)
+    function isValidExamGoal(data) {
+      return data.type == 'exam'
+        && data.keys().hasOnly([
+          'type', 'university', 'targetDeviation', 'currentDeviation', 'subjectCount',
+          'estimatedHours', 'targetHours', 'examDate', 'minDailyMinutes', 'goalDailyMinutes',
+          'startDate', 'status', 'createdAt',
+        ])
+        && isValidFreeText(data.university)
+        && isNumberInRange(data.targetDeviation, 25.0, 80.0)
+        && isNumberInRange(data.currentDeviation, 25.0, 80.0)
+        && data.subjectCount is int && data.subjectCount >= 1 && data.subjectCount <= 8
+        && isValidGoalCommonFields(data);
+    }
+
+    // 資格ルートの goal ドキュメント(requirements 4-3, 5)。「その他」の certId は OTHER_CERTIFICATION_ID('other'。
+    // src/features/onboarding/types.ts)。その場合のみ certOtherName は 1〜50文字、それ以外は空文字を許す
+    function isValidCertGoal(data) {
+      return data.type == 'cert'
+        && data.keys().hasOnly([
+          'type', 'certId', 'certOtherName',
+          'estimatedHours', 'targetHours', 'examDate', 'minDailyMinutes', 'goalDailyMinutes',
+          'startDate', 'status', 'createdAt',
+        ])
+        && data.certId is string && data.certId.size() >= 1
+        && data.certOtherName is string && data.certOtherName.size() <= 50
+        && (data.certId != 'other' || data.certOtherName.size() >= 1)
+        && isValidGoalCommonFields(data);
+    }
+
+    // users/{uid} のうち本人が書き込める項目(requirements 5。activeGoalId と設定系のみ。
+    // subscription・xLinked・xUsername・xNotice・createdAt 等サーバー専用の項目は対象外)
+    function isValidUsersUpdate() {
+      let after = request.resource.data;
+      return after.diff(resource.data).affectedKeys().hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
+        && (!('activeGoalId' in after) || after.activeGoalId == null || (after.activeGoalId is string && after.activeGoalId.size() > 0))
+        && (!('checkEnabled' in after) || after.checkEnabled is bool)
+        && (!('xPostEnabled' in after) || after.xPostEnabled is bool);
+    }
+
     match /users/{uid} {
       allow read: if isOwner(uid);
+      // users ドキュメント自体の作成(Sign in with Apple 時の初期作成)は 3-5b で扱う。ここでは既存ドキュメントの更新のみ許可する
+      allow update: if isOwner(uid) && isValidUsersUpdate();
 
       match /{document=**} {
         allow read: if isOwner(uid);
       }
+
+      // 目標の新規作成(requirements 4-5, 5。数値変更での上書き・目標変更での新規作成は Phase 6)
+      match /goals/{goalId} {
+        allow create: if isOwner(uid) && (isValidExamGoal(request.resource.data) || isValidCertGoal(request.resource.data));
+      }
+    }
+
+    // Phase 3-5a 技術検証: React Native Firebase(アプリ側クライアント SDK)から
+    // Emulator の Firestore に読み書きできることを確かめるための専用コレクション。
+    match /devProbe/{uid} {
+      allow read, write: if isOwner(uid);
     }
   }
 }

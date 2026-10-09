@@ -140,3 +140,27 @@ Work 11: Command Line Tools の更新(problem P-003)
      出てきたダイアログでインストールする(管理者パスワードが必要)
   3. 完了したら Claude に「W11完了」と伝える(Claude が Maestro の導入を再実行する)
 最終ライン: Phase 1-3 開始前
+
+=====================================
+Work 12: 実機での確認(画面ロック中の操作)
+=====================================
+[ ] 状態: 未着手
+内容:
+  1. Phase 5-3f で Claude が用意する手順に従い、お手持ちの iPhone(iOS 17 以上)に開発ビルドを入れる
+  2. 画面をロックした状態で、ライブアクティビティの停止と、ロック画面コントロールからの開始(iOS 18 以上の場合)を操作する
+  3. 結果(画面の様子)を Claude に伝える(サーバーの記録は Claude が確認する)
+  ※ シミュレータでは画面ロック中の Keychain の読み取りなどを確認できないため(problem P-011)
+最終ライン: Phase 5-3f 開始前
+
+=====================================
+Work 13: Firebase へのアプリ登録と Apple ログインの有効化
+=====================================
+[ ] 状態: 未着手
+内容:
+  1. Firebase コンソールでプロジェクト gokakuwatch(ID: syuchyuchyu)を開き、プロジェクトの設定から iOS アプリを追加する。
+     Apple バンドル ID は com.jime0083.gokakuwatch(画面の文言・手順の細部は未確認。案内に沿って進める)
+  2. 表示される GoogleService-Info.plist をダウンロードし、/Users/jime0083/gokaku/GoogleService-Info.plist に置く
+     (.gitignore で除外済み。チャットには貼らない)
+  3. Authentication → Sign-in method で「Apple」を有効にする(iOS アプリからのログインだけなので、Services ID などの Web 用の設定は不要の見込み。画面に入力を求められたら Claude に確認する)
+  4. 終わったら Claude に「W13完了」と伝える
+最終ライン: Phase 3-5b 開始前(3-5a・3-5c-1 は Emulator だけで進めるので不要)

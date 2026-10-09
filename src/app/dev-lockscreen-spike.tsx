@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { FUNCTIONS_REGION } from '@shared/index';
+
 import { getFirebaseEmulatorConfig } from '../config/firebase-emulator';
 // study-sync は Phase 1-4 専用の検証用ローカル Expo Module(modules/study-sync)
 import StudySync from '../../modules/study-sync/src/StudySyncModule';
@@ -12,10 +14,8 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  * 本番ビルド(Emulator に接続しない)では「開発ビルドでのみ使えます」の表示になる
  */
 
-// functions/src/config.ts・.firebaserc と同じ値(アプリ側にはまだ共有定数がないため、
-// この検証用画面でだけ最小限のコピーを持つ)
+// .firebaserc と同じ値(この検証用画面でだけ最小限のコピーを持つ)
 const FUNCTIONS_PROJECT_ID = 'demo-gokaku';
-const FUNCTIONS_REGION = 'asia-northeast1';
 
 export default function DevLockscreenSpikeScreen() {
   const emulatorConfig = getFirebaseEmulatorConfig();

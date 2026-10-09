@@ -1,7 +1,7 @@
 {
-  "_comment": "npm run e2e が対象にする iOS シミュレータ。UDID はマシンごとに変わるため、機種名+iOSバージョンで指定し、実行時に scripts/e2e.js が xcrun simctl から UDID を解決する。対象シミュレータが存在しない場合は Xcode で作成すること",
+  "_comment": "npm run e2e が対象にする iOS シミュレータ。UDID はマシンごとに変わるため、機種名+iOSバージョンで指定し、実行時に scripts/e2e.js が xcrun simctl から UDID を解決する。対象シミュレータが存在しない場合は Xcode で作成すること。primary: true の機種だけで、フロー側に tags: [single-device] を付けたフロー(画面が小さい機種での崩れ確認など、2機種で確認する必要がないもの)を実行する",
   "devices": [
-    { "name": "iPhone SE (3rd generation)", "osVersion": "18.6" },
+    { "name": "iPhone SE (3rd generation)", "osVersion": "18.6", "primary": true },
     { "name": "iPhone 16 Pro Max", "osVersion": "18.6" }
   ]
 }

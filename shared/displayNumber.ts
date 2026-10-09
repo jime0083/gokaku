@@ -9,6 +9,21 @@
 /** 「○時間○分」の時間と分 */
 export type HoursMinutes = { hours: number; minutes: number };
 
+/**
+ * 0 以上の整数を3桁ごとにカンマで区切った文字列にする(例: 1080 → "1,080")。
+ * Intl / toLocaleString は環境によって結果が異なることがあるため使わず、文字列操作のみで実装する。
+ */
+export function formatWithThousandsSeparator(value: number): string {
+  assertNonNegativeSafeInteger(value, 'value');
+  const digits = String(value);
+  const groups: string[] = [];
+  for (let end = digits.length; end > 0; end -= 3) {
+    const start = Math.max(0, end - 3);
+    groups.unshift(digits.slice(start, end));
+  }
+  return groups.join(',');
+}
+
 function assertNonNegativeSafeInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError(`${name} は 0 以上の整数である必要があります: ${value}`);

@@ -1,0 +1,145 @@
+# progress.txt 3-1: オンボーディング(受験ルート)で、不正な入力をするとエラーが表示され
+# 「次へ」が押せないことを確認する(mokuhyo.txt 1 の入力チェック)。
+# - 目標偏差値: 90.0(範囲は25.0〜80.0)
+# - 目標勉強時間: 30000(範囲は1〜20,000)
+# - 1日の努力目標勉強時間 < 1日の最低勉強時間(ドラムロールの操作方法は onboarding_exam_route.yaml 参照)
+# 各エラーを確認した後は、正しい値に直して次の画面へ進む(戻っても値が保持されることも併せて確認できる)
+# (目標大学の50文字超エラーは、TextInput の maxLength がネイティブ側で入力自体を防ぐため、
+#  実機操作では再現できない。この画面側の制限(入力できないこと自体)で要件を満たしている)
+appId: ${APP_ID}
+tags:
+  - single-device
+---
+- clearState
+- launchApp
+- openLink: ${DEV_CLIENT_URL}
+- tapOn:
+    text: "開く"
+    optional: true
+- tapOn:
+    text: "Open"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    id: "onboarding-start-button"
+- extendedWaitUntil:
+    visible:
+      id: "route-select-exam-button"
+    timeout: 8000
+- tapOn:
+    id: "route-select-exam-button"
+
+# 1. 目標大学(有効な値を入力して進む。入力チェックの対象外)
+- extendedWaitUntil:
+    visible:
+      id: "university-input"
+    timeout: 8000
+- tapOn:
+    id: "university-input"
+- inputText: "合格大学"
+- tapOn:
+    id: "university-next-button"
+
+# 2. 目標偏差値: 範囲外(90.0。範囲は25.0〜80.0)はエラー
+- extendedWaitUntil:
+    visible:
+      id: "target-deviation-input"
+    timeout: 8000
+- tapOn:
+    id: "target-deviation-input"
+- inputText: "90.0"
+- assertVisible:
+    id: "target-deviation-error"
+- assertVisible:
+    id: "deviation-next-button"
+    enabled: false
+- takeScreenshot: onboarding_exam_error_02_deviation_out_of_range
+- eraseText: 10
+- inputText: "60.0"
+- assertNotVisible:
+    id: "target-deviation-error"
+- tapOn:
+    id: "current-deviation-input"
+- inputText: "50.0"
+- tapOn:
+    id: "deviation-next-button"
+
+# 3. 目標勉強時間: 範囲外(30000。範囲は1〜20,000)はエラー
+- extendedWaitUntil:
+    visible:
+      id: "estimate-next-button"
+    timeout: 8000
+- tapOn:
+    id: "estimate-next-button"
+- extendedWaitUntil:
+    visible:
+      id: "target-hours-input"
+    timeout: 8000
+- tapOn:
+    id: "target-hours-input"
+- eraseText: 10
+- inputText: "30000"
+- assertVisible:
+    id: "target-hours-error"
+- assertVisible:
+    id: "target-next-button"
+    enabled: false
+- takeScreenshot: onboarding_exam_error_03_target_hours_out_of_range
+- eraseText: 10
+- inputText: "1000"
+- assertNotVisible:
+    id: "target-hours-error"
+- tapOn:
+    id: "exam-date-select-button"
+- extendedWaitUntil:
+    visible:
+      id: "exam-date-picker"
+    timeout: 8000
+# カレンダーを開いた状態は画面の小さい機種では「次へ」までスクロールしないと届かないことがある
+- scrollUntilVisible:
+    element:
+      id: "target-next-button"
+    direction: DOWN
+- tapOn:
+    id: "target-next-button"
+
+# 4. 1日の努力目標勉強時間 < 1日の最低勉強時間 はエラー(P-014 対応後の操作方法)
+#    (最低を 2時間10分=130分 に、努力目標を 1時間10分=70分 に。70分 < 130分)
+- extendedWaitUntil:
+    visible:
+      id: "min-daily-time-row"
+    timeout: 8000
+- tapOn:
+    id: "min-daily-time-row"
+- extendedWaitUntil:
+    visible:
+      id: "min-hour-picker"
+    timeout: 8000
+- tapOn:
+    id: "min-hour-picker"
+    point: "50%,75%"
+- tapOn:
+    id: "min-hour-picker"
+    point: "50%,75%"
+- tapOn:
+    id: "daily-time-sheet-done-button"
+- tapOn:
+    id: "goal-daily-time-row"
+- extendedWaitUntil:
+    visible:
+      id: "goal-hour-picker"
+    timeout: 8000
+- tapOn:
+    id: "goal-hour-picker"
+    point: "50%,75%"
+- tapOn:
+    id: "daily-time-sheet-done-button"
+- assertVisible:
+    id: "goal-vs-min-error"
+# P-014 の対処により、ドラムロールを常時表示しないため次へボタンまでスクロールなしで届く
+- assertVisible:
+    id: "daily-time-next-button"
+    enabled: false
+- takeScreenshot: onboarding_exam_error_04_goal_less_than_min

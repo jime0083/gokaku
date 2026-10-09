@@ -2,6 +2,7 @@ import {
   ceilDivToStep,
   floorPercent,
   floorPercentTenths,
+  formatWithThousandsSeparator,
   roundToStep,
   splitHoursMinutes,
 } from '../displayNumber';
@@ -66,6 +67,26 @@ describe('floorPercent', () => {
     expect(() => floorPercent(1.5, 10)).toThrow(RangeError);
     expect(() => floorPercent(1, 2.5)).toThrow(RangeError);
     expect(() => floorPercent(Number.MAX_SAFE_INTEGER, 10)).toThrow(RangeError);
+  });
+});
+
+describe('formatWithThousandsSeparator', () => {
+  it.each([
+    [0, '0'],
+    [999, '999'],
+    [1000, '1,000'],
+    [1080, '1,080'],
+    [1800, '1,800'],
+    [20_000, '20,000'],
+  ])('%i → %p', (value, expected) => {
+    expect(formatWithThousandsSeparator(value)).toBe(expected);
+  });
+
+  it('不正な値は RangeError', () => {
+    expect(() => formatWithThousandsSeparator(-1)).toThrow(RangeError);
+    expect(() => formatWithThousandsSeparator(1.5)).toThrow(RangeError);
+    expect(() => formatWithThousandsSeparator(NaN)).toThrow(RangeError);
+    expect(() => formatWithThousandsSeparator(Infinity)).toThrow(RangeError);
   });
 });
 

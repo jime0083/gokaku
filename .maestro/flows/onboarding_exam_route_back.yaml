@@ -1,0 +1,105 @@
+# progress.txt 3-1 差し戻し(problem P-015): 各ステップの「戻る」が前の画面に戻り、入力値が
+# 保持されていることを確認する回帰テスト。
+# - 通常の順送り: 大学入力 → 偏差値画面 → 戻る → 大学画面に戻り、入力値が保持されていること
+# - 再起動からの再開: 大学だけ入力した状態でアプリを終了・再起動 → 「はじめる」で偏差値画面から再開する
+#   (この時点で入れ子の Stack の履歴には偏差値画面しかない。requirements 4-1 の「履歴が無い状態からでも、
+#   前のステップに戻れる」要件を、ナビゲーション履歴ではなくステップの並び順から戻り先を決めることで満たす。
+#   problem P-015)
+#   → 戻る → 大学画面に戻り、入力値が保持されていること
+#
+# push(「次へ」)直後は native-stack のスライド遷移(iOS 標準で約350ms)が実行中のことがあり、
+# その間に次の画面の要素をタップすると、遷移元の画面がまだ重なっている影響でタップが意図通りに
+# 伝わらないことがある(高負荷時に再現。.maestro/output のログで実測)。
+# waitForAnimationToEnd で遷移の完了を待ってからタップする
+appId: ${APP_ID}
+---
+- clearState
+- launchApp
+- openLink: ${DEV_CLIENT_URL}
+- tapOn:
+    text: "開く"
+    optional: true
+- tapOn:
+    text: "Open"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+
+# 0. 通常の順送りでの「戻る」
+- assertVisible:
+    id: "onboarding-start-button"
+- tapOn:
+    id: "onboarding-start-button"
+- extendedWaitUntil:
+    visible:
+      id: "route-select-exam-button"
+    timeout: 8000
+- tapOn:
+    id: "route-select-exam-button"
+- extendedWaitUntil:
+    visible:
+      id: "university-input"
+    timeout: 8000
+- tapOn:
+    id: "university-input"
+- inputText: "合格大学"
+- tapOn:
+    id: "university-next-button"
+- extendedWaitUntil:
+    visible:
+      id: "target-deviation-input"
+    timeout: 8000
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot: onboarding_back_00_deviation
+- tapOn:
+    id: "deviation-back-button"
+# 他のフローの後に連続して実行される場合、端末の負荷が高く遷移に時間がかかることがあるため
+# 長めに待つ(.maestro/output の実測で 8000ms では不足することがあった。problem P-015)
+- extendedWaitUntil:
+    visible:
+      id: "university-input"
+    timeout: 20000
+# 入力値(「合格大学」)が保持されていることを確認する(requirements 4-1)
+- assertVisible:
+    id: "university-input"
+    text: "合格大学"
+- takeScreenshot: onboarding_back_01_university_after_back
+- tapOn:
+    id: "university-next-button"
+- extendedWaitUntil:
+    visible:
+      id: "target-deviation-input"
+    timeout: 8000
+- takeScreenshot: onboarding_back_02_deviation_again
+
+# 1. 再起動からの再開での「戻る」(problem P-015)。大学は入力済み・偏差値は未入力のため、
+#    再起動後に「はじめる」を押すと偏差値画面から再開する(入れ子の Stack の履歴は偏差値画面のみ)
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "onboarding-start-button"
+    timeout: 8000
+- tapOn:
+    id: "onboarding-start-button"
+- extendedWaitUntil:
+    visible:
+      id: "target-deviation-input"
+    timeout: 8000
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot: onboarding_back_03_resumed_deviation
+- tapOn:
+    id: "deviation-back-button"
+# 他のフローの後に連続して実行される場合、端末の負荷が高く遷移に時間がかかることがあるため
+# 長めに待つ(.maestro/output の実測で 8000ms では不足することがあった。problem P-015)
+- extendedWaitUntil:
+    visible:
+      id: "university-input"
+    timeout: 20000
+- assertVisible:
+    id: "university-input"
+    text: "合格大学"
+- takeScreenshot: onboarding_back_04_resumed_after_back

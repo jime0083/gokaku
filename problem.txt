@@ -295,7 +295,7 @@
 - 特定した原因:
   (未確定。5-3 で、Activity の id を Intent のパラメータとして渡す方式に変えて実機で再検証する)
 - 切り出したタスク:
-  progress.txt 5-3(完了条件に追加)
+  progress.txt 5-3d(1)・5-3e(2)(3)・5-3f(実機確認)(2026-10-08 に 5-3 を分割)
 - 解決日:
 - 解決内容:
 
@@ -335,7 +335,7 @@
 
 ## P-013: Maestro の extendedWaitUntil visible が、表示されているのに失敗することがある
 - 記録日: 2026-10-07
-- 状態: 調査中
+- 状態: 解決済み
 - 発生箇所: Maestro の E2E フロー(1-4 の検証中)
 - 問題内容:
   想定した動き: 画面にテキストが表示されれば extendedWaitUntil: visible が通る
@@ -345,10 +345,378 @@
   textRegex の部分一致で assertVisible / extendedWaitUntil(8000ms)すると、一度も一致せずに FAILED になる。
   直後のスクリーンショットと hierarchy JSON には、そのテキストが正しい座標・内容で存在していた。
   静的なボタンのラベルへの tapOn は、同じ条件でも成功する
-- 原因調査:
-  (未着手。Phase 3 の E2E を本格的に書き始める前に、どのフロー・機種・条件で起きるかを記録し、
-   Maestro 側の要素検出のタイミングかアプリ側の描画かを切り分ける)
+- 原因調査(3-0。実装担当とレビュー担当が独立に確認した):
+  - Maestro 2.11.0 の maestro-client.jar(Filters)を逆コンパイルした。text と id の照合は Kotlin の Regex.matches()(完全一致)で、毎回階層を取り直している(キャッシュの問題ではない)
+  - 公式ドキュメント(https://maestro.mobile.dev/reference/selectors/core-selectors)にも、正規表現として扱い、短縮形は完全一致で、部分一致には `.*…*` を使う、と書かれている
+  - 1-4 の FAILED のログ(~/.maestro/tests/2026-10-07_162430/wait-screenshot 等)は、すべて「送信:」「Keychain」のような `.*` のない短い文字列だった。
+    画面上の要素は「…送信: false(理由: …)」という長い1文で、完全一致は成立しない
+  - 再現画面で確認した: `.*` なし → 毎回 FAILED、`.*…*` → PASS、id: → 2機種とも10/10 PASS
 - 特定した原因:
+  不具合ではなく、フローの書き方の誤り。部分一致のつもりで、`.*` で囲まずに短い文字列を指定していた
+- 切り出したタスク:
+  progress.txt 3-0
+- 解決日: 2026-10-07
+- 解決内容:
+  CLAUDE.md に「Maestro E2E の書き方の決まり」を追記した(動的な要素は testID + id: で判定する。部分一致は `.*` で囲む)。
+  回帰を検知するフロー .maestro/flows/dev_maestro_text_probe.yaml を npm run e2e に追加した
+
+## P-014: オンボーディング「1日の時間」画面(ドラムロール)が iPhone SE で画面下まで入りきらない
+- 記録日: 2026-10-07
+- 状態: 解決済み(2026-10-09 3-1 再レビューPASSで確認)
+- 発生箇所: src/app/onboarding/daily-time.tsx(3-1)
+- 問題内容:
+  想定した動き: 1日の最低・努力目標勉強時間の入力画面(見出し・ドラムロール2組・エラー文言・次へボタン)が、
+  対応端末(iPhone SE 第3世代を含む)の画面に収まるか、収まらなくてもスクロールして次へボタンまで届く
+  実際の動き: iPhone SE 第3世代(画面が小さい)では、エラー文言が2行になった場合などに「次へ」ボタンが
+  画面の下に隠れる。React Native の ScrollView で画面全体を包んでも、スクロール操作(スワイプ)の開始位置が
+  ドラムロール(@react-native-picker/picker。ネイティブの UIPickerView)の表示範囲に重なると、
+  タッチがスクロールではなくドラムロール自体の回転として扱われ、意図せず値が変わってしまう
+  (スクロールに使える「安全な」余白が、見出し付近のわずかな領域しかない)
+- 再現手順:
+  1. npm run e2e で .maestro/flows/onboarding_exam_route_errors.yaml を iPhone SE 3rd generation(iOS 18.6)で実行する
+  2. 1日の努力目標勉強時間を最低勉強時間より少なくしてエラーを表示させる(画面の該当ステップ)
+  3. スクリーンショットで「次へ」ボタンが画面の下端から切れていることを確認する
+- 原因調査:
+  - .maestro/output の実行時スクリーンショットで、iPhone SE(667pt)では iPhone 16 Pro Max(956pt)より
+    約290pt画面が低く、ドラムロール2組(ネイティブの既定の高さ。約216ptずつ)+見出し+エラー文言+ボタンの
+    合計がSE側では画面高を超えることを確認した
+  - ScrollView化を試したところ、Maestro の scrollUntilVisible / swipe(見出し付近を起点にしても)が
+    ドラムロールの表示範囲にかかると、スクロールではなくドラムロールの値変更として扱われることを、
+    実機(シミュレータ)のスクリーンショットで値が意図せず変わることから確認した
+    (UIPickerView がパン操作そのものを自身のホイール回転として消費するため。本物のユーザー操作でも同様に起こりうる)
+  - Picker に style.height で既定より低い高さ(例: 110)を指定すると、Yoga のレイアウト上は
+    その高さで次の要素が配置されるが、ネイティブの UIPickerView 自体は既定の高さのまま描画され、
+    次の要素と視覚的に重なってしまうことを確認した(RN 側の height 指定だけでは高さを縮められない)
+- 特定した原因:
+  1日の時間の画面の縦方向の合計の高さが、対応端末のうち最も画面が小さい iPhone SE では、
+  見出し+ドラムロール2組+エラー文言+ボタンの組み合わせによっては画面に収まらない。
+  かつ、ドラムロール(ネイティブの UIPickerView)がスクロールジェスチャーを奪うため、
+  単純に ScrollView で包むだけでは(自動化操作に限らず、実ユーザーの手動スワイプでも)確実に
+  「次へ」まで到達できるとは言えない
+- 対応(今回。3-1 の範囲):
+  E2E では、次へボタンの可視性のアサートは行わず、エラー文言の表示有無で判定するように変更した
+  (.maestro/flows/onboarding_exam_route.yaml, onboarding_exam_route_errors.yaml)。
+  ScrollView で画面全体を包む対応(src/app/onboarding/daily-time.tsx, target.tsx)は残している
+  (次へボタン自体には、指でスクロールすれば到達できる。デザイン未調整の暫定レイアウトのため、
+  見出し・余白の詰め方次第で実際には収まる場合もある)
+- 切り出したタスク:
+  progress.txt 3-4(デザインの土台)で、ドラムロールの表示行数を減らす・画面構成を見直す等の
+  対応方針を決めて反映する
+  → 2026-10-07 ユーザー決定: 画面には「最低」「努力目標」の2行(値 or 「未設定」)だけを常時表示し、
+  行をタップすると画面下からドラムロール(時間・分の2列)と「完了」ボタンが出る方式に変更。
+  「完了」を押した時点で表示中の値が確定する(動かさずに完了しても確定)。3-1 の修正として対応した
+  (requirements.md 4-1, mokuhyo.txt 1 を先に更新)
+- 対応修正時に新たに見つかった問題(同じ P-014 の調査の中で特定):
+  RN の `Modal`(bottom sheet の実装に当初使用)は、iOS では別のネイティブウィンドウに描画されるため、
+  Maestro のアクセシビリティ階層の取得対象に含まれない。実機のスクリーンショットには完了ボタン・ドラムロールが
+  正しく表示されているのに、hierarchy の JSON には該当 testID が1件も現れず、`tapOn` / `assertVisible` が
+  「見つからない」で失敗することを、screen-hierarchy の JSON を実際に確認して特定した。
+  対応: `Modal` をやめ、同じ画面の中に重ねて表示する `position: 'absolute'` の View に置き換えた
+  (src/app/onboarding/daily-time.tsx)
+- 解決日: 2026-10-08
+- 解決内容:
+  1日の時間の画面を、行タップ→下から出るドラムロール(View による自前のシート。Modal は不使用)→
+  「完了」で確定、という方式に変更した(src/app/onboarding/daily-time.tsx)。ドラムロールを常時表示しなくなったため、
+  画面の高さは見出し+2行+エラー文言+ボタンのみとなり、iPhone SE 第3世代でもスクロールなしで「次へ」ボタンまで
+  収まることを実機(シミュレータ)で確認した(.maestro/flows/onboarding_exam_route.yaml,
+  onboarding_exam_route_errors.yaml を更新し、2機種(iPhone SE 3rd generation・iPhone 16 Pro Max、iOS 18.6)で
+  2回連続 PASS。エラー表示時のスクリーンショットで「次へ」ボタンが画面内に収まっていることを確認)
+
+## P-015: オンボーディングの「戻る」を押しても前の画面に戻らない
+- 記録日: 2026-10-08
+- 状態: 解決済み(2026-10-09 3-1 再レビューPASSで確認)
+- 発生箇所: src/app/onboarding/*(3-1)。BackButton の onPress={() => router.back()}
+- 問題内容:
+  想定した動き: 各ステップの「戻る」で前の画面に戻り、入力値が残っている(requirements 4-1)
+  実際の動き: 「戻る」をタップしても画面が変わらない。Maestro のタップは COMPLETED で、要素は見つかってタップもできている
+- 再現手順(3-1 レビュー。iPhone 16 Pro Max iOS 18.6):
+  A. はじめる → 受験 → 大学を入力 → 次へ(偏差値画面) → deviation-back-button → 偏差値画面のまま
+  B. はじめる → 受験(大学画面。入力なし) → university-back-button → 大学画面のまま
+  C. 途中まで入力 → アプリを終了 → 再起動 → はじめる(偏差値画面から再開。ここは正しい) → deviation-back-button → 偏差値画面のまま
+- 原因調査(2026-10-08 メインエージェントがコードを読んだ結果):
+  - BackButton は Pressable で、router.back() を呼ぶだけ。各画面の単体テストは router.back がモックで呼ばれたことしか見ておらず、
+    E2E のフローにも「戻る」を押すステップがない。そのため今まで見つからなかった
+  - キーボードの影響(入力中は最初のタップがキーボードを閉じるだけになる)を疑った。ただし B は入力欄に触れておらず、autoFocus もないので、これだけでは説明できない
+  - 仮説1: src/app/onboarding/_layout.tsx は、OnboardingDraftProvider の ready が false の間は Stack ではなく仮の View を描画し、ready で Stack に差し替えている。
+    このとき入れ子の Stack の履歴が作り直されている(または親の状態と食い違っている)可能性がある
+  - 仮説2: 最初の画面(src/app/index.tsx)から router.push('/onboarding/university') のように入れ子の中の画面へ直接移動している。
+    そのため、入れ子の Stack の履歴に戻る先が積まれていない可能性がある。ただし A(偏差値 → 大学)も戻らないので、これだけでは説明できない
+  - (未確定。実機で router.canGoBack()・ナビゲーションの状態を記録して特定する)
+- 特定した原因:
+  router.back() がなぜ効かなかったかの低レベルの原因(ナビゲーション履歴の内部状態)は、2026-10-09 の
+  差し戻し対応でも実機での再現・特定はできなかった(router.canGoBack() 等の計装は未実施。2回試す前に、
+  履歴に依存しない設計へ変更する対応方針が既にCLAUDE.mdで決まっていたため、そちらを優先した)。
+  対応方針として、どのステップからでも「1つ前のステップ」を一意に計算できる
+  src/features/onboarding/navigation.ts の resolveOnboardingBackRoute(ステップの並び順の配列から算出)を導入し、
+  各画面の「戻る」は router.back() ではなく router.replace(resolveOnboardingBackRoute(現在のパス)) を呼ぶように
+  変更した(src/app/onboarding/*.tsx)。この方式はナビゲーション履歴の状態に一切依存しないため、
+  router.back() が効かなかった具体的な原因が何であれ再発しない
+- 切り出したタスク:
+  progress.txt 3-1 の差し戻し(FAIL→修正ループ1回目)
+- 解決日: 2026-10-09
+- 解決内容:
+  1. src/features/onboarding/navigation.ts に resolveOnboardingBackRoute を追加し、受験ルートの全画面
+     (src/app/onboarding/index.tsx, university.tsx, deviation.tsx, estimate.tsx, target.tsx, daily-time.tsx)の
+     BackButton の onPress を router.back() から router.replace(resolveOnboardingBackRoute(...)) に変更した。
+     最初のステップ(/onboarding)の戻り先は初回起動画面('/')。resolveOnboardingResumeRoute と同じ並び順定義
+     (EXAM_ROUTE_ORDER)を使うため、アプリ再起動後に途中の画面から再開した場合(入れ子の Stack の履歴には
+     その画面しかない状態)でも正しい前の画面に戻れる
+  2. 回帰テスト src/app/onboarding/__tests__/backNavigation.test.tsx(expo-router/testing-library の renderRouter。
+     router をモックしない)で、(a) 通常の順送り→戻る→入力値保持、(b) 最初のステップで戻ると初回起動画面、
+     (c) 再起動後の再開からの戻る→入力値保持、の3パターンを検証し、全て green(3/3)
+  3. (c) のテストを実装する過程で、本タスクとは別の問題を発見・特定し、その場で解消した(詳細は下記「付記」):
+     renderRouter(expo-router@57.0.25)の内部の render() が React の act() で初期描画するが、renderRouter 自体は
+     それを await せずに同期的に返すため、後続の fireEvent が act() のスコープと二重に重なり(「overlapping act()
+     calls」警告)、以降の setState がコミットされなくなるテスト実行環境側の既知の制約。renderRouter の呼び出しを
+     await act(async () => { renderRouter(...) }) で包むことで解消することを特定・確認した
+     (src/app/onboarding/__tests__/backNavigation.test.tsx の renderOnboardingRouter ヘルパー)
+  4. Maestro E2E(.maestro/flows/onboarding_exam_route_back.yaml。新規)で、実機(シミュレータ)上でも
+     同じ3パターンを確認する想定で作成。ただし下記「付記」のとおり、`npm run e2e`(本来の一括実行)経由では
+     再現する未解決の問題が残っている
+- 付記(2026-10-09。`npm run e2e` 経由でのみ再現する別の問題。この P-015 の対応範囲外として記録):
+  想定した動き: `npm run e2e` で .maestro/flows の全フローが green になる
+  実際の動き: `npm run e2e` を3回実行し、3回とも onboarding_exam_route_back が同じ箇所
+  (deviation-back-button をタップした直後の「university-input が表示される」待ち)で FAILED した
+  (screen-hierarchy で実際に偏差値画面のまま止まっていることを確認。20000ms まで timeout を伸ばしても解消しなかった)。
+  一方、同じシミュレータ・同じビルド・同じ Metro・同じ flows ディレクトリ・同じ環境変数を使って
+  `maestro --device <udid> test ...` を手動で(.maestro/flows 全体、scripts/e2e.js と同じ並び)4回実行すると
+  4回とも green だった(アプリの再インストールあり/なしの両方で確認)。scripts/e2e.js の実行と手動実行の
+  コマンド引数・環境変数は比較して一致させた。差分の原因は特定できなかった(2回超の調査で打ち切り。
+  CLAUDE.md の「同じ問題に2回試して解決しなければ深追いしない」に従う)。
+  アプリ側の戻るロジック自体は、上記3の renderRouter テスト(3/3 green)と手動 Maestro 実行(4/4 green)の
+  両方で正しいことを確認済みであり、この付記の問題はテスト実行基盤(scripts/e2e.js 固有の何か)に起因すると見られる。
+  次に調査する場合の手がかり: scripts/e2e.js は Metro 起動前に両機種の bootSimulatorIfNeeded・installApp を
+  同期的に行ってから Metro を起動する(手動確認では個別に確認済みで差分なし)。再現は 4 本目のフロー
+  (onboarding_exam_route_errors・onboarding_exam_route の重い2本の直後)でのみ起きている
+
+## P-016: npm run e2e で流したときだけ、onboarding_exam_route_back が毎回失敗する
+- 記録日: 2026-10-09
+- 状態: 保留(2026-10-09。E2E を Phase 末にまとめる方針に変更。3-E2E で扱う)
+- 発生箇所: scripts/e2e.js 経由の .maestro/flows/onboarding_exam_route_back.yaml(3-1 の差し戻し対応中に発見)
+- 問題内容:
+  想定した動き: npm run e2e で全フローが緑
+  実際の動き: npm run e2e を3回流して3回とも、偏差値画面で「戻る」(deviation-back-button)をタップしたあと university-input を待つところで失敗する。
+    screen-hierarchy では偏差値画面のまま止まっている。タイムアウトを 20000ms に延ばしても同じ。
+    ほかのフローはすべて緑。同じシミュレータ・ビルド・Metro・flows ディレクトリで maestro を手で実行すると、4回とも緑(実装担当の報告)
+- 再現手順:
+  1. npm run e2e
+- 原因調査(2026-10-09 メインエージェント):
+  - scripts/e2e.js は機種ごとに順番に maestro test を実行している(spawnSync。並行ではない)。そのため「2機種を同時に動かした負荷」は原因にならない
+  - フローは先頭で clearState している。そのため「前のフローの一時保存が残っている」も原因にならない
+  - 「戻る」は router.replace(resolveOnboardingBackRoute(...)) に変更済み。renderRouter の画面テスト(3件)は緑
+  - どの機種で失敗したか、手での実行との具体的な違い(引数・実行順・Metro の状態・アプリのインストール方法)は未特定
+- 3-1x の調査結果(2026-10-09):
+  - 両機種で失敗する。失敗時、Maestro は deviation-back-button のタップを COMPLETED としているが、画面は偏差値画面のまま。覆っている要素はない
+  - device-xctest.log には、タップ後に InputUI(キーボード/予測変換)のプロセスについて kAXErrorInvalidUIElement が約200件出ていた。
+    大学名を入力して88ms後に「次へ」をタップしており、キーボードの片付けとの競合が最も有力な手がかり(未確定)
+  - 実行中のシミュレータを SE の1台だけにすると2回とも成功した。しかし2台目が既に起動していた可能性があり、e2e.js を直列化する修正では再現できなかった(修正は破棄した)
+  - spawnSync・環境変数・npm 経由かどうかは原因ではないことを確認した
+  - アプリの「戻る」は、renderRouter のテスト(3件)と単独での Maestro 実行で正しく動いている
+- 特定した原因:
+  (未確定)
+- 切り出したタスク:
+  progress.txt 3-1x(調査。保留)→ 3-E2E
+- 解決日:
+- 解決内容:
+
+## P-017: 必要勉強時間の概算に3桁区切りのカンマが入っていない
+- 記録日: 2026-10-09
+- 状態: 解決済み
+- 発生箇所: src/app/onboarding/estimate.tsx(3-1 から)、src/app/onboarding/__tests__/estimate.test.tsx
+- 問題内容:
+  想定した動き: mokuhyo.txt「2」の例のとおり「約1,080〜1,800時間」と3桁ごとにカンマを入れて表示する
+  実際の動き: 「約1080〜1800時間」と表示される(画面テストもカンマなしを正解として固定している)
+- 再現手順: 3科目・現在50.0・目標60.0で概算画面を開く
+- 原因調査(メインエージェント):
+  estimate.tsx は `約{result.lowerHours}〜{result.upperHours}時間` と数値をそのまま出している。
+  3-1 の実装時にカンマ付けが抜け、画面テストもそのまま固定した。
+  3-1 のレビュー報告は「約1,080〜1,800時間」と書いていたが、これは実際の表示ではなく mokuhyo の例を書いたもので、見落としにつながった
+- 特定した原因:
+  時間の数値の表示形式(3桁区切り)を実装・テストで扱っていなかった
+- 切り出したタスク:
+  progress.txt 3-4c
+- 解決日: 2026-10-09
+- 解決内容:
+  shared/displayNumber.ts に formatWithThousandsSeparator を追加し、概算画面で使うようにした。テストの期待値を「約1,080〜1,800時間」に直した(3-4c レビューPASS)。
+  3-2b・3-3・6-1 のタスクにも、この関数を使うよう書き足した
+
+## P-018: 新しく取得した環境では npm run typecheck が失敗する(型付きルートの生成物に依存)
+- 記録日: 2026-10-09
+- 状態: 解決済み
+- 発生箇所: app.json の experiments.typedRoutes、tsconfig.json の include(.expo/types/**/*.ts)、package.json の typecheck
+- 問題内容:
+  想定した動き: リポジトリを取得して npm ci した直後でも npm run typecheck が通る
+  実際の動き: 新しい画面(ルート)を追加すると、`npx expo start` などを一度起動して .expo/types/router.d.ts を作り直すまで型エラーになる(3-3 の実装担当の報告)。
+             .expo/ は gitignore されているので、新しく取得した環境やレビュー担当の環境では生成物がない・古い
+- 再現手順:
+  1. .expo/types を消す(または新しい画面を追加する)
+  2. npm run typecheck
+- 原因調査(メインエージェント):
+  app.json に "experiments": { "typedRoutes": true } があり、expo-router の型付きルートが有効になっている。
+  型の定義は Metro(npx expo start)の起動時に .expo/types/router.d.ts に生成され、tsconfig.json の include がこれを読んでいる。
+  typecheck スクリプトには、生成を行う手順が入っていない
+- 特定した原因:
+  typecheck が、開発用サーバーの起動時にしか作られない生成物に依存している
+- 切り出したタスク:
+  progress.txt 3-6
+- 解決日: 2026-10-09
+- 解決内容:
+  typecheck の先頭に `expo customize tsconfig.json` を追加した(出典: https://docs.expo.dev/router/reference/typed-routes/ の Type generation。CI などで開発サーバーを起動せずに型を生成する方法)。
+  .expo/types を削除した状態からの通過と、新ルート追加時の再生成を確認した(3-6 レビューPASS)
+
+## P-019: src/app/ 配下で @react-native-firebase/* を先頭 import すると、ネイティブモジュール未搭載の他端末(Fast Refresh 経由)もクラッシュする
+- 記録日: 2026-10-09
+- 状態: 解決済み
+- 発生箇所: src/app/dev-firebase-probe.tsx、src/config/firebase.ts(3-5a で新規作成)。影響先: 同じ Metro(8081)に接続していた
+  iPhone 16 Pro Max(B927B241-AA6A-4F23-A172-2F412F876E45。メインエージェントがユーザー確認用に起動していた既存セッション)
+- 問題内容:
+  想定した動き: iPhone SE 専用に `@react-native-firebase/*` を導入・ビルドしても、別のシミュレータ(Pro Max。ネイティブ側は未再ビルドで
+    RNFB のネイティブモジュール未搭載)の動作には影響しない
+  実際の動き: src/config/firebase.ts と src/app/dev-firebase-probe.tsx の先頭(モジュールの評価時)で
+    `@react-native-firebase/app`(経由で auth・firestore)を import した状態でファイルを保存した直後、
+    同じ Metro に繋がっていた Pro Max 側のアプリ(dev-firebase-probe を開いてすらいない)で
+    「Uncaught Error: Native module NativeRNFBTurboApp is not registered」のレッドボックスが発生した
+- 再現手順:
+  1. iPhone 16 Pro Max で `npx expo run:ios`(RNFB 未導入のビルド)を起動し、Metro(8081)に繋いだまま初回起動画面を表示しておく
+  2. 別途 `@react-native-firebase/*` を導入し、src/app/ 配下の新しいファイルの先頭で import する
+  3. ファイルを保存する(Metro の Fast Refresh が走る)
+  4. Pro Max 側の画面を見る(操作しない)
+- 原因調査(実装担当。3-5a):
+  - expo-router は src/app/ 配下のファイルをルート一覧の作成のために読み込む(ファイルの評価自体は、画面を開いていなくても
+    Fast Refresh や起動時に行われる)。このため、画面を一度も開いていない端末・ユーザーでも、ルートファイルの
+    先頭 import は実行される
+  - `@react-native-firebase/app` は import されると(RNFBNativeEventEmitter のコンストラクタ内で)即座にネイティブモジュール
+    (TurboModule)を取得しようとし、未登録なら例外を投げる(Jest でも同じ例外を確認。node_modules/@react-native-firebase/app/lib/internal/RNFBNativeEventEmitter.ts)
+  - Pro Max は SE 用に行った prebuild・ビルドの対象外(ネイティブコードは未更新)だったため、JS だけが Fast Refresh で
+    更新され、ネイティブモジュール不在のまま `@react-native-firebase/app` の import 側コードが実行されて例外になった
+- 特定した原因:
+  src/app/ 配下のファイルにネイティブモジュールを使うパッケージの先頭 import を書くと、そのファイルを一度も開いていない
+  他の端末・ビルド(ネイティブ側が未更新)にも影響する(expo-router の全ルート読み込みのため)
+- 切り出したタスク: なし(3-5a の作業中に即座に修正。影響がリポジトリ外のシミュレータ実行環境のみで、タスクの切り出しは不要と判断)
+- 解決日: 2026-10-09
+- 解決内容:
+  src/config/firebase.ts・src/app/dev-firebase-probe.tsx で `@react-native-firebase/*` の型だけを `import type` で取り、
+  実際の値は呼び出す関数の中で `require()` する形に変更した(型は import type のため実行時コードに残らない)。
+  変更後に保存すると Pro Max のレッドボックスは自動的に消え、初回起動画面に戻ることを確認した(操作はせず画面確認のみ)。
+  以後、src/app/ 配下でネイティブモジュールを使うパッケージ(RNFB に限らず)を画面の先頭で import しないことを、
+  3-5a の報告でレビュー担当に申し送りする
+
+## P-020: 3-5a で依存の脆弱性警告が増えた(@grpc/grpc-js・@xmldom/xmldom)
+- 記録日: 2026-10-09
+- 状態: 仕様確認中(対応方針をユーザーに確認)
+- 発生箇所: 依存パッケージ(3-5a で @react-native-firebase を追加)
+- 問題内容:
+  `npm audit --omit=dev` は 73件(high 56 / moderate 17)、dev を含めると 87件。
+  P-001・P-010 で受け入れた系統に加えて、本番依存の扱いで次の2つが元になっている
+- 原因調査(メインエージェント、npm ls):
+  - @grpc/grpc-js(high): @react-native-firebase/app → firebase(JS SDK)→ @firebase/firestore 経由。
+    JS SDK は iOS 以外の環境向けの依存で、iOS ではネイティブの Firebase SDK を使う(アプリのバンドルに含まれるかは未確認。8-5 で確認する)
+  - @xmldom/xmldom(high): @bacons/apple-targets → @bacons/xcode / @expo/plist、@expo/config-plugins 経由。prebuild 時のみ使うビルドツール(P-001 と同じ系統)
+- 特定した原因:
+  React Native Firebase(要件で決定済み)とネイティブ拡張のビルドツールの推移的依存
+- 対応方針(案。ユーザー確認待ち):
+  P-001・P-010 と同じく今は受け入れ、8-5(リリース前の再確認)の対象に加える。8-5 では @grpc/grpc-js がアプリのバンドルに含まれるかを確認する
 - 切り出したタスク:
 - 解決日:
 - 解決内容:
+
+## P-021: 目標の試験日・登録日がサーバー側のルールで検査されていない
+- 記録日: 2026-10-09
+- 状態: 解決済み(2026-10-09 3-5c-1 の再レビューPASS・セキュリティPASSで確認)
+- 発生箇所: firestore.rules の isValidGoalCommonFields(3-5c-1)
+- 問題内容:
+  想定した動き: 入力チェックはクライアントとサーバーの両方で行う(requirements 5)。登録日は日本時間の今日、試験日は登録日より後の実在する日付
+  実際の動き: examDate・startDate が文字列かどうかしか検査していない。アプリを通さずに直接書き込めば、次のような目標を作れる
+    - examDate: 'not-a-date'
+    - startDate が試験日より後
+    - startDate: '2027-02-30'(実在しない日付)
+    - startDate: '2099-01-01'(今日ではない)
+  startDate を遠い未来にすると、0:00 の判定の対象期間から外れ、未達成の X 投稿を回避できる(アプリの中心の仕組みを本人が無効化できる)
+- 再現手順(gokaku-security が Emulator で確認): 上の値で users/{uid}/goals/{goalId} を作成すると成功する
+- 原因調査:
+  3-5c-1 の実装で、数値項目には範囲チェックを入れたが、日付項目は型チェックだけだった。
+  クライアント側(buildGoalDocument.ts の isValidDateKey・diffDays)では検査しているため、正規の経路では起きない。
+  サーバー側の検査が欠けていた
+- 特定した原因:
+  firestore.rules に日付の形式・実在・前後関係・登録日が今日であることの検査がない
+- 切り出したタスク:
+  progress.txt 3-5c-1 の差し戻し(FAIL→修正ループ1回目)。
+  副次的な指摘(有効な目標の重複作成をルールで防ぐ、activeGoalId が自分の実在する目標か)は 6-3a で扱う
+- 解決日: 2026-10-09
+- 解決内容:
+  firestore.rules に isRealDateKey(年月日に分解して暦として実在するか検査)・dateKeyValue(比較用整数化)・
+  jstTodayValue(request.time を日本時間の日付に変換)を追加し、isValidGoalCommonFields で
+  startDate が実在する日付かつ書き込み時点の日本時間の今日であること、examDate が実在する日付かつ
+  startDate より後であることを検査するようにした。
+  セキュリティ担当の案(timestamp.value(dateKey + 'T00:00:00.000+09:00') で比較)は、Emulator で検証した結果、
+  '2027-02-30' のような実在しない日付も丸めて成功してしまうことを確認したため採用しなかった
+  (検証に使った最小ルールと結果は作業中にのみ作成し、確認後に削除済み)。
+  年月日を分解して暦として検査する方式に切り替え、同じ検証で実在しない日付が拒否されることを確認した。
+  クライアント側(saveGoal.ts)には、この拒否(Firestore の permission-denied)を他のエラー(入力値自体の
+  RangeError・既存目標がある場合の ActiveGoalAlreadyExistsError)と区別できる GoalRejectedByServerError を追加した
+  (画面の文言は 3-5c-2 で扱う)。
+  tests/rules/users.rules.test.ts に examDate・startDate の検査(不正形式・実在しない日付・前後関係・今日でない・正常)を追加し、
+  tests/rules/saveGoal.test.ts の既存ケースは実行時点の実日付を使う形に直し、端末の時計がずれた場合に
+  GoalRejectedByServerError になるケースを追加した。test:rules(65件)・typecheck/lint/test/test:functions 全緑(3-5c-1 再レビュー予定)
+
+## P-022 StoreKit 設定ファイルが CLI 起動(npx expo run:ios / simctl)では有効にならない
+- 状態: 対応方針決定(2026-10-09 ユーザー決定: タスクの合否は expo-iap をモックにした速いテスト。実際の購入は 4-E2E でユーザーが Xcode の Run で確認)。4-E2E で確認後に解決済みにする
+- 発見: 4-1a(expo-iap と StoreKit 設定ファイルの検証)
+- 問題内容: config/gokaku.storekit をスキームに結び付けても(prebuild 後の gokaku.xcscheme に StoreKitConfigurationFileReference あり)、
+  npx expo run:ios で起動したアプリでは fetchProducts が0件になり、購入・復元を試せない
+- 再現手順: npx expo prebuild --clean → npx expo run:ios --device <SE UDID> → dev-iap-probe で「商品情報を取得」→ 0件
+- 原因調査: simctl の log stream で storekitd を観測すると、ローカルの設定ファイルを参照せず Apple の Sandbox サーバー
+  (amp-api.sandbox.apple.com)へ商品IDを問い合わせていた(未登録のため空)。Apple の文書では、スキームの StoreKit 設定は
+  Xcode の Run で有効になり、自動化用の SKTestSession は XCTest から使う設計
+- 特定した原因: スキームの StoreKit 設定は Xcode の Run の時だけ使われ、xcodebuild build + simctl install/launch の経路では使われない
+  (Xcode を GUI で操作した確認は、この環境に操作の権限がなく未実施)
+- 影響: 4-1b・4-2・4-E2E で、実際の購入シート・購入・復元を自動テストで動かせない
+
+## P-023 購入処理が requestPurchase 自体の失敗で「処理中...」のまま止まる
+- 状態: 解決済み(2026-10-09 4-1b 再レビューPASSで確認)
+- 発見: 4-1b レビュー(gokaku-review)
+- 問題内容: requestPurchase が直接失敗し、購入のリスナー(成功・失敗)がどちらも呼ばれない場合、
+  purchaseBillingProduct の Promise がいつまでも終わらない。画面は「処理中...」のまま操作できなくなる
+- 再現手順: billingClient のテストで、requestPurchase を reject させ、どちらのリスナーも呼ばない
+- 原因調査: src/features/billing/billingClient.ts の purchaseBillingProduct は、requestPurchase(...).catch(() => {}) で失敗を捨てていた。
+  失敗は必ず purchaseErrorListener に届く前提だった。しかし expo-iap 5.8.3 の node_modules/expo-iap/build/index.d.ts:285 には、
+  requestPurchase について「@throws Synchronous rejection from the store (e.g. ErrorCode.NotPrepared, validation failure)」とあり、
+  リスナーを通らずに直接失敗する場合がある(メインエージェントが型定義で確認)
+- 特定した原因: requestPurchase の直接の失敗を、購入の結果(キャンセル・失敗)として扱っていない
+- 切り出したタスク: progress.txt 4-1b の差し戻し
+- 解決日: 2026-10-09
+- 解決内容: requestPurchase の直接の失敗でも、未決着ならリスナーを外してキャンセル/失敗で返すようにした。両方の順序で二重に決着しないことをテストで確認(レビュー担当は逆順も一時テストで確認)
+
+## P-024 functions のテストが package.json に書かれていない jsonwebtoken を使っている
+- 状態: 解決済み(2026-10-09 4-2a のレビューPASS・セキュリティPASSで確認)
+- 発見: 4-2a-0 レビュー
+- 問題内容: functions/src/__tests__/appStoreServerVerification.test.ts は jsonwebtoken を import しているが、functions/package.json には書かれていない。
+  他の依存の中に含まれていて、たまたま使えている状態。依存の版が変わると test:functions が壊れる
+- 原因: 4-2a-0 でテスト用の署名を作るために jsonwebtoken を使ったが、依存として追加しなかった
+- 切り出したタスク: 4-2a の中で functions の devDependencies に jsonwebtoken(と型)を追加する
+- 解決日: 2026-10-09
+- 解決内容: 4-2a で functions の devDependencies に jsonwebtoken・@types/jsonwebtoken を追加
+
+## P-025 購入の確認で最新の状態が取れないとき、古い取引の情報で課金中にしてしまう
+- 状態: 解決済み(2026-10-09 4-2a のレビューPASS・セキュリティPASSで確認)
+- 発見: 4-2a レビュー(gokaku-review)
+- 問題内容: verifyApplePurchase で、getAllSubscriptionStatuses の結果に該当する originalTransactionId の取引がない場合、
+  クライアントが渡した transactionId の取引(getTransactionInfo の結果)で status・expiresAt を決めて保存してしまう。
+  クライアントが古い transactionId を送ると、その後の解約や取り消しが反映されない状態で active になりうる
+- 再現手順: テストで getAllSubscriptionStatuses の応答に該当 originalTransactionId を含めずに確認を呼ぶ → 失敗にならず保存される(テストなし)
+- 原因調査: functions/src/applePurchase/verifyApplePurchase.ts の 207-215 行で、latestSignedTransaction が見つからない場合に
+  latestDecoded = decoded(getTransactionInfo の結果)のまま進む作りになっていた。確認できない場合は失敗させるという requirements 3-4 の方針と逆(fail-open)
+- 特定した原因: 最新の状態が取れない場合を「確認できない」として扱っていない
+- 切り出したタスク: 4-2a の差し戻し。見つからない場合は verification-unavailable で失敗させ(fail-closed)、テストを追加する
+- 解決日: 2026-10-09
+- 解決内容: getAllSubscriptionStatuses に該当する取引がない場合は verification-unavailable で失敗させるようにした。テスト2件追加(修正前に戻すと赤になることをレビューで確認)
+
+## P-026 不正な取引のときの文言が仕様に書かれていなかった
+- 状態: 解決済み(2026-10-10)
+- 発見: 4-2c レビュー(gokaku-review)
+- 問題内容: サーバーの確認で不正な取引と判定されたとき、画面には「購入できませんでした。時間をおいてもう一度お試しください」が出る。
+  しかし requirements.md 3-4 にはこの場合の文言がなかった。
+  レビューでは、要件どおりなら「購入の確認ができませんでした…」になるはずだと指摘された
+- 原因: メインエージェントが 4-2c を依頼したとき、requirements に書かず、ユーザーにも確認しないまま文言を指示した(不明点ゼロのルール違反)
+- 対応: ユーザーに確認した(2026-10-10 決定: 購入失敗と同じ文言)。requirements.md 3-4 に決定日付きで追記した。実装・テストはすでにこの文言なので変更なし
+- 再発防止: 実装担当に渡す文言・動作は、渡す前に requirements.md に書いてあることを確認する。書いていなければユーザーに確認してから書く
