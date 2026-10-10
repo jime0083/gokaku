@@ -733,10 +733,22 @@ describe('deviceTokens(Phase 1-4 技術検証: ネイティブ同期用デバイ
     await assertFails(setDoc(doc(db, 'deviceTokens', OWNER_UID), { tokenHash: 'attacker-hash' }));
   });
 
+  it('他人も deviceTokens に書き込めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(setDoc(doc(db, 'deviceTokens', OWNER_UID), { tokenHash: 'attacker-hash' }));
+  });
+
   it('未ログインは deviceTokens を読めない', async () => {
     const db = testEnv.unauthenticatedContext().firestore();
 
     await assertFails(getDoc(doc(db, 'deviceTokens', OWNER_UID)));
+  });
+
+  it('未ログインは deviceTokens に書き込めない', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+
+    await assertFails(setDoc(doc(db, 'deviceTokens', OWNER_UID), { tokenHash: 'attacker-hash' }));
   });
 });
 

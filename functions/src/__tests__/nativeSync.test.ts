@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 
+import { issueDeviceTokenForUid } from '../deviceToken/issueDeviceToken';
+import { revokeDeviceToken } from '../deviceToken/revokeDeviceToken';
 import { functionUrl, getFirestoreDoc, listFirestoreDocs } from './emulator';
+
+function uniqueUid(label: string): string {
+  return `test-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 /**
  * Phase 1-4 技術検証: ロック画面・通知アクションからの同期を受ける nativeSync の Emulator テスト。
@@ -19,10 +25,6 @@ describe('nativeSync (Functions Emulator)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { deviceToken: string };
     return body.deviceToken;
-  }
-
-  function uniqueUid(label: string): string {
-    return `test-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
   it('POST 以外は 405 を返す', async () => {
@@ -152,6 +154,73 @@ describe('nativeSync (Functions Emulator)', () => {
         idempotencyKey: 'evt-cross-uid',
       }),
     });
+    expect(res.status).toBe(401);
+  });
+});
+
+// 5-3a: issueDeviceToken(正式な発行)が設定した expiresAt を nativeSync が確かめること、
+// 作り直し(再発行)で古いトークンが無効になること、revokeDeviceToken(失効)後は拒否されることの確認
+describe('nativeSync のデバイストークンの期限・失効(5-3a)', () => {
+  const nativeSyncUrl = functionUrl('nativeSync');
+
+  function buildBody(uid: string, idempotencyKey: string): Record<string, unknown> {
+    return {
+      uid,
+      goalId: 'goal-1',
+      action: 'stop',
+      source: 'live_activity',
+      clientTimeMs: Date.now(),
+      idempotencyKey,
+    };
+  }
+
+  async function sendWithToken(body: Record<string, unknown>, token: string): Promise<Response> {
+    return fetch(nativeSyncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('期限切れのデバイストークンは 401', async () => {
+    const uid = uniqueUid('expired');
+    // 31日前に発行した体にする(有効期限30日 → 現在は期限切れ)
+    const issuedAtMs = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => issuedAtMs });
+
+    const res = await sendWithToken(buildBody(uid, 'evt-expired'), deviceToken);
+
+    expect(res.status).toBe(401);
+  });
+
+  it('期限内のデバイストークンは成功する', async () => {
+    const uid = uniqueUid('not-expired');
+    const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
+
+    const res = await sendWithToken(buildBody(uid, 'evt-not-expired'), deviceToken);
+
+    expect(res.status).toBe(200);
+  });
+
+  it('作り直し(再発行)すると、古いトークンは 401 になり、新しいトークンは成功する', async () => {
+    const uid = uniqueUid('reissue');
+    const oldToken = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
+    const newToken = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
+
+    const oldRes = await sendWithToken(buildBody(uid, 'evt-old'), oldToken.deviceToken);
+    expect(oldRes.status).toBe(401);
+
+    const newRes = await sendWithToken(buildBody(uid, 'evt-new'), newToken.deviceToken);
+    expect(newRes.status).toBe(200);
+  });
+
+  it('失効(revokeDeviceToken)したあとは 401', async () => {
+    const uid = uniqueUid('revoked');
+    const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
+
+    await revokeDeviceToken(uid);
+
+    const res = await sendWithToken(buildBody(uid, 'evt-revoked'), deviceToken);
     expect(res.status).toBe(401);
   });
 });

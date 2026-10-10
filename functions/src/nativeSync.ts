@@ -20,6 +20,11 @@ import { ensureAdminApp } from './firebaseAdmin';
  *
  * このコレクション(users/{uid}/syncEvents)は検証用の形で、requirements.md 5 の
  * users/{uid}/sessions とは別物(本実装は 5-3 で確定する)
+ *
+ * 5-3a: deviceTokens/{uid} の expiresAt(issueDeviceToken が発行時に設定する有効期限)を過ぎている
+ * トークンは拒否する(requirements 3-2「期限切れや無効のトークンでの操作は拒否する」)。
+ * devIssueDeviceToken(Phase 1-4 検証専用)が発行したトークンには expiresAt が無いため、
+ * 期限なし(＝拒否しない)として扱う(devIssueDeviceToken は本番で 404 になり、検証用途以外では使われないため)
  */
 
 const VALID_ACTIONS = ['start', 'stop', 'confirm'] as const;
@@ -82,7 +87,9 @@ export const nativeSync = onRequest({ region: FUNCTIONS_REGION }, async (req, re
 
   const deviceTokenSnap = await db.doc(`deviceTokens/${uid}`).get();
   const storedHash = deviceTokenSnap.get('tokenHash') as string | undefined;
-  if (!deviceTokenSnap.exists || storedHash !== hashDeviceToken(token)) {
+  const expiresAt = deviceTokenSnap.get('expiresAt') as number | undefined;
+  const isExpired = typeof expiresAt === 'number' && Date.now() >= expiresAt;
+  if (!deviceTokenSnap.exists || storedHash !== hashDeviceToken(token) || isExpired) {
     res.status(401).json({ error: 'unauthorized' });
     return;
   }

@@ -70,6 +70,16 @@
     端末の時計を少しずらす程度の不正は防げないことを受け入れる
   - 送れなかった操作は App Group に溜め、次の機会(アプリ起動時・次の操作時)に再送する
   - 本実装(5-3)で、トークンの有効期限・失効(ログアウト・アカウント削除時)・定期的な作り直しを追加する
+  - デバイストークンの有効期限は30日(2026-10-10 ユーザー決定)
+    - アプリを開いたときに残りが7日を切っていれば、自動で作り直す
+    - 1人につき有効なトークンは1つ。別の端末でログインして発行したら、古いトークンはすぐ無効になる
+    - ログアウト・アカウント削除でも、すぐ無効にする
+    - 期限切れや無効のトークンでの操作は拒否する。拒否された操作は端末に溜め、次にアプリを開いたときに再送する
+- 大量の呼び出しへの対策(2026-10-10 ユーザー決定: 回数の制限。App Check は使わない)
+  - 計測の記録(アプリからの Callable・ロック画面からの nativeSync)と購入の確認は、ユーザーごとに1分あたりの呼び出し回数に上限を設け、超えたら断る
+    - 上限は、普通の使い方では届かない値にする
+    - 目安: 計測の記録は1分あたり60回、購入の確認は1分あたり10回。値は 5-3b で決めて記録する
+  - 誰でも呼べる Apple の通知の入口(appleServerNotification)には、同時に動く数の上限(maxInstances)と、受け取るデータの大きさの上限を設ける
 - アプリからの記録の保存(2026-10-10 記載。サーバー内部の仕組み):
   - 計測の開始時に端末でセッションID(sessionId)を作る。開始・停止の操作は「sessionId・操作(start/stop)・端末時刻・idempotencyKey」の形で送る
     (ロック画面からの操作(5-3)も同じ sessionId と形を使い、アプリとロック画面で同じセッションを開始・停止できるようにする)
@@ -276,12 +286,13 @@
 | `users/{uid}/sessions/{sessionId}` | goalId, startAt, stopAt, source(app/lockscreen), checkEnabled, confirmations[], endReason(manual/check_timeout) | 計測セッション(サーバーのみ書き込み。startAt・stopAt は epoch ミリ秒。2026-10-10 追記) |
 | `users/{uid}/sessionEvents/{idempotencyKey}` | sessionId, action, processedAt | 同じ操作の二重記録を防ぐ処理済みの印(サーバーのみ書き込み。2026-10-10 追加) |
 | `users/{uid}/dailyResults/{YYYY-MM-DD}` | goalId, studiedMinutes, metMin, metGoal, postStatus(none=投稿不要(達成)/pending=投稿待ち/posted/failed/skipped=未達成だが投稿しない), postSkipReasons | 0:00 判定結果(サーバーのみ書き込み) |
+| `deviceTokens/{uid}` | tokenHash, issuedAt, expiresAt | ロック画面からの操作(nativeSync)に使うデバイストークンのハッシュ。有効期限30日、1人1つ(常に上書き)。サーバーのみ読み書き可(2026-10-10 追加) |
 | `xTokens/{uid}` | 暗号化した access/refresh token, expiresAt | サーバー(Cloud Functions)のみ読み書き可 |
 
 - 資格一覧・概算計算式はアプリ内の定数データとして持つ(manual-work で承認した内容)
 - 入力チェックはクライアントとセキュリティルール/Functions の両方で行う
 
-**アクセス権限方針:** 本人は自分の `users/{uid}` 配下のみ読み取り可。書き込みは、設定と目標は本人が行う。セッション(sessions・sessionEvents)はサーバーだけが書き込む(時刻の補正をサーバーで行うため。2026-10-10 変更)。課金状態・判定結果・Xトークンはサーバーだけが書き込む。`xTokens` はクライアントから一切アクセスできない。
+**アクセス権限方針:** 本人は自分の `users/{uid}` 配下のみ読み取り可。書き込みは、設定と目標は本人が行う。セッション(sessions・sessionEvents)はサーバーだけが書き込む(時刻の補正をサーバーで行うため。2026-10-10 変更)。課金状態・判定結果・Xトークンはサーバーだけが書き込む。`xTokens`・`deviceTokens`・`appleSubscriptions` はクライアントから一切アクセスできない。
 
 ## 6. 外部サービス・API
 | サービス | 用途 | 無料枠・料金(確認日・出典) | 規約上の制約 | 秘密情報の置き場所 |

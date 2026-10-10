@@ -439,14 +439,43 @@ Phase 5: タイマー
       - 期限を過ぎた応答は、サーバーにも送らずに無視する
       - 通知のアクションを実際に押す確認は、5-E2E でユーザーに見てもらう
 
-[ ] 5-3a デバイストークンの正式な発行と失効  【セキュリティ確認】
+[x] 5-3a デバイストークンの正式な発行と失効  【セキュリティ確認】
     内容: Firebase の ID トークン(Sign in with Apple 後)を検証してから、その uid 向けにだけデバイストークンを発行する Function。
           有効期限・作り直し、ログアウト・アカウント削除時の失効。devIssueDeviceToken(検証用)は使わない(requirements 3-2)
-    完了条件: Emulator 上で発行・期限切れ・失効・他人の uid での発行拒否のテストが緑
+    ※2026-10-10 決定: 有効期限30日、残り7日未満で作り直し、1人1つ(新しく発行したら古いものは無効)(requirements 3-2)
+    内容の範囲: サーバー側だけ。発行と作り直しの Callable を1つ作る。nativeSync でトークンの期限を確かめる。
+              失効の共通の処理を作る(6-4 のログアウト・アカウント削除から呼ぶ)
+    完了条件: Emulator 上で次のテストが緑
+          - 発行
+          - 作り直し
+          - 期限切れの拒否
+          - 失効
+          - 他人の uid では発行できない
+          - 新しく発行すると古いトークンが無効になる
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - 前の担当が利用上限で中断したため、新しい担当が引き継いだ
+      - 作ったもの:
+        - functions/src/deviceToken/(issueDeviceToken・issueDeviceTokenCallable・revokeDeviceToken)
+        - nativeSync で expiresAt を確かめる処理
+      - テスト件数: test:functions 120件、test:rules 86件
+      - 両担当の指摘: expiresAt がないトークンを「期限なし」で通す分岐が残っている(fail-open)。5-3a-2 で消す
+
+[ ] 5-3a-2 アプリ側のデバイストークンの取得と作り直し
+    内容: ログインしている状態でアプリを開いたとき、トークンがない、または残りが7日を切っていれば、5-3a の Callable で発行する。
+          発行したものは study-sync モジュールで Keychain(App Group 共有)に保存する。devIssueDeviceToken は使わない
+          あわせて dev-lockscreen-spike.tsx の発行を issueDeviceToken に切り替え、devIssueDeviceToken(検証用)を削除する(5-3a の申し送り)
+          あわせて nativeSync の「expiresAt がないトークンは期限なし」の分岐を消し、expiresAt がない・数値でない場合は 401 にする(5-3a レビューの意見。fail-closed)
+    完了条件: Callable と study-sync をモックにしたテストで次が緑
+          - 発行
+          - 作り直し
+          - まだ期限に余裕があるときは何もしない
+          あわせて Emulator のテストで次が緑
+          - nativeSync で expiresAt がない・数値でないトークンが 401 になる
+          - devIssueDeviceToken がなくなっている
 
 [ ] 5-3b nativeSync の守りの強化  【セキュリティ確認】
     内容: ハッシュ比較を crypto.timingSafeEqual に、goalId が本人の実在する目標かの検証、idempotencyKey の形式・最大長の制限、
-          時刻の補正(requirements 3-2: 未来・判定確定済みの日は受信時刻に置き換え)、乱打を防ぐ手段(レート制限 または App Check。着手前にどちらにするか確認)
+          時刻の補正(requirements 3-2: 未来・判定確定済みの日は受信時刻に置き換え)、乱打を防ぐ手段(2026-10-10 決定: ユーザーごとの回数の制限。requirements 3-2)
           ※4-2a セキュリティ指摘: verifyApplePurchase(Apple API を呼ぶ)にも同じ手段を適用するか、あわせて確認する
           ※4-2b セキュリティ指摘: 認証なしで呼べる appleServerNotification に、maxInstances や本文の大きさの上限を付けるか、あわせて確認する
     完了条件: Emulator 上で各ケースのテストが緑
