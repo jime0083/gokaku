@@ -71,3 +71,21 @@ jest.mock('@react-native-firebase/functions', () => ({
   connectFunctionsEmulator: jest.fn(),
   httpsCallable: jest.fn(),
 }));
+
+// expo-notifications はネイティブの通知センターを使うため、Jest 環境では明示的にモックする(5-2c)。
+// 既定値は「許可あり・予約なし」にし、通知の許可・通知レイヤーに関わらないテスト(既存のタイマー画面テスト等)に
+// 影響しないようにする。個別のテストは `import * as Notifications from 'expo-notifications'` した上で
+// 各 jest.fn() の戻り値を上書きする
+jest.mock('expo-notifications', () => ({
+  setNotificationHandler: jest.fn(),
+  setNotificationCategoryAsync: jest.fn().mockResolvedValue(undefined),
+  requestPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted', granted: true }),
+  getPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted', granted: true }),
+  scheduleNotificationAsync: jest.fn().mockResolvedValue('mock-notification-id'),
+  cancelScheduledNotificationAsync: jest.fn().mockResolvedValue(undefined),
+  getAllScheduledNotificationsAsync: jest.fn().mockResolvedValue([]),
+  addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
+  getLastNotificationResponse: jest.fn(() => null),
+  clearLastNotificationResponse: jest.fn(),
+  SchedulableTriggerInputTypes: { DATE: 'date', TIME_INTERVAL: 'timeInterval' },
+}));

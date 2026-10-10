@@ -10,6 +10,7 @@ import {
 } from '@/features/goals/activeGoalRepository';
 import { formatElapsedClock, formatJstHourMinute } from '@/features/timer/format';
 import { calcProgressRatio } from '@/features/timer/progress';
+import { useStudyCheckNotificationNotice } from '@/features/timer/studyCheckNotifications';
 import { useTimerSessionContext } from '@/features/timer/TimerSessionContext';
 import { colors } from '@/theme/colors';
 import { radius } from '@/theme/radius';
@@ -41,6 +42,7 @@ export default function TimerScreen() {
     dismissAutoStopNotice,
   } = useTimerSessionContext();
   const [goalTargets, setGoalTargets] = useState<ActiveGoalDailyTargets | null | undefined>(undefined);
+  const showNotificationPermissionNotice = useStudyCheckNotificationNotice();
 
   useEffect(() => {
     let mounted = true;
@@ -64,6 +66,11 @@ export default function TimerScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
+      {showNotificationPermissionNotice ? (
+        <Text testID="timer-notification-permission-notice" style={styles.permissionNoticeText}>
+          通知がオフのため、アプリを閉じていると計測開始から60分で計測が止まります。設定アプリで通知を許可してください
+        </Text>
+      ) : null}
       {autoStopNotice ? (
         <View testID="timer-auto-stop-notice" style={styles.notice}>
           <Text testID="timer-auto-stop-notice-text" style={styles.noticeText}>
@@ -139,6 +146,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
     justifyContent: 'space-between',
+  },
+  permissionNoticeText: {
+    marginTop: spacing.md,
+    fontSize: typography.caption.fontSize,
+    color: colors.textSecondary,
   },
   notice: {
     marginTop: spacing.md,

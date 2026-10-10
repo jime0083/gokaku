@@ -138,6 +138,31 @@ export function findPendingCheckAt(session: CheckedStudySession, now: number): n
 }
 
 /**
+ * まだ応答していない最初の確認の時刻(5-2c: ローカル通知を予約する時刻を決めるため)。
+ * 計測中(stopAt が null)のセッションに使う。まだ先(now より後)の確認でも返す(前もって予約できるようにする)。
+ * 確認OFFなら null。confirmations に記録済みの確認は順に飛ばす(k=1,2,… と順番に見て、
+ * 応答期限内に応答が1件もない最初の確認を返す)
+ */
+export function nextUnansweredCheckAt(session: CheckedStudySession): number | null {
+  assertFiniteTime(session.startAt, 'startAt');
+  const { startAt, checkEnabled, confirmations } = session;
+  if (!checkEnabled) {
+    return null;
+  }
+  for (
+    let checkAt = startAt + STUDY_CHECK_INTERVAL_MS;
+    ;
+    checkAt += STUDY_CHECK_INTERVAL_MS
+  ) {
+    const deadline = checkAt + STUDY_CHECK_RESPONSE_WINDOW_MS;
+    const answered = confirmations.some((at) => at >= checkAt && at <= deadline);
+    if (!answered) {
+      return checkAt;
+    }
+  }
+}
+
+/**
  * 確認による自動停止を反映したセッション(2-1 の集計関数にそのまま渡せる形)。
  * 計測中(running)は stopAt を null のまま返す。入力は変更しない。
  */

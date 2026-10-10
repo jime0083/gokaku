@@ -1,6 +1,7 @@
 import {
   aggregateEffectiveDailyStudyMinutes,
   findPendingCheckAt,
+  nextUnansweredCheckAt,
   resolveSessionEnd,
   toJstDateKey,
   type CheckedStudySession,
@@ -19,6 +20,14 @@ import {
   stopLocalSession,
   type LocalStudySession,
 } from './storage';
+import {
+  addStudyCheckConfirmListener,
+  cancelStudyCheckNotification,
+  configureStudyCheckNotifications,
+  consumeLastStudyCheckConfirmOnLaunch,
+  requestNotificationPermissionOnce,
+  scheduleStudyCheckNotification,
+} from './studyCheckNotifications';
 import { enqueueAndSendStudyEvent, flushStudyEventQueue } from './studyEventSender';
 
 /** 計測中の経過時間を1秒ごとに更新する間隔(表示用。保存のタイミングには影響しない) */
@@ -59,6 +68,38 @@ function toCheckedSession(session: LocalStudySession): CheckedStudySession {
 }
 
 /**
+ * 計測中セッションの「勉強中？」通知予約を、現在の状態に合わせる(5-2c。requirements 3-2)。
+ * - 計測していない・確認OFF: 予約を取り消す
+ * - すでに無応答が確定している(check_timeout): 取り消す(停止自体の保存は別の処理が行う)
+ * - それ以外: まだ応答していない最初の確認の時刻(先の確認でもよい)を予約する
+ * 開始・応答・停止のたびに加え、画面を開いたとき・他のアプリから戻ったときにも呼ぶ
+ * (requirements 3-2「予約の状態を、計測中のセッションに合わせて直す」)
+ */
+async function syncScheduledNotification(
+  activeSession: LocalStudySession | null,
+  now: number,
+): Promise<void> {
+  if (!activeSession || !activeSession.checkEnabled) {
+    await cancelStudyCheckNotification();
+    return;
+  }
+  const end = resolveSessionEnd(toCheckedSession(activeSession), now);
+  if (end.endReason === 'check_timeout') {
+    await cancelStudyCheckNotification();
+    return;
+  }
+  const next = nextUnansweredCheckAt(toCheckedSession(activeSession));
+  if (next === null) {
+    await cancelStudyCheckNotification();
+    return;
+  }
+  // 予約中の通知を取り消してから次を予約する(requirements 3-2「取り消し、次の確認を予約する」)。
+  // scheduleStudyCheckNotification は固定の識別子で予約し直すだけでも置き換わるが、取り消しを明示する
+  await cancelStudyCheckNotification();
+  await scheduleStudyCheckNotification(next);
+}
+
+/**
  * 計測の開始・停止・「勉強中？」確認・自動停止と、経過時間・今日の勉強時間を管理するフック
  * (requirements 3-2, 4-6)。記録は端末内(AsyncStorage)が正(サーバー保存は 5-1b・5-2a)。
  * アプリを閉じても計測は続く: 経過時間は保存された開始時刻から「今 − 開始時刻」で都度計算するため、
@@ -75,14 +116,57 @@ export function useTimerSession(): TimerSessionState {
   const [tick, setTick] = useState(() => Date.now());
   const [autoStopNotice, setAutoStopNoticeState] = useState<AutoStopNotice | null>(null);
   const autoStoppingRef = useRef(false);
+  // 通知のリスナー(マウント中ずっと有効)が常に最新の sessions を見られるようにする
+  // (addStudyCheckConfirmListener は mount 時に1回だけ登録するため、state の closure に頼れない)
+  const sessionsRef = useRef<LocalStudySession[]>([]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  /**
+   * 通知のアクション「勉強中」(起動中の応答・起動時の最後の応答)から、アプリ内の確認への応答
+   * (ボタン「勉強中」)と同じ処理を行う(5-2c)。渡した sessions のスナップショットに計測中の
+   * セッションがなければ何もしない(すでに自動停止が確定している・計測していない場合は無視する)。
+   * findPendingCheckAt で、今がどの確認の応答待ちでもない(応答期限を過ぎた・確認前など)場合も
+   * 無視する(requirements 3-2, 5-2c)
+   */
+  const applyConfirmation = useCallback(async (sessionsSnapshot: LocalStudySession[], now: number) => {
+    const target = findActiveSession(sessionsSnapshot);
+    if (!target) return;
+    if (findPendingCheckAt(toCheckedSession(target), now) === null) {
+      // 応答期限(確認の時刻 + 10分)を過ぎてから届いた応答・どの確認にも対応しない応答は無視する
+      // (requirements 3-2, 5-2c。すでに自動停止の扱い)
+      return;
+    }
+    const updated = await addLocalConfirmation(now);
+    setSessions(updated);
+    setTick(Date.now());
+    void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'confirm', clientTimeMs: now });
+    await syncScheduledNotification(findActiveSession(updated), now);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
+    configureStudyCheckNotifications();
+
+    const responseSubscription = addStudyCheckConfirmListener(({ respondedAtMs }) => {
+      void applyConfirmation(sessionsRef.current, respondedAtMs);
+    });
+
     loadLocalSessions().then((loaded) => {
       if (!mounted) return;
       setSessions(loaded);
+      sessionsRef.current = loaded;
       setTick(Date.now());
       setIsLoading(false);
+
+      // アプリが終了していて通知のアクションから起動された場合の応答(5-2-0 の制約)
+      const launchResponse = consumeLastStudyCheckConfirmOnLaunch();
+      if (launchResponse) {
+        void applyConfirmation(loaded, launchResponse.respondedAtMs);
+      } else {
+        void syncScheduledNotification(findActiveSession(loaded), Date.now());
+      }
     });
     loadAutoStopNotice().then((notice) => {
       if (mounted) setAutoStopNoticeState(notice);
@@ -91,15 +175,19 @@ export function useTimerSession(): TimerSessionState {
     void flushStudyEventQueue();
     return () => {
       mounted = false;
+      responseSubscription.remove();
     };
-  }, []);
+  }, [applyConfirmation]);
 
-  // 他のアプリから戻ったとき(AppState が active)に、無応答の判定をやり直し、送信待ちの列を再送する
+  // 他のアプリから戻ったとき(AppState が active)に、無応答の判定をやり直し、送信待ちの列を再送し、
+  // 通知の予約の状態を直す(5-2c。requirements 3-2「予約の状態を、計測中のセッションに合わせて直す」)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') {
-        setTick(Date.now());
+        const now = Date.now();
+        setTick(now);
         void flushStudyEventQueue();
+        void syncScheduledNotification(findActiveSession(sessionsRef.current), now);
       }
     });
     return () => subscription.remove();
@@ -132,6 +220,7 @@ export function useTimerSession(): TimerSessionState {
       await writeAutoStopNotice(stoppedAt);
       setAutoStopNoticeState({ stoppedAt });
       void enqueueAndSendStudyEvent({ sessionId, action: 'stop', clientTimeMs: stoppedAt });
+      await cancelStudyCheckNotification();
     })().finally(() => {
       autoStoppingRef.current = false;
     });
@@ -146,11 +235,14 @@ export function useTimerSession(): TimerSessionState {
   const start = useCallback(async () => {
     const now = Date.now();
     const sessionId = generateLocalId();
+    // 初めて計測を開始したときにだけ、通知の許可を求める(requirements 3-2)
+    await requestNotificationPermissionOnce();
     const checkEnabled = await fetchCheckEnabled();
     const updated = await startLocalSession(now, sessionId, checkEnabled);
     setSessions(updated);
     setTick(Date.now());
     void enqueueAndSendStudyEvent({ sessionId, action: 'start', clientTimeMs: now, checkEnabled });
+    await syncScheduledNotification(findActiveSession(updated), now);
   }, []);
 
   const stop = useCallback(async () => {
@@ -162,17 +254,12 @@ export function useTimerSession(): TimerSessionState {
     if (target) {
       void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'stop', clientTimeMs: now });
     }
+    await cancelStudyCheckNotification();
   }, [sessions]);
 
   const confirm = useCallback(async () => {
-    const target = findActiveSession(sessions);
-    if (!target) return;
-    const now = Date.now();
-    const updated = await addLocalConfirmation(now);
-    setSessions(updated);
-    setTick(Date.now());
-    void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'confirm', clientTimeMs: now });
-  }, [sessions]);
+    await applyConfirmation(sessions, Date.now());
+  }, [sessions, applyConfirmation]);
 
   const dismissAutoStopNotice = useCallback(async () => {
     await clearAutoStopNotice();

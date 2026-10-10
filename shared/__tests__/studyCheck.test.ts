@@ -3,6 +3,7 @@ import {
   aggregateEffectiveDailyStudyMs,
   type CheckedStudySession,
   findPendingCheckAt,
+  nextUnansweredCheckAt,
   resolveSessionEnd,
   STUDY_CHECK_INTERVAL_MS,
   STUDY_CHECK_RESPONSE_WINDOW_MS,
@@ -338,6 +339,36 @@ describe('境界の追加ケース(レビュー追加)', () => {
       '2026-10-08': 1440,
       '2026-10-09': 120,
     });
+  });
+});
+
+describe('nextUnansweredCheckAt(5-2c: 通知を予約する確認の時刻を決める)', () => {
+  it('応答がなければ1回目の確認時刻', () => {
+    expect(nextUnansweredCheckAt(session())).toBe(checkAt(1));
+  });
+
+  it('確認OFFは null', () => {
+    expect(nextUnansweredCheckAt(session({ checkEnabled: false }))).toBeNull();
+  });
+
+  it('1回目に応答していれば2回目の確認時刻(まだ先でもよい)', () => {
+    expect(
+      nextUnansweredCheckAt(session({ confirmations: [checkAt(1) + 2 * MIN] })),
+    ).toBe(checkAt(2));
+  });
+
+  it('複数回応答していれば、その次の未応答の確認時刻', () => {
+    expect(
+      nextUnansweredCheckAt(
+        session({ confirmations: [checkAt(1) + 1 * MIN, checkAt(2), checkAt(3) + 10 * MIN] }),
+      ),
+    ).toBe(checkAt(4));
+  });
+
+  it('無関係な時刻の応答(前回への応答・確認前)は数えない', () => {
+    expect(
+      nextUnansweredCheckAt(session({ confirmations: [START - MIN, checkAt(1) + 5 * MIN] })),
+    ).toBe(checkAt(2));
   });
 });
 

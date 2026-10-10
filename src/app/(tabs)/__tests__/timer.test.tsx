@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 import { AppState } from 'react-native';
 
@@ -39,6 +40,16 @@ jest.mock('@/features/timer/checkEnabledRepository', () => ({
 }));
 
 /**
+ * studyCheckNotifications は checkEnabledRepository を静的 import するため、ここを通常の import 文にすると
+ * (import 文は require より先に実行される)、上の jest.mock のモック変数が代入される前に
+ * checkEnabledRepository のモックファクトリが呼ばれ、fetchCheckEnabled が undefined になる
+ * (この行より上の const mockX = jest.fn() が全て済んでから require する)
+ */
+const { STUDY_CHECK_ACTION_IDENTIFIER, STUDY_CHECK_NOTIFICATION_IDENTIFIER } =
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('@/features/timer/studyCheckNotifications') as typeof import('@/features/timer/studyCheckNotifications');
+
+/**
  * renderRouter の初期レンダリングを await act で包む(renderRouter 自体は同期的に返すが、
  * 内部の初期レンダリングが非同期の act を使うため。CLAUDE.md・backNavigation.test.tsx と同じ対策)
  */
@@ -63,6 +74,32 @@ function getLatestAppStateChangeHandler(): (state: string) => void {
     throw new Error("AppState.addEventListener('change', ...) が呼ばれていない");
   }
   return call[1];
+}
+
+/**
+ * addNotificationResponseReceivedListener に登録された最後のハンドラを取り出す
+ * (通知のアクション「勉強中」が押されたときの処理を、Jest から直接呼ぶため)
+ */
+function getLatestNotificationResponseHandler(): (response: Notifications.NotificationResponse) => void {
+  const addListener = Notifications.addNotificationResponseReceivedListener as jest.Mock;
+  const call = addListener.mock.calls[addListener.mock.calls.length - 1] as
+    | [(response: Notifications.NotificationResponse) => void]
+    | undefined;
+  if (!call) {
+    throw new Error('addNotificationResponseReceivedListener が呼ばれていない');
+  }
+  return call[0];
+}
+
+/** 通知のアクション「勉強中」が押された/起動時の最後の応答として扱う NotificationResponse */
+function makeStudyCheckResponse(respondedAtMs: number): Notifications.NotificationResponse {
+  return {
+    actionIdentifier: STUDY_CHECK_ACTION_IDENTIFIER,
+    notification: {
+      date: respondedAtMs / 1000,
+      request: { identifier: 'study-check-notification', content: {}, trigger: null },
+    },
+  } as unknown as Notifications.NotificationResponse;
 }
 
 describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
@@ -351,6 +388,220 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'stop', clientTimeMs: checkAt(startAt, 1) }),
       );
+    });
+  });
+
+  describe('「勉強中？」の通知(5-2c。requirements 3-2)', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockFetchActiveGoalDailyTargets.mockResolvedValue({ minDailyMinutes: 60, goalDailyMinutes: 120 });
+      mockFetchCheckEnabled.mockResolvedValue(true);
+    });
+
+    afterEach(() => {
+      // getPermissionsAsync は mockResolvedValue(永続)で上書きするテストがあるため、既定(許可あり)に戻す
+      // (clearAllMocks は呼び出し履歴だけを消し、mockResolvedValue の実装は消さないため明示的に戻す)
+      (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted', granted: true });
+    });
+
+    it('開始すると確認の時刻(60分後)にローカル通知を予約する', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+
+      await waitFor(() =>
+        expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            identifier: STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+            trigger: { type: 'timeInterval', seconds: 60 * 60 },
+          }),
+        ),
+      );
+    });
+
+    it('確認OFFのときは通知を予約しない', async () => {
+      mockFetchCheckEnabled.mockResolvedValue(false);
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+
+      expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+    });
+
+    it('停止すると予約していた通知を取り消す', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+      (Notifications.cancelScheduledNotificationAsync as jest.Mock).mockClear();
+
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+
+      await waitFor(() =>
+        expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith(
+          STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+        ),
+      );
+    });
+
+    it('アプリ内の確認に応答すると、予約を取り消して次の確認(120分後)を予約する', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+
+      await act(async () => {
+        jest.advanceTimersByTime(60 * 60 * 1000);
+      });
+      await waitFor(() => screen.getByTestId('study-check-overlay'));
+      (Notifications.cancelScheduledNotificationAsync as jest.Mock).mockClear();
+      (Notifications.scheduleNotificationAsync as jest.Mock).mockClear();
+
+      await fireEvent.press(screen.getByTestId('study-check-confirm-button'));
+
+      await waitFor(() =>
+        expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith(
+          STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+        ),
+      );
+      expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identifier: STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+          trigger: { type: 'timeInterval', seconds: 60 * 60 },
+        }),
+      );
+    });
+
+    it('初めて開始したときだけ通知の許可を求める', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button')); // start
+      await waitFor(() => expect(Notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1));
+
+      await fireEvent.press(screen.getByTestId('timer-toggle-button')); // stop
+      await fireEvent.press(screen.getByTestId('timer-toggle-button')); // start (2回目)
+
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+      expect(Notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('起動中に通知のアクション「勉強中」が押されると confirm が送られ、次の確認が予約される', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+
+      await act(async () => {
+        jest.advanceTimersByTime(60 * 60 * 1000);
+      });
+      await waitFor(() => screen.getByTestId('study-check-overlay'));
+
+      const handleResponse = getLatestNotificationResponseHandler();
+      (Notifications.scheduleNotificationAsync as jest.Mock).mockClear();
+
+      await act(async () => {
+        handleResponse(makeStudyCheckResponse(Date.now()));
+      });
+
+      await waitFor(() => expect(screen.queryByTestId('study-check-overlay')).toBeNull());
+      expect(screen.getByTestId('timer-status-text')).toBeTruthy();
+      expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'confirm' }),
+      );
+      await waitFor(() =>
+        expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ trigger: { type: 'timeInterval', seconds: 60 * 60 } }),
+        ),
+      );
+    });
+
+    it('起動時に、通知のアクション「勉強中」への最後の応答があれば confirm として扱う(getLastNotificationResponse)', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      await startLocalSession(startAt, 'seeded-session', true);
+      const respondedAt = startAt + 65 * 60 * 1000; // 1回目の確認(60分)〜期限(70分)の間
+      jest.setSystemTime(respondedAt);
+      (Notifications.getLastNotificationResponse as jest.Mock).mockReturnValueOnce(
+        makeStudyCheckResponse(respondedAt),
+      );
+
+      await renderTimerRouter();
+
+      await waitFor(() =>
+        expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 'seeded-session', action: 'confirm', clientTimeMs: respondedAt }),
+        ),
+      );
+      expect(screen.queryByTestId('study-check-overlay')).toBeNull();
+      expect(screen.getByTestId('timer-status-text')).toBeTruthy();
+    });
+
+    it('応答期限を過ぎてから届いた通知の応答は無視し、すでに無応答として自動停止する', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      await startLocalSession(startAt, 'seeded-session', true);
+      const lateRespondedAt = startAt + 75 * 60 * 1000; // 1回目の確認(60分)の期限(70分)を過ぎている
+      jest.setSystemTime(lateRespondedAt);
+      (Notifications.getLastNotificationResponse as jest.Mock).mockReturnValueOnce(
+        makeStudyCheckResponse(lateRespondedAt),
+      );
+
+      await renderTimerRouter();
+
+      await waitFor(() => expect(screen.queryByTestId('timer-status-text')).toBeNull());
+      await waitFor(() => screen.getByTestId('timer-auto-stop-notice'));
+      expect(mockEnqueueAndSendStudyEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'confirm' }),
+      );
+      expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'stop', clientTimeMs: checkAt(startAt, 1) }),
+      );
+    });
+
+    it('確認が ON で通知が許可されていないとき、タイマー画面に案内を出す', async () => {
+      (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied', granted: false });
+      jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-notification-permission-notice'));
+      expect(screen.getByTestId('timer-notification-permission-notice').props.children).toBe(
+        '通知がオフのため、アプリを閉じていると計測開始から60分で計測が止まります。設定アプリで通知を許可してください',
+      );
+    });
+
+    it('通知が許可されているときは案内を出さない', async () => {
+      jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      expect(screen.queryByTestId('timer-notification-permission-notice')).toBeNull();
+    });
+
+    it('確認が OFF のときは、通知が許可されていなくても案内を出さない', async () => {
+      mockFetchCheckEnabled.mockResolvedValue(false);
+      (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied', granted: false });
+      jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      expect(screen.queryByTestId('timer-notification-permission-notice')).toBeNull();
     });
   });
 });
