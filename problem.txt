@@ -749,3 +749,14 @@
 - 解決日: 2026-10-10
 - 解決内容: テスト本体と afterEach のすべての cleanup() を await するように直した(timer.test.tsx とほかの4ファイル)。CLAUDE.md に決まりを追記した。
   レビューでは、await を外すと警告と失敗が再び出ること、テストの順番を変えても毎回緑になることを確かめた
+
+## P-029 アプリが前面のときに通知が出ても addNotificationReceivedListener が呼ばれない
+- 状態: 記録のみ(2026-10-10。今の設計では影響なし。5-2c で受信イベントを使う場合だけ追加調査する)
+- 発見: 5-2-0 の検証
+- 問題内容:
+  - SE シミュレータでアプリが前面のときに通知のバナーは出る。setNotificationHandler は JS まで届いている
+  - しかし addNotificationReceivedListener は、3回試して一度も呼ばれなかった
+- 原因: 未特定(実装担当は2回試したところで止めた)
+- 影響:
+  - 5-2b のアプリ内の確認は、計測開始からの経過時間で判断する設計なので、この受信イベントは使わない
+  - 5-2c は応答の受け取りに addNotificationResponseReceivedListener と getLastNotificationResponseAsync を使う。受信イベントに頼る設計にしないこと
