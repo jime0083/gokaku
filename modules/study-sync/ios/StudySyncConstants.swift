@@ -16,7 +16,4 @@ enum StudySyncConstants {
     )!
 
     static let pendingQueueKey = "studySync.pendingEvents.v1"
-
-    static let notificationCategoryStudyCheck = "STUDY_CHECK"
-    static let notificationActionConfirm = "STUDY_CONFIRM"
 }

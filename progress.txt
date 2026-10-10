@@ -543,7 +543,7 @@ Phase 5: タイマー
       - 5-3c を 5-3c-1〜5-3c-6 に分けた
       - 調査で見つかった問題を P-031 として記録した
 
-[ ] 5-3c-1 Swift の検証用の通知のコードを消す(problem P-031)
+[x] 5-3c-1 Swift の検証用の通知のコードを消す(problem P-031)
     内容: 1-4 の検証用の通知のコードを消し、「勉強中？」の通知を JS(5-2c)だけが扱うようにする。
           消すもの:
             - StudySyncAppDelegateSubscriber のカテゴリ・delegate の設定
@@ -554,6 +554,10 @@ Phase 5: タイマー
       - ビルドが通る
       - 通知のカテゴリを登録するのが、JS の STUDY_CHECK / STUDY_CHECK_CONFIRM だけになっている
       - npm test が緑
+    ※完了(2026-10-10): レビューPASS
+      - Swift の起動時のカテゴリ登録・delegate・StudySyncNotificationDelegate・scheduleCheckNotification を消した
+      - 起動時の flushQueue は残した
+      - あわせて 5-3c-0 の調査の主な事実(4点)が正しいことを、レビューで確かめた
 
 [ ] 5-3c-2 Swift の送信処理の一本化と接続先の設定
     内容:
@@ -591,6 +595,7 @@ Phase 5: タイマー
       - アプリで開始・停止したとき: 5-3c-3 の計測中の状態を書き・消し、ライブアクティビティを出す・閉じる
       - アプリを開いたとき・他のアプリから戻ったとき: 計測中の状態を読み、ロック画面での開始・停止を端末の記録に取り込む(requirements 3-2。2026-10-10 決定の表示)
       - 確認 ON/OFF の設定を、計測中の状態とは別に App Group に覚えさせる
+          あわせて検証用の src/app/dev-notification-probe.tsx を消す(problem P-032)
     完了条件: StudySync をモックにした画面テストで、次の4つが緑
       - アプリで開始すると、計測中の状態が書かれる
       - ロック画面で開始された状態を取り込む

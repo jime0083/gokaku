@@ -12,7 +12,6 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
   setCurrentGoalId(goalId: string | null): void;
   startMeasurement(uid: string, goalId: string): Promise<boolean>;
   stopMeasurement(uid: string, goalId: string): Promise<boolean>;
-  scheduleCheckNotification(afterSeconds: number, goalId: string): Promise<void>;
   flushQueue(): Promise<number>;
   getPendingQueueCount(): number;
   requestNotificationPermission(): Promise<boolean>;

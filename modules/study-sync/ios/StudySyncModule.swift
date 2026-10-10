@@ -72,25 +72,6 @@ public class StudySyncModule: Module {
             return sent
         }
 
-        /// 検証用: 指定秒後に「勉強中？」確認の通知を出す
-        /// (本番は計測開始から60分ごと。requirements.md 3-2。時刻は Phase 5-2 で本実装)
-        AsyncFunction("scheduleCheckNotification") { (afterSeconds: Double, goalId: String) in
-            let content = UNMutableNotificationContent()
-            content.title = "勉強中？"
-            content.categoryIdentifier = StudySyncConstants.notificationCategoryStudyCheck
-            content.userInfo = ["goalId": goalId]
-            let trigger = UNTimeIntervalNotificationTrigger(
-                timeInterval: max(afterSeconds, 1),
-                repeats: false
-            )
-            let request = UNNotificationRequest(
-                identifier: "study-check-\(UUID().uuidString)",
-                content: content,
-                trigger: trigger
-            )
-            try? await UNUserNotificationCenter.current().add(request)
-        }
-
         AsyncFunction("flushQueue") { () -> Int in
             await StudySyncAPI.flushQueue()
         }

@@ -114,11 +114,6 @@ export default function DevLockscreenSpikeScreen() {
     return reason ? `(理由: ${reason})` : '';
   }
 
-  async function handleScheduleCheck() {
-    await StudySync.scheduleCheckNotification(10, goalId);
-    appendLog('10秒後に「勉強中?」通知を予約した');
-  }
-
   async function handleFlushQueue() {
     const count = await StudySync.flushQueue();
     appendLog(`キューを再送: ${count}件`);
@@ -137,7 +132,6 @@ export default function DevLockscreenSpikeScreen() {
       <Button title="デバイストークンを発行" onPress={handleIssueToken} />
       <Button title="開始" onPress={handleStart} />
       <Button title="停止" onPress={handleStop} />
-      <Button title="確認通知を10秒後に予約" onPress={handleScheduleCheck} />
       <Button title="キューを再送" onPress={handleFlushQueue} />
       <Button title="未送信キュー件数を表示" onPress={handleShowQueueCount} />
       {log.map((line) => (

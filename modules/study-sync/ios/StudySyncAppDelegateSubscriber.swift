@@ -1,8 +1,8 @@
 import ExpoModulesCore
-import UserNotifications
 
-/// requirements.md 3-2: 「勉強中？」確認のローカル通知アクション(アプリを開かずに応答できる)と、
-/// アプリ起動時のオフラインキュー再送を行う AppDelegate フック。
+/// requirements.md 3-2: アプリ起動時のオフラインキュー再送を行う AppDelegate フック。
+/// 「勉強中？」確認の通知(カテゴリ・アクションの登録、応答の受け取り)は JS 側
+/// (src/features/timer/studyCheckNotifications.ts、5-2c)だけが扱う(problem P-031)。
 /// expo-module.config.json の appDelegateSubscribers に登録される(Expo Modules の仕組み。
 /// ios/ は生成物のため、ここに書いたコードが prebuild の度に再生成される AppDelegate から呼ばれる)
 public class StudySyncAppDelegateSubscriber: ExpoAppDelegateSubscriber {
@@ -10,20 +10,6 @@ public class StudySyncAppDelegateSubscriber: ExpoAppDelegateSubscriber {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        let confirmAction = UNNotificationAction(
-            identifier: StudySyncConstants.notificationActionConfirm,
-            title: "勉強中",
-            options: []
-        )
-        let category = UNNotificationCategory(
-            identifier: StudySyncConstants.notificationCategoryStudyCheck,
-            actions: [confirmAction],
-            intentIdentifiers: [],
-            options: []
-        )
-        UNUserNotificationCenter.current().setNotificationCategories([category])
-        UNUserNotificationCenter.current().delegate = StudySyncNotificationDelegate.shared
-
         Task {
             _ = await StudySyncAPI.flushQueue()
         }
