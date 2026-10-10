@@ -1,7 +1,9 @@
-import { createHash } from 'node:crypto';
+import { getFirestore } from 'firebase-admin/firestore';
 
 import { issueDeviceTokenForUid } from '../deviceToken/issueDeviceToken';
 import { revokeDeviceToken } from '../deviceToken/revokeDeviceToken';
+import { hashDeviceToken } from '../deviceTokenHash';
+import { ensureAdminApp } from '../firebaseAdmin';
 import { functionUrl, getFirestoreDoc, listFirestoreDocs } from './emulator';
 
 function uniqueUid(label: string): string {
@@ -9,22 +11,16 @@ function uniqueUid(label: string): string {
 }
 
 /**
- * Phase 1-4 技術検証: ロック画面・通知アクションからの同期を受ける nativeSync の Emulator テスト。
- * devIssueDeviceToken(Emulator専用)でトークンを発行し、nativeSync に送って Firestore を確認する
+ * ロック画面・通知アクションからの同期を受ける nativeSync の Emulator テスト。
+ * issueDeviceTokenForUid(5-3a。issueDeviceToken Callable が呼ぶ共通の処理)でトークンを発行し、
+ * nativeSync に送って Firestore を確認する(5-3a-2: devIssueDeviceToken は削除済みのため使わない)
  */
 describe('nativeSync (Functions Emulator)', () => {
   const nativeSyncUrl = functionUrl('nativeSync');
-  const issueUrl = functionUrl('devIssueDeviceToken');
 
   async function issueToken(uid: string): Promise<string> {
-    const res = await fetch(issueUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid }),
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { deviceToken: string };
-    return body.deviceToken;
+    const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
+    return deviceToken;
   }
 
   it('POST 以外は 405 を返す', async () => {
@@ -159,7 +155,7 @@ describe('nativeSync (Functions Emulator)', () => {
 });
 
 // 5-3a: issueDeviceToken(正式な発行)が設定した expiresAt を nativeSync が確かめること、
-// 作り直し(再発行)で古いトークンが無効になること、revokeDeviceToken(失効)後は拒否されることの確認
+// 作り直し(再発行)で古いトークンが無効になること、失効(revokeDeviceToken)後は拒否されることの確認
 describe('nativeSync のデバイストークンの期限・失効(5-3a)', () => {
   const nativeSyncUrl = functionUrl('nativeSync');
 
@@ -223,36 +219,36 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
     const res = await sendWithToken(buildBody(uid, 'evt-revoked'), deviceToken);
     expect(res.status).toBe(401);
   });
-});
 
-describe('devIssueDeviceToken (Functions Emulator)', () => {
-  const issueUrl = functionUrl('devIssueDeviceToken');
+  // 5-3a-2: expiresAt が無い・数値でないトークンはフェイルクローズで拒否する(5-3a レビュー指摘)。
+  // issueDeviceToken は常に expiresAt(number)を設定するため、ここでは「壊れたデータ」を直接
+  // Firestore(Admin SDK)に書き込んで再現する
+  it('expiresAt が無いデバイストークンは 401(フェイルクローズ)', async () => {
+    const uid = uniqueUid('no-expires-at');
+    const rawToken = `raw-${uid}`;
+    ensureAdminApp();
+    await getFirestore().doc(`deviceTokens/${uid}`).set({
+      tokenHash: hashDeviceToken(rawToken),
+      issuedAt: Date.now(),
+    });
 
-  it('GET は 405', async () => {
-    const res = await fetch(issueUrl, { method: 'GET' });
-    expect(res.status).toBe(405);
+    const res = await sendWithToken(buildBody(uid, 'evt-no-expires-at'), rawToken);
+
+    expect(res.status).toBe(401);
   });
 
-  it('uid が無いと 400', async () => {
-    const res = await fetch(issueUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+  it('expiresAt が数値でないデバイストークンは 401(フェイルクローズ)', async () => {
+    const uid = uniqueUid('non-numeric-expires-at');
+    const rawToken = `raw-${uid}`;
+    ensureAdminApp();
+    await getFirestore().doc(`deviceTokens/${uid}`).set({
+      tokenHash: hashDeviceToken(rawToken),
+      issuedAt: Date.now(),
+      expiresAt: '2099-01-01T00:00:00.000Z',
     });
-    expect(res.status).toBe(400);
-  });
 
-  it('発行したトークンは生の値ではなく sha256 ハッシュで保存される', async () => {
-    const uid = `test-hash-${Date.now()}`;
-    const res = await fetch(issueUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid }),
-    });
-    const body = (await res.json()) as { deviceToken: string };
+    const res = await sendWithToken(buildBody(uid, 'evt-non-numeric-expires-at'), rawToken);
 
-    const doc = await getFirestoreDoc(`deviceTokens/${uid}`);
-    expect(doc?.tokenHash).toBe(createHash('sha256').update(body.deviceToken).digest('hex'));
-    expect(doc?.tokenHash).not.toBe(body.deviceToken);
+    expect(res.status).toBe(401);
   });
 });

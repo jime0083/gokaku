@@ -460,7 +460,7 @@ Phase 5: タイマー
       - テスト件数: test:functions 120件、test:rules 86件
       - 両担当の指摘: expiresAt がないトークンを「期限なし」で通す分岐が残っている(fail-open)。5-3a-2 で消す
 
-[ ] 5-3a-2 アプリ側のデバイストークンの取得と作り直し
+[x] 5-3a-2 アプリ側のデバイストークンの取得と作り直し
     内容: ログインしている状態でアプリを開いたとき、トークンがない、または残りが7日を切っていれば、5-3a の Callable で発行する。
           発行したものは study-sync モジュールで Keychain(App Group 共有)に保存する。devIssueDeviceToken は使わない
           あわせて dev-lockscreen-spike.tsx の発行を issueDeviceToken に切り替え、devIssueDeviceToken(検証用)を削除する(5-3a の申し送り)
@@ -472,17 +472,43 @@ Phase 5: タイマー
           あわせて Emulator のテストで次が緑
           - nativeSync で expiresAt がない・数値でないトークンが 401 になる
           - devIssueDeviceToken がなくなっている
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - src/features/deviceToken/ を作り、ルートの _layout で起動時と他のアプリから戻ったときに呼ぶ
+      - devIssueDeviceToken を削除した
+      - nativeSync は expiresAt がなければ 401 にした(fail-closed)
+      - timer.test.tsx の AppState のヘルパーを、登録されたすべてのリスナーに配る形に直した
 
-[ ] 5-3b nativeSync の守りの強化  【セキュリティ確認】
-    内容: ハッシュ比較を crypto.timingSafeEqual に、goalId が本人の実在する目標かの検証、idempotencyKey の形式・最大長の制限、
-          時刻の補正(requirements 3-2: 未来・判定確定済みの日は受信時刻に置き換え)、乱打を防ぐ手段(2026-10-10 決定: ユーザーごとの回数の制限。requirements 3-2)
-          ※4-2a セキュリティ指摘: verifyApplePurchase(Apple API を呼ぶ)にも同じ手段を適用するか、あわせて確認する
-          ※4-2b セキュリティ指摘: 認証なしで呼べる appleServerNotification に、maxInstances や本文の大きさの上限を付けるか、あわせて確認する
-    完了条件: Emulator 上で各ケースのテストが緑
+[ ] 5-3b-1 nativeSync を計測記録の共通処理につなぐ  【セキュリティ確認】
+    内容: nativeSync の受け取る形を、アプリの記録と同じ形にする(sessionId・action(start/stop/confirm)・clientTimeMs・idempotencyKey・goalId、start のときは checkEnabled)。
+          5-1b-1 の共通処理(recordStudySessionEvent)で sessions に保存する(時刻の補正・二重記録の防止・goalId の実在確認は共通処理に任せる)。
+          source は 'lockscreen'。ID の形の検査(^[A-Za-z0-9_-]{1,128}$)を行う。ハッシュの照合は crypto.timingSafeEqual にする。
+          検証用の syncEvents への書き込みはやめる(Swift 側の送信の形を合わせるのは 5-3c)
+    完了条件: Emulator 上で次のテストが緑
+          - 開始・停止・確認が sessions に保存される
+          - 再送で二重にならない
+          - 不正な形・架空の goalId を拒否する
+          - トークンが不正・期限切れなら 401
+          - 他人の uid には書けない
+
+[ ] 5-3b-2 呼び出し回数の制限と、通知の入口の上限  【セキュリティ確認】
+    内容: ユーザーごとに1分あたりの呼び出し回数の上限を付ける(requirements 3-2。2026-10-10 決定)。
+          - 対象: recordStudyEvent・nativeSync(計測の記録。目安60回/分)、verifyApplePurchase(目安10回/分)
+          - 超えたら断る(resource-exhausted / 429)
+          - 実際の値と数え方(Firestore のカウンタ等)を決めて requirements に記録する
+          appleServerNotification には maxInstances と、受け取るデータの大きさの上限を付ける(4-2a・4-2b のセキュリティ指摘)
+    完了条件: Emulator 上で次のテストが緑
+          - 上限の手前は通る
+          - 上限を超えたら断る
+          - 時間がたつと戻る
+          - 通知の入口が大きすぎるデータを断る
+          アプリ側は resource-exhausted を送り直さない(5-2b で対応済み)ことを確かめる
 
 [ ] 5-3c Swift の送信処理の一本化と本番接続の設定
     内容: modules/study-sync と targets/widget に重複している送信処理を1か所にまとめる。送信先 URL を設定から読む(http://127.0.0.1 の直書きをやめる)。
           Keychain の kSecAttrAccessible を明示。StopStudyIntent も Keychain の uid を基準にする
+          ※5-3b-1 の申し送り: Swift の送信を nativeSync の新しい形(sessionId・checkEnabled・confirm)に合わせる。
+            ロック画面から開始したときの sessionId をどこで作り、アプリとどう共有するか(App Group)を、着手前に設計して確かめる。
+            タスクが大きくなる見込みなら、着手前に分割する
     完了条件: ビルドが通り、1-4 の手順(アプリ終了状態で停止 → Firestore に記録)がシミュレータで再現できる
 
 [ ] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))
@@ -530,6 +556,7 @@ Phase 6: ホーム・編集・アカウント管理
 
 [ ] 6-4 ログアウトとアカウント削除  【セキュリティ確認】
     内容: ログアウト、アカウント削除(確認ダイアログ、Firestore の全データ・Xトークン・デバイストークン削除、Firebase Auth のユーザー削除)
+          ※5-3a・5-3a-2 の申し送り: ログアウトでもサーバーのデバイストークンを失効(revokeDeviceToken)し、端末の Keychain を StudySync.clearAuthContext で消し、AsyncStorage の deviceToken:meta:v1 も消す
     完了条件: Emulator 上で削除後にデータとトークンが残っていないことをテストで確認
 
 =====================================

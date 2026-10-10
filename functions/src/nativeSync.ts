@@ -6,12 +6,12 @@ import { hashDeviceToken } from './deviceTokenHash';
 import { ensureAdminApp } from './firebaseAdmin';
 
 /**
- * Phase 1-4 技術検証: ロック画面(ライブアクティビティ・ロック画面コントロール)・通知アクションから、
- * アプリを開かずに行った開始・停止・確認応答を記録する最小の HTTPS 関数。
+ * ロック画面(ライブアクティビティ・ロック画面コントロール)・通知アクションから、
+ * アプリを開かずに行った開始・停止・確認応答を記録する HTTPS 関数。
  *
- * 認証方式(候補A): Sign in with Apple 実装(3-5)より前の検証のため、デバイストークンを
- * サーバーで発行し(devIssueDeviceToken)、ネイティブ側は Keychain(App Group 共有)に保存した
- * トークンを Authorization: Bearer で送る。サーバーは sha256 ハッシュだけを保存し、受信したトークンの
+ * 認証方式(requirements 3-2「送信方式」): ログイン済みユーザー向けに issueDeviceToken(Callable。5-3a)が
+ * 発行したデバイストークンを、ネイティブ側が Keychain(App Group 共有)に保存し、
+ * Authorization: Bearer で送る。サーバーは sha256 ハッシュだけを保存し、受信したトークンの
  * ハッシュと比較する(生のトークンは保存しない)。
  *
  * 時刻は端末時刻(clientTimeMs。改ざん・遅延があり得る)とサーバー受信時刻(serverReceivedAt)の
@@ -21,10 +21,10 @@ import { ensureAdminApp } from './firebaseAdmin';
  * このコレクション(users/{uid}/syncEvents)は検証用の形で、requirements.md 5 の
  * users/{uid}/sessions とは別物(本実装は 5-3 で確定する)
  *
- * 5-3a: deviceTokens/{uid} の expiresAt(issueDeviceToken が発行時に設定する有効期限)を過ぎている
+ * 5-3a / 5-3a-2: deviceTokens/{uid} の expiresAt(issueDeviceToken が発行時に設定する有効期限)を過ぎている
  * トークンは拒否する(requirements 3-2「期限切れや無効のトークンでの操作は拒否する」)。
- * devIssueDeviceToken(Phase 1-4 検証専用)が発行したトークンには expiresAt が無いため、
- * 期限なし(＝拒否しない)として扱う(devIssueDeviceToken は本番で 404 になり、検証用途以外では使われないため)
+ * expiresAt が無い・数値でない場合もフェイルクローズで拒否する(5-3a レビュー指摘。issueDeviceToken が
+ * 発行したトークンには常に expiresAt が入るため、これは「壊れたデータ」として扱ってよい)
  */
 
 const VALID_ACTIONS = ['start', 'stop', 'confirm'] as const;
@@ -87,8 +87,10 @@ export const nativeSync = onRequest({ region: FUNCTIONS_REGION }, async (req, re
 
   const deviceTokenSnap = await db.doc(`deviceTokens/${uid}`).get();
   const storedHash = deviceTokenSnap.get('tokenHash') as string | undefined;
-  const expiresAt = deviceTokenSnap.get('expiresAt') as number | undefined;
-  const isExpired = typeof expiresAt === 'number' && Date.now() >= expiresAt;
+  const expiresAt = deviceTokenSnap.get('expiresAt') as unknown;
+  const hasValidExpiresAt = typeof expiresAt === 'number' && Number.isFinite(expiresAt);
+  // expiresAt が無い・数値でない場合はフェイルクローズ(期限切れと同じ扱い)で拒否する(5-3a-2)
+  const isExpired = !hasValidExpiresAt || Date.now() >= expiresAt;
   if (!deviceTokenSnap.exists || storedHash !== hashDeviceToken(token) || isExpired) {
     res.status(401).json({ error: 'unauthorized' });
     return;

@@ -1,9 +1,12 @@
+import type * as RNFBApp from '@react-native-firebase/app';
+import type * as RNFBAuth from '@react-native-firebase/auth';
 import { useState } from 'react';
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { FUNCTIONS_REGION } from '@shared/index';
-
+import { connectFirebaseEmulatorsIfNeeded } from '../config/firebase';
 import { getFirebaseEmulatorConfig } from '../config/firebase-emulator';
+import { callIssueDeviceToken } from '../features/deviceToken/deviceTokenApi';
+import { saveDeviceTokenToKeychain } from '../features/deviceToken/studySyncAuthContext';
 // study-sync は Phase 1-4 専用の検証用ローカル Expo Module(modules/study-sync)
 import StudySync from '../../modules/study-sync/src/StudySyncModule';
 
@@ -12,10 +15,13 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  * ロック画面・通知アクションからのサーバー同期を手動で確かめるための画面で、
  * タブ・ナビゲーションには含めない(Phase 5 で正式なタイマー画面に置き換える)。
  * 本番ビルド(Emulator に接続しない)では「開発ビルドでのみ使えます」の表示になる
+ *
+ * 5-3a-2: デバイストークンの発行は devIssueDeviceToken(検証専用。削除済み)ではなく、
+ * 正式な issueDeviceToken(Callable。5-3a)を使う。issueDeviceToken は Firebase Auth の
+ * 現在のユーザー(request.auth.uid)向けにしか発行できないため、入力欄の uid を
+ * Auth Emulator 専用のテストユーザーのメールアドレスの一部として使ってサインインし、
+ * 実際に発行された uid で Keychain への保存・以後の開始/停止を行う(uid の入力欄の値を上書きする)
  */
-
-// .firebaserc と同じ値(この検証用画面でだけ最小限のコピーを持つ)
-const FUNCTIONS_PROJECT_ID = 'demo-gokaku';
 
 export default function DevLockscreenSpikeScreen() {
   const emulatorConfig = getFirebaseEmulatorConfig();
@@ -35,34 +41,52 @@ export default function DevLockscreenSpikeScreen() {
     );
   }
 
-  const emulator = emulatorConfig;
-
-  function functionUrl(name: string): string {
-    return `http://${emulator.host}:${emulator.functionsPort}/${FUNCTIONS_PROJECT_ID}/${FUNCTIONS_REGION}/${name}`;
+  // Auth Emulator 専用のテストユーザー(本番の Firebase には存在しない・接続しない。dev-firebase-probe.tsx と同じ方式)
+  async function signInDevTestUser(label: string): Promise<string | null> {
+    const email = `dev-lockscreen-spike-${label}@example.com`;
+    const password = 'dev-lockscreen-spike-password';
+    connectFirebaseEmulatorsIfNeeded();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getApp } = require('@react-native-firebase/app') as typeof RNFBApp;
+    const { createUserWithEmailAndPassword, getAuth, signInWithEmailAndPassword } =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('@react-native-firebase/auth') as typeof RNFBAuth;
+    const auth = getAuth(getApp());
+    try {
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      return credential.user.uid;
+    } catch {
+      try {
+        const credential = await createUserWithEmailAndPassword(auth, email, password);
+        return credential.user.uid;
+      } catch (error) {
+        appendLog(`サインインに失敗: ${String(error)}`);
+        return null;
+      }
+    }
   }
 
   async function handleIssueToken() {
     try {
-      const res = await fetch(functionUrl('devIssueDeviceToken'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid }),
-      });
-      const body = (await res.json()) as { deviceToken?: string; error?: string };
-      if (!res.ok || !body.deviceToken) {
-        appendLog(`devIssueDeviceToken 失敗: ${body.error ?? res.status}`);
+      const signedInUid = await signInDevTestUser(uid);
+      if (!signedInUid) {
         return;
       }
-      try {
-        StudySync.setAuthContext(uid, body.deviceToken);
-      } catch (error) {
-        appendLog(`Keychain への保存に失敗: ${String(error)}`);
+      const result = await callIssueDeviceToken();
+      if (!result) {
+        appendLog('issueDeviceToken 失敗');
         return;
       }
+      const saved = saveDeviceTokenToKeychain(signedInUid, result.deviceToken);
+      if (!saved) {
+        appendLog('Keychain への保存に失敗');
+        return;
+      }
+      setUid(signedInUid);
       StudySync.setCurrentGoalId(goalId);
-      appendLog('デバイストークンを Keychain(App Group)に保存した');
+      appendLog(`デバイストークンを Keychain(App Group)に保存した(uid=${signedInUid})`);
     } catch (error) {
-      appendLog(`devIssueDeviceToken エラー: ${String(error)}`);
+      appendLog(`issueDeviceToken エラー: ${String(error)}`);
     }
   }
 

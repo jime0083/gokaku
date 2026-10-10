@@ -63,17 +63,22 @@ async function renderTimerRouter(initialUrl = '/timer'): Promise<void> {
 const checkAt = (startAt: number, k: number): number => startAt + k * 60 * 60_000;
 
 /**
- * AppState の 'change' イベントに登録された最後のハンドラを取り出す
+ * AppState の 'change' イベントに登録された全てのハンドラに state を渡して呼ぶ。
+ * 実際の AppState は 'change' を登録された全リスナーに配る(1つだけではない)。
+ * このアプリでは useTimerSession の他に、ルートの _layout(5-3a-2: useDeviceTokenSync)も
+ * 'change' を登録するため、「最後に登録されたものだけ呼ぶ」実装では意図したリスナーに届かないことがある
  * (@react-native/jest-preset の AppState モックは addEventListener が jest.fn なので、
  * 呼び出し引数からハンドラを直接取り出して呼べる)
  */
-function getLatestAppStateChangeHandler(): (state: string) => void {
+function triggerAppStateChange(state: string): void {
   const addEventListener = AppState.addEventListener as jest.Mock;
-  const call = [...addEventListener.mock.calls].reverse().find(([eventName]) => eventName === 'change');
-  if (!call) {
+  const handlers = addEventListener.mock.calls
+    .filter(([eventName]) => eventName === 'change')
+    .map(([, handler]) => handler as (state: string) => void);
+  if (handlers.length === 0) {
     throw new Error("AppState.addEventListener('change', ...) が呼ばれていない");
   }
-  return call[1];
+  handlers.forEach((handler) => handler(state));
 }
 
 /**
@@ -372,14 +377,13 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       await fireEvent.press(screen.getByTestId('timer-toggle-button'));
       await waitFor(() => screen.getByTestId('timer-status-text'));
 
-      const handleAppStateChange = getLatestAppStateChangeHandler();
       mockFlushStudyEventQueue.mockClear();
 
       // タイマー(setInterval)を進めず、応答期限(70分)を過ぎた時刻まで一気に進める
       // (バックグラウンドで時間が過ぎ、前面に戻ったときの状況を再現する)
       jest.setSystemTime(startAt + 75 * 60 * 1000);
       await act(async () => {
-        handleAppStateChange('active');
+        triggerAppStateChange('active');
       });
 
       expect(mockFlushStudyEventQueue).toHaveBeenCalled();
