@@ -14,7 +14,7 @@ async function renderOnboardingRouter(initialUrl: string): Promise<void> {
 
 describe('目標勉強時間の自動入れ直し(受験ルート。renderRouter)', () => {
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
   });
 
@@ -100,7 +100,7 @@ describe('目標勉強時間の自動入れ直し(受験ルート。renderRouter
 
 describe('目標勉強時間の自動入れ直し(資格ルート。renderRouter)', () => {
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
   });
 

@@ -35,7 +35,7 @@ async function renderOnboardingRouter(initialUrl: string): Promise<void> {
 
 describe('オンボーディングの「戻る」(renderRouter。problem P-015)', () => {
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
   });
 
@@ -85,7 +85,7 @@ describe('オンボーディングの「戻る」(renderRouter。problem P-015)'
 
 describe('オンボーディングの「戻る」(資格ルート。renderRouter。3-2a requirements 4-3)', () => {
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
   });
 
@@ -170,7 +170,7 @@ describe('オンボーディングの「戻る」(資格ルート。renderRouter
 
 describe('ペース確認画面への遷移・戻る(3-3。requirements 4-4。renderRouter)', () => {
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
   });
 

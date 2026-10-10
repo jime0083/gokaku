@@ -100,7 +100,7 @@ describe('PaywallScreen(4-1b・4-2c。requirements 3-4・4-5 の 2。expo-iap・
   });
 
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
   });
 

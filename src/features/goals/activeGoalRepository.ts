@@ -1,7 +1,8 @@
 /**
- * 有効な目標(users/{uid}.activeGoalId が指す goal)の、1日の最低・努力目標勉強時間(分)を読む(5-1a)。
- * タイマー画面(src/app/(tabs)/timer.tsx)はこのモジュールの関数だけを呼び、
- * @react-native-firebase/firestore を直接呼ばない(テストで jest.mock に差し替えられるようにする)。
+ * 有効な目標(users/{uid}.activeGoalId が指す goal)を読む(5-1a・5-1b-2)。
+ * タイマー画面(src/app/(tabs)/timer.tsx)・送信層(src/features/timer/studyEventSender.ts)は
+ * このモジュールの関数だけを呼び、@react-native-firebase/firestore を直接呼ばない
+ * (テストで jest.mock に差し替えられるようにする)。
  *
  * src/config/firebase.ts と同じ理由(expo-router が src/app/ 配下の全ファイルを起動時に読み込むため)で、
  * @react-native-firebase/* は実際に呼び出す関数の中でだけ require する(型だけ import type で取る)
@@ -15,6 +16,38 @@ export type ActiveGoalDailyTargets = {
   minDailyMinutes: number;
   goalDailyMinutes: number;
 };
+
+/**
+ * ログインしていない・users/{uid}.activeGoalId が設定されていない場合は null を返す。
+ * 送信層(studyEventSender.ts)が recordStudyEvent に渡す goalId を得るために使う
+ * (実際のユーザーには起きない。未ログイン・目標なしのときは送信せず列に残す)
+ */
+export async function fetchActiveGoalId(): Promise<string | null> {
+  const uid = getCurrentUid();
+  if (!uid) {
+    return null;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getApp } = require('@react-native-firebase/app') as typeof RNFBApp;
+    const { getFirestore, doc, getDoc } =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('@react-native-firebase/firestore') as typeof RNFBFirestore;
+
+    const firestore = getFirestore(getApp());
+    const userSnapshot = await getDoc(doc(firestore, 'users', uid));
+    const activeGoalId = userSnapshot.exists()
+      ? (userSnapshot.data()?.activeGoalId as unknown)
+      : null;
+    if (typeof activeGoalId !== 'string' || activeGoalId.length === 0) {
+      return null;
+    }
+    return activeGoalId;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * ログインしていない・有効な目標がない・目標ドキュメントが読めない(値の形が不正)・

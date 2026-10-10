@@ -140,6 +140,7 @@ manual-work.txt(手動作業)に追加
 - 画面の見た目・操作感は、Phase の区切りでユーザーにシミュレータで確認してもらう
 - 画面テストでは `render` / `fireEvent` / `renderRouter` を必ず await する(renderRouter は `await act(async () => { renderRouter(...) })` で包む)。
   @testing-library/react-native 14(React 19)は act を非同期で扱うため、await しないと act が次のテストに漏れて後続のテストが壊れる(3-1・3-4a で確認)
+  `cleanup()` も中で act を使う非同期の関数なので、テスト本体でも afterEach でも必ず `await cleanup()` とする(5-1b-3・problem P-028 で確認)
 
 ### UI 部品の決まり
 - ネイティブ部品(npm パッケージにネイティブコードを含むもの)を追加・更新したら、使っているシミュレータのアプリはすべて作り直す(npx expo run:ios)。

@@ -1,7 +1,16 @@
-import { aggregateDailyStudyMinutes, toJstDateKey, type StudySession } from '@shared/index';
+import { aggregateDailyStudyMinutes, toJstDateKey } from '@shared/index';
 import { useCallback, useEffect, useState } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 
-import { findActiveSession, loadLocalSessions, startLocalSession, stopLocalSession } from './storage';
+import { generateLocalId } from './id';
+import {
+  findActiveSession,
+  loadLocalSessions,
+  startLocalSession,
+  stopLocalSession,
+  type LocalStudySession,
+} from './storage';
+import { enqueueAndSendStudyEvent, flushStudyEventQueue } from './studyEventSender';
 
 /** 計測中の経過時間を1秒ごとに更新する間隔(表示用。保存のタイミングには影響しない) */
 const TICK_INTERVAL_MS = 1000;
@@ -27,7 +36,7 @@ export type TimerSessionState = {
  */
 export function useTimerSession(): TimerSessionState {
   const [isLoading, setIsLoading] = useState(true);
-  const [sessions, setSessions] = useState<StudySession[]>([]);
+  const [sessions, setSessions] = useState<LocalStudySession[]>([]);
   const [tick, setTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -38,9 +47,21 @@ export function useTimerSession(): TimerSessionState {
       setTick(Date.now());
       setIsLoading(false);
     });
+    // アプリ起動時に送信待ちの列を再送する(5-1b-2。requirements 3-2)
+    void flushStudyEventQueue();
     return () => {
       mounted = false;
     };
+  }, []);
+
+  // 他のアプリから戻ったとき(AppState が active)に送信待ちの列を再送する(5-1b-2)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') {
+        void flushStudyEventQueue();
+      }
+    });
+    return () => subscription.remove();
   }, []);
 
   const active = findActiveSession(sessions);
@@ -53,9 +74,11 @@ export function useTimerSession(): TimerSessionState {
 
   const start = useCallback(async () => {
     const now = Date.now();
-    const updated = await startLocalSession(now);
+    const sessionId = generateLocalId();
+    const updated = await startLocalSession(now, sessionId);
     setSessions(updated);
     setTick(Date.now());
+    void enqueueAndSendStudyEvent({ sessionId, action: 'start', clientTimeMs: now });
   }, []);
 
   const stop = useCallback(async () => {
@@ -63,7 +86,10 @@ export function useTimerSession(): TimerSessionState {
     const updated = await stopLocalSession(now);
     setSessions(updated);
     setTick(Date.now());
-  }, []);
+    if (active) {
+      void enqueueAndSendStudyEvent({ sessionId: active.sessionId, action: 'stop', clientTimeMs: now });
+    }
+  }, [active]);
 
   const elapsedMs = active ? Math.max(0, tick - active.startAt) : 0;
   const todayMinutes = isLoading

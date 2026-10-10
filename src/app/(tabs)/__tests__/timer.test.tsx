@@ -2,17 +2,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 
 /**
- * タイマー画面(5-1a)の画面テスト。有効な目標の読み込み(activeGoalRepository)はモックにし、
- * renderRouter で実際の画面(下部タブを含む)を使って次を確認する(CLAUDE.md: router のモックで
- * 「呼ばれたこと」だけを確かめるテストにしない)。
+ * タイマー画面(5-1a・5-1b-2)の画面テスト。有効な目標の読み込み(activeGoalRepository)と
+ * サーバーへの送信層(studyEventSender。5-1b-2)はモックにし、renderRouter で実際の画面
+ * (下部タブを含む)を使って次を確認する(CLAUDE.md: router のモックで「呼ばれたこと」だけを
+ * 確かめるテストにしない)。
  * - 開始前は 00:00:00
  * - 開始 → 停止で今日の勉強時間が増える
  * - 計測中は「勉強中」とタブの印が出る
  * - 再表示(アンマウント・再マウント)しても計測中なら経過時間が続く
+ * - 開始・停止で送信層(enqueueAndSendStudyEvent)が呼ばれる。送信層そのものの挙動(列・再送)は
+ *   studyEventSender.test.ts で確認する
  */
 const mockFetchActiveGoalDailyTargets = jest.fn();
 jest.mock('@/features/goals/activeGoalRepository', () => ({
   fetchActiveGoalDailyTargets: mockFetchActiveGoalDailyTargets,
+}));
+
+const mockEnqueueAndSendStudyEvent = jest.fn();
+const mockFlushStudyEventQueue = jest.fn();
+jest.mock('@/features/timer/studyEventSender', () => ({
+  enqueueAndSendStudyEvent: mockEnqueueAndSendStudyEvent,
+  flushStudyEventQueue: mockFlushStudyEventQueue,
 }));
 
 /**
@@ -35,7 +45,7 @@ describe('タイマー画面(5-1a。requirements 3-2, 4-6)', () => {
   });
 
   afterEach(async () => {
-    cleanup();
+    await cleanup();
     await AsyncStorage.clear();
     jest.useRealTimers();
     jest.clearAllMocks();
@@ -117,7 +127,7 @@ describe('タイマー画面(5-1a。requirements 3-2, 4-6)', () => {
     await fireEvent.press(screen.getByTestId('timer-toggle-button'));
     await waitFor(() => screen.getByTestId('timer-status-text'));
 
-    cleanup();
+    await cleanup();
 
     jest.setSystemTime(new Date('2026-10-10T10:03:00+09:00'));
     await renderTimerRouter();
@@ -126,5 +136,27 @@ describe('タイマー画面(5-1a。requirements 3-2, 4-6)', () => {
       expect(screen.getByTestId('timer-elapsed-text').props.children).toBe('00:03:00'),
     );
     expect(screen.getByTestId('timer-status-text')).toBeTruthy();
+  });
+
+  it('開始・停止のたびに送信層(studyEventSender)が呼ばれる(5-1b-2)', async () => {
+    jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+    await renderTimerRouter();
+
+    // マウント時に送信待ちの列を再送する(アプリ起動時の再送)
+    expect(mockFlushStudyEventQueue).toHaveBeenCalled();
+
+    await waitFor(() => screen.getByTestId('timer-toggle-button'));
+    await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+    await waitFor(() => expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledTimes(1));
+    const [startCall] = mockEnqueueAndSendStudyEvent.mock.calls[0];
+    expect(startCall).toMatchObject({ action: 'start', clientTimeMs: Date.now() });
+    expect(typeof startCall.sessionId).toBe('string');
+    expect(startCall.sessionId.length).toBeGreaterThan(0);
+
+    await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+    await waitFor(() => expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledTimes(2));
+    const [stopCall] = mockEnqueueAndSendStudyEvent.mock.calls[1];
+    // 開始・停止で同じ sessionId を使う(停止だけに新しい sessionId を作らない)
+    expect(stopCall).toMatchObject({ action: 'stop', sessionId: startCall.sessionId });
   });
 });
