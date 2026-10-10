@@ -774,3 +774,16 @@
 - 切り出したタスク: 5-2b の差し戻し(安全域を考慮して配置する)
 - 解決日: 2026-10-10
 - 解決内容: StudyCheckOverlay.tsx で useSafeAreaInsets を使い、paddingTop を insets.top + spacing.md にした。SE と Pro Max の両方で重ならないことをスクショで確かめた
+
+## P-031 「勉強中？」の通知のカテゴリを、Swift と JS の両方が登録して取り合っている
+- 状態: 原因特定済み・対応タスク待ち(2026-10-10)
+- 発見: 5-3c-0 の調査
+- 問題内容:
+  - 1-4 の検証用の Swift のコード(modules/study-sync/ios/StudySyncAppDelegateSubscriber.swift)が、アプリの起動時に必ず次の2つを設定している
+    - 通知カテゴリ STUDY_CHECK(アクション識別子は STUDY_CONFIRM)
+    - UNUserNotificationCenter の delegate(StudySyncNotificationDelegate)
+  - 5-2c の JS(studyCheckNotifications.ts)も、同じカテゴリ名 STUDY_CHECK に、別のアクション識別子 STUDY_CHECK_CONFIRM を登録している
+  - どちらの設定が効くかは起動の順番しだいになっている。expo-notifications も delegate を扱うので、3つが取り合っている
+- 影響: 通知のアクション「勉強中」が、どちらの処理で受け取られるかが不定。P-011 (3)(通知のアクションのタップがサーバーに反映されたか未確認)の一因の疑いがある
+- 原因: 1-4 の検証用の通知のコード(scheduleCheckNotification・カテゴリと delegate の設定・StudySyncNotificationDelegate)が、本実装(5-2c)のあとも残っている
+- 切り出すタスク: 5-3c の分割の中で、Swift の検証用の通知のコードを削除する

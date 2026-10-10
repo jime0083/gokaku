@@ -534,6 +534,11 @@ Phase 5: タイマー
       - nativeSync: maxInstances 10、64KB を超えたら 413 を返す(認証より前に判定)
       - firestore.indexes.json に rateLimits.expireAt の TTL を追加した(8-2 のデプロイで反映)
 
+[ ] 5-3c-0 調査: アプリのタイマーとロック画面の計測の共有の設計
+    内容: アプリのタイマー(JS・AsyncStorage)と、ロック画面(ライブアクティビティ・ロック画面コントロール・Swift・App Group)が、同じ計測(sessionId・開始時刻・確認の応答)を共有する設計を、今のコードを読んで提案する。
+          あわせて 5-3c 以降をタスクの大きさの基準に合うように分ける案と、ユーザーに決めてもらう必要がある点(画面や動きに関わること)を洗い出す。コードは変えない
+    完了条件: 設計案・分割したタスク案・ユーザーへの確認事項がそろっていること
+
 [ ] 5-3c Swift の送信処理の一本化と本番接続の設定
     内容: modules/study-sync と targets/widget に重複している送信処理を1か所にまとめる。送信先 URL を設定から読む(http://127.0.0.1 の直書きをやめる)。
           Keychain の kSecAttrAccessible を明示。StopStudyIntent も Keychain の uid を基準にする
