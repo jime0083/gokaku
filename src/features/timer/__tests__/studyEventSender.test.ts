@@ -177,6 +177,24 @@ describe('studyEventSender(5-1b-2)', () => {
     expect(await loadStudyEventQueue()).toEqual([]);
   });
 
+  it('resource-exhausted の理由(reason)が未知の場合も、データを失わない側に倒して列に残す(5-3b-3)', async () => {
+    mockCallable.mockRejectedValueOnce({
+      code: 'resource-exhausted',
+      details: { reason: 'some-unknown-reason' },
+    });
+
+    await enqueueAndSendStudyEvent(BASE_EVENT);
+
+    expect(await loadStudyEventQueue()).toHaveLength(1);
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+
+    mockCallable.mockResolvedValueOnce({ data: { status: 'recorded' } });
+    await flushStudyEventQueue();
+
+    expect(mockCallable).toHaveBeenCalledTimes(2);
+    expect(await loadStudyEventQueue()).toEqual([]);
+  });
+
   it('目標の ID が取れない(未ログイン・目標なし)場合は送らずに列に残す', async () => {
     mockFetchActiveGoalId.mockResolvedValue(null);
 

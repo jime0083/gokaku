@@ -4,6 +4,7 @@ import { issueDeviceTokenForUid } from '../deviceToken/issueDeviceToken';
 import { revokeDeviceToken } from '../deviceToken/revokeDeviceToken';
 import { hashDeviceToken } from '../deviceTokenHash';
 import { ensureAdminApp } from '../firebaseAdmin';
+import { NATIVE_SYNC_MAX_BODY_BYTES } from '../nativeSync';
 import { RATE_LIMITS, rateLimitDocPath } from '../rateLimit';
 import { handleRecordStudyEventRequest } from '../studySession/recordStudyEvent';
 import { MAX_CONFIRMATIONS_PER_SESSION } from '../studySession/recordStudySessionEvent';
@@ -66,6 +67,33 @@ describe('nativeSync (Functions Emulator)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildBody({ uid: 'nouid', goalId: 'g1' })),
     });
+    expect(res.status).toBe(401);
+  });
+
+  // 5-3b-3: 誰でも呼べる入口(requirements 3-2「大量の呼び出しへの対策」)の本文サイズの上限。
+  // 認証(Authorization ヘッダー・トークン照合)より前に判定するため、トークンなしでも 413 になる
+  it('本文が上限(64KB)を超えると 413 を返す(トークンの照合より前に判定する)', async () => {
+    const oversizedBody = buildBody({
+      uid: uniqueUid('oversized'),
+      sessionId: uniqueId('session'),
+      goalId: uniqueId('goal'),
+      padding: 'a'.repeat(NATIVE_SYNC_MAX_BODY_BYTES + 1024),
+    });
+    const res = await fetch(nativeSyncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(oversizedBody),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('本文が上限(64KB)以内であれば 413 にはならない(トークンがないので 401 になる)', async () => {
+    const res = await fetch(nativeSyncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildBody({ uid: uniqueUid('within-limit'), sessionId: uniqueId('session'), goalId: uniqueId('goal') })),
+    });
+    expect(res.status).not.toBe(413);
     expect(res.status).toBe(401);
   });
 

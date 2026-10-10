@@ -517,7 +517,7 @@ Phase 5: タイマー
       - アプリ: rate-limited なら列に残す
       - 残りの指摘は 5-3b-3 で扱う
 
-[ ] 5-3b-3 ロック画面の入口の上限と、カウンタの片付けの設定  【セキュリティ確認】
+[x] 5-3b-3 ロック画面の入口の上限と、カウンタの片付けの設定  【セキュリティ確認】
     内容: 5-3b-2 のレビュー・セキュリティ確認からの申し送り。
           (1) nativeSync にも maxInstances と本文の大きさの上限を付ける(req.rawBody.byteLength で判定し、413 を返す)。値は appleServerNotification に合わせる
           (2) firestore.indexes.json の fieldOverrides に rateLimits.expireAt の TTL(ttl: true)を書き、firebase deploy で TTL を有効にできる形にする(手動作業にしない)。
@@ -529,6 +529,10 @@ Phase 5: タイマー
           - firestore.indexes.json に TTL の設定があること(firebase-tools の形式に合っていること)
           - 未知の reason のテストが緑であること
           - typecheck / lint / test / test:functions / test:rules が緑であること
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - functions/src/httpRequestLimits.ts(64KB・10)を共通にした
+      - nativeSync: maxInstances 10、64KB を超えたら 413 を返す(認証より前に判定)
+      - firestore.indexes.json に rateLimits.expireAt の TTL を追加した(8-2 のデプロイで反映)
 
 [ ] 5-3c Swift の送信処理の一本化と本番接続の設定
     内容: modules/study-sync と targets/widget に重複している送信処理を1か所にまとめる。送信先 URL を設定から読む(http://127.0.0.1 の直書きをやめる)。
@@ -536,6 +540,7 @@ Phase 5: タイマー
           ※5-3b-1 の申し送り: Swift の送信を nativeSync の新しい形(sessionId・checkEnabled・confirm)に合わせる。
             ロック画面から開始したときの sessionId をどこで作り、アプリとどう共有するか(App Group)を、着手前に設計して確かめる。
             タスクが大きくなる見込みなら、着手前に分割する
+          ※5-3b-3 セキュリティの申し送り: Swift の送信で、応答に応じて扱いを分ける。500・通信エラー・413?・429(rate_limited)は溜めて送り直す。400・401・429(confirmation_limit_exceeded)は捨てる(401 はトークンの作り直しを待つ)。分け方を設計で決める
     完了条件: ビルドが通り、1-4 の手順(アプリ終了状態で停止 → Firestore に記録)がシミュレータで再現できる
 
 [ ] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))

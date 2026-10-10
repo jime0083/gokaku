@@ -19,10 +19,11 @@ import { ensureAdminApp } from './firebaseAdmin';
  * - nativeSync: デバイストークンの検証(持ち主・期限)に通った直後(不正なリクエストでカウンタを増やさない)
  * - verifyApplePurchase: request.auth.uid が確定した直後
  *
- * 古いカウンタの片付け(5-3b-2 で決定): ドキュメントに expireAt(Firestore の Timestamp。その分の区切りが
- * 終わってから5分後)を持たせる。Firestore の TTL ポリシー(コレクショングループ rateLimits・フィールド
- * expireAt)を有効にすると、期限が来たドキュメントを自動で削除してくれる。TTL ポリシーの有効化はコードだけ
- * では行えず、Firebase コンソールまたは gcloud での一度だけの手動設定が必要(manual-work で案内する)
+ * 古いカウンタの片付け(5-3b-2 で決定。5-3b-3 で設定方法を確定): ドキュメントに expireAt(Firestore の
+ * Timestamp。その分の区切りが終わってから5分後)を持たせる。Firestore の TTL ポリシー(コレクショングループ
+ * rateLimits・フィールド expireAt)を有効にすると、期限が来たドキュメントを自動で削除してくれる。
+ * TTL ポリシーは firestore.indexes.json の fieldOverrides に書き、`firebase deploy`(Firestore インデックス
+ * のデプロイ)で反映する(手動作業にしない。5-3b-3)
  */
 
 export type RateLimitKind = 'study-event' | 'purchase-verify';

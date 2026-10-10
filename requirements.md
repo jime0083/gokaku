@@ -88,6 +88,7 @@
       - 確認の応答の上限(confirmation-limit-exceeded)で断られたものは、送り直さない
   - 誰でも呼べる Apple の通知の入口(appleServerNotification)には、同時に動く数の上限(maxInstances)と、受け取るデータの大きさの上限を設ける
     - 確定値(2026-10-10。5-3b-2): maxInstances 10、本文 64KB まで(超えたら 413)。Apple の通知は数KB程度
+  - ロック画面の入口(nativeSync)にも同じ上限(maxInstances 10、本文 64KB まで。超えたら、トークンの確認より前に 413)を設ける(2026-10-10。5-3b-3)
 - アプリからの記録の保存(2026-10-10 記載。サーバー内部の仕組み):
   - 計測の開始時に端末でセッションID(sessionId)を作る。開始・停止の操作は「sessionId・操作(start/stop)・端末時刻・idempotencyKey」の形で送る
     (ロック画面からの操作(5-3)も同じ sessionId と形を使い、アプリとロック画面で同じセッションを開始・停止できるようにする)

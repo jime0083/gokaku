@@ -6,6 +6,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { FUNCTIONS_REGION } from './config';
 import { hashDeviceToken } from './deviceTokenHash';
 import { ensureAdminApp } from './firebaseAdmin';
+import { PUBLIC_ENDPOINT_MAX_BODY_BYTES, PUBLIC_ENDPOINT_MAX_INSTANCES } from './httpRequestLimits';
 import { enforceRateLimit, RateLimitExceededError } from './rateLimit';
 import {
   createProductionRecordStudySessionEventDeps,
@@ -42,6 +43,8 @@ import {
  * 常に expiresAt が入るため、これは「壊れたデータ」として扱ってよい)。
  *
  * エラー応答(Swift 側(5-3c)が送り直すか捨てるかを判断できるように区別する。内部の詳細は返さない):
+ * - 本文が大きすぎる(NATIVE_SYNC_MAX_BODY_BYTES 超え) → 413 payload_too_large(5-3b-3。送り直しても
+ *   変わらないので捨てる。正しい形の本文はこの大きさを超えない)
  * - 本文の形が不正(ID の形・action・clientTimeMs・start なのに checkEnabled が無い等) → 400 invalid_body
  * - Authorization が無い・トークンが不正・期限切れ・uid が持ち主と違う → 401 unauthorized(送り直しても変わらないので捨てる)
  * - 架空の goalId(本人の目標として存在しない) → 400 goal_not_found(送り直しても変わらないので捨てる)
@@ -52,6 +55,16 @@ import {
  * 呼び出し回数の制限(5-3b-2。requirements 3-2「大量の呼び出しへの対策」): デバイストークンの検証
  * (持ち主・期限)に通った直後・recordStudySessionEvent を呼ぶ前に数える(不正なリクエストでカウンタを
  * 増やさない)。recordStudyEvent(Callable。source=app)と同じ枠(kind='study-event')を共有する
+ *
+ * 誰でも呼べる入口としての上限(5-3b-3。requirements 3-2「大量の呼び出しへの対策」。appleServerNotification
+ * (4-2a・4-2b・5-3b-2)と同じ考え方・同じ値): この入口も URL(とデバイストークン)を知っていれば誰でも
+ * 呼べるため、本文の大きさの検査とトークンの認証よりも前に、本文のバイト数(req.rawBody.byteLength)を
+ * NATIVE_SYNC_MAX_BODY_BYTES(64KB)で判定し、超えていれば 413 で安く断る(トークンの読み取り・比較・
+ * recordStudySessionEvent の呼び出しに進む前に断ることで、不正に大きな本文でのコストを抑える)。
+ * 同時に動くインスタンス数も NATIVE_SYNC_MAX_INSTANCES(10)に制限する。値は PUBLIC_ENDPOINT_MAX_BODY_BYTES・
+ * PUBLIC_ENDPOINT_MAX_INSTANCES(httpRequestLimits.ts)として appleServerNotification と共有している。
+ * (appleServerNotification.ts のコメント参照: 本文の解析自体(body-parser)は413の判定より前に走るため、
+ * その間の上限はプラットフォーム側の本文サイズの上限と maxInstances で抑えている。nativeSync も同様)
  */
 
 // Firestore のドキュメントID(uid・sessionId・idempotencyKey・goalId)として安全な形式に限定する
@@ -67,6 +80,18 @@ type NativeSyncBody = {
   idempotencyKey: string;
   /** action が 'start' のときだけ必須(requirements 3-2) */
   checkEnabled?: boolean;
+};
+
+/** 受け取る本文の大きさの上限(5-3b-3。requirements 3-2。値は appleServerNotification と共通。httpRequestLimits.ts 参照) */
+export const NATIVE_SYNC_MAX_BODY_BYTES = PUBLIC_ENDPOINT_MAX_BODY_BYTES;
+
+/** 同時に動くインスタンス数の上限(5-3b-3。requirements 3-2。値は appleServerNotification と共通。httpRequestLimits.ts 参照) */
+export const NATIVE_SYNC_MAX_INSTANCES = PUBLIC_ENDPOINT_MAX_INSTANCES;
+
+/** テストから maxInstances の設定値を確認できるよう、onRequest に渡す options を公開する */
+export const NATIVE_SYNC_OPTIONS = {
+  region: FUNCTIONS_REGION,
+  maxInstances: NATIVE_SYNC_MAX_INSTANCES,
 };
 
 function isSafeId(value: unknown): value is string {
@@ -119,9 +144,16 @@ function hashesMatch(storedHash: unknown, candidateHash: string): boolean {
   return timingSafeEqual(storedBuf, candidateBuf);
 }
 
-export const nativeSync = onRequest({ region: FUNCTIONS_REGION }, async (req, res) => {
+export const nativeSync = onRequest(NATIVE_SYNC_OPTIONS, async (req, res) => {
   if (req.method !== 'POST') {
     res.set('Allow', 'POST').status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+
+  // 本文の大きさの検査は、トークンの認証(Authorization ヘッダー・デバイストークンの照合)・
+  // 本文の形の検査(parseBody)よりも前に行う(5-3b-3。安く断るため)
+  if (req.rawBody.byteLength > NATIVE_SYNC_MAX_BODY_BYTES) {
+    res.status(413).json({ error: 'payload_too_large' });
     return;
   }
 
