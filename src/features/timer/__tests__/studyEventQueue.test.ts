@@ -13,12 +13,19 @@ const EVENT_A: PendingStudyEvent = {
   action: 'start',
   clientTimeMs: 1000,
   idempotencyKey: 'key-a',
+  checkEnabled: true,
 };
 const EVENT_B: PendingStudyEvent = {
   sessionId: 'session-a',
   action: 'stop',
   clientTimeMs: 2000,
   idempotencyKey: 'key-b',
+};
+const EVENT_C: PendingStudyEvent = {
+  sessionId: 'session-a',
+  action: 'confirm',
+  clientTimeMs: 3000,
+  idempotencyKey: 'key-c',
 };
 
 describe('studyEventQueue(5-1b-2。送信待ちの列)', () => {
@@ -41,6 +48,22 @@ describe('studyEventQueue(5-1b-2。送信待ちの列)', () => {
       JSON.stringify([{ sessionId: 's', action: 'start', clientTimeMs: 1 }, EVENT_A]),
     );
     expect(await loadStudyEventQueue()).toEqual([EVENT_A]);
+  });
+
+  it('start なのに checkEnabled がない要素は取り除く(5-2b)', async () => {
+    await AsyncStorage.setItem(
+      STUDY_EVENT_QUEUE_STORAGE_KEY,
+      JSON.stringify([
+        { sessionId: 's', action: 'start', clientTimeMs: 1, idempotencyKey: 'k' },
+        EVENT_A,
+      ]),
+    );
+    expect(await loadStudyEventQueue()).toEqual([EVENT_A]);
+  });
+
+  it('confirm(5-2a・5-2b)の要素も保存・読み込みできる', async () => {
+    await appendStudyEvent(EVENT_C);
+    expect(await loadStudyEventQueue()).toEqual([EVENT_C]);
   });
 
   it('追加した順(古い順)で読める', async () => {

@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { StyleSheet, View, type ColorValue } from 'react-native';
 
+import { StudyCheckOverlay } from '@/features/timer/StudyCheckOverlay';
 import { TimerSessionProvider, useTimerSessionContext } from '@/features/timer/TimerSessionContext';
 import { colors } from '@/theme/colors';
 
@@ -18,38 +19,45 @@ function TimerTabIcon({ color, size }: { color: ColorValue; size: number }) {
 
 /**
  * 下部タブ(ホーム / タイマー。requirements 4-6)。
- * 選んだタブはブルー(theme の primary)にする。ホームは6-1で本実装するまで仮の画面(src/app/(tabs)/home.tsx)
+ * 選んだタブはブルー(theme の primary)にする。ホームは6-1で本実装するまで仮の画面(src/app/(tabs)/home.tsx)。
+ * 「勉強中？」のアプリ内確認(5-2b)は、どのタブでも出すため Tabs と並べて重ねて表示する(requirements 3-2)
  */
 export default function TabsLayout() {
   return (
     <TimerSessionProvider>
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarActiveTintColor: colors.primary,
-          tabBarInactiveTintColor: colors.textSecondary,
-        }}
-      >
-        <Tabs.Screen
-          name="home"
-          options={{
-            title: 'ホーム',
-            tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} />,
+      <View style={styles.root}>
+        <Tabs
+          screenOptions={{
+            headerShown: false,
+            tabBarActiveTintColor: colors.primary,
+            tabBarInactiveTintColor: colors.textSecondary,
           }}
-        />
-        <Tabs.Screen
-          name="timer"
-          options={{
-            title: 'タイマー',
-            tabBarIcon: ({ color, size }) => <TimerTabIcon color={color} size={size} />,
-          }}
-        />
-      </Tabs>
+        >
+          <Tabs.Screen
+            name="home"
+            options={{
+              title: 'ホーム',
+              tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="timer"
+            options={{
+              title: 'タイマー',
+              tabBarIcon: ({ color, size }) => <TimerTabIcon color={color} size={size} />,
+            }}
+          />
+        </Tabs>
+        <StudyCheckOverlay />
+      </View>
     </TimerSessionProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   iconWrapper: {
     alignItems: 'center',
     justifyContent: 'center',

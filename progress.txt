@@ -407,7 +407,7 @@ Phase 5: タイマー
       - appleServerNotification のコメントを直した
       - test:functions 109件
 
-[ ] 5-2b アプリ内の確認と自動停止
+[x] 5-2b アプリ内の確認と自動停止
     内容: 計測中、60分ごとに同じ画面の上に「勉強中？」を重ねて表示し、ボタン「勉強中」で応答を送る(5-2a)。
           shared の studyCheck で無応答を判断して確認の時刻で止め、次に開いたときに一度だけ停止の知らせを出す。
           確認 ON/OFF は users.checkEnabled を読む(初期値 ON)。本番の値が60分/10分であることをテストで確かめる
@@ -415,6 +415,11 @@ Phase 5: タイマー
             - studyEventSender の checkEnabled は仮で true を送っている。users.checkEnabled を読んで送るように差し替える
             - サーバーは confirmations が上限(500件)を超えると resource-exhausted を返す。送り直しても成功しないので、invalid-argument と同じく列から外す
     完了条件: 時刻を進める画面テストで、応答あり(続く)・応答なし(確認の時刻で止まり、知らせが一度だけ出る)・OFF(確認が出ない)が緑
+    ※完了(2026-10-10): レビューPASS
+      - 差し戻し1回: P-030 確認のカードが Pro Max で Dynamic Island と重なっていた。安全域を使うように直した
+      - 作ったもの: StudyCheckOverlay.tsx(どのタブにも出る。下の画面も触れる)、checkEnabledRepository.ts、autoStopNotice.ts
+      - shared に findPendingCheckAt と toJstHourMinute を追加した
+      - 確認の見た目(上部中央の白いカード)は仕様に決まりがない。Phase 5 の区切りでユーザーに見てもらう
 
 [ ] 5-2c 「勉強中？」の通知
     内容: 計測の開始で確認の時刻に通知を予約し、停止・応答で取り消して次を予約する。通知のアクション「勉強中」で応答を送る。

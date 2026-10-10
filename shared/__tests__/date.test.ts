@@ -7,6 +7,7 @@ import {
   jstStartOfNextDay,
   MS_PER_DAY,
   toJstDateKey,
+  toJstHourMinute,
 } from '../date';
 
 /** 日本時間の日時 → epoch ms(テスト用。ISO 文字列の +09:00 で指定する) */
@@ -107,5 +108,23 @@ describe('addDays / diffDays', () => {
     expect(diffDays('2026-10-08', '2026-10-07')).toBe(-1);
     expect(diffDays('2026-10-07', '2027-10-07')).toBe(365);
     expect(diffDays('2028-01-01', '2029-01-01')).toBe(366);
+  });
+});
+
+describe('toJstHourMinute(5-2b: 自動停止のお知らせ「○時○分」の表示)', () => {
+  it('日本時間の時・分を返す', () => {
+    expect(toJstHourMinute(jst('2026-10-07T14:05:30.000'))).toEqual({ hour: 14, minute: 5 });
+  });
+
+  it('0:00 ちょうどは 0時0分', () => {
+    expect(toJstHourMinute(jst('2026-10-07T00:00:00.000'))).toEqual({ hour: 0, minute: 0 });
+  });
+
+  it('23:59 は 23時59分', () => {
+    expect(toJstHourMinute(jst('2026-10-07T23:59:00.000'))).toEqual({ hour: 23, minute: 59 });
+  });
+
+  it('不正な時刻は RangeError', () => {
+    expect(() => toJstHourMinute(NaN)).toThrow(RangeError);
   });
 });

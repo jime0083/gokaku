@@ -24,19 +24,20 @@ import {
 export type StudyEventAction = PendingStudyEvent['action'];
 
 /**
- * recordStudyEvent(Cloud Functions)が入力の形が不正・指定された目標が見つからない場合に返す
- * HttpsError の code(4-2c-0 で確認した通り、RNFB では接頭辞なしの 'invalid-argument')。
- * この2つは送り直しても結果が変わらないため、列から外して再送を止める
- * (入力はこのモジュールが組み立てる固定の形のため「入力が不正」は実際には起きない想定だが、
- * 将来の変更で起きても再送を繰り返さないよう同じ扱いにする)。
+ * recordStudyEvent(Cloud Functions)が送り直しても結果が変わらない場合に返す HttpsError の code。
+ * - invalid-argument: 入力の形が不正・指定された目標が見つからない(4-2c-0 で確認した通り、RNFB では
+ *   接頭辞なしの値。入力はこのモジュールが組み立てる固定の形のため実際には起きない想定だが、将来の変更で
+ *   起きても再送を繰り返さないよう同じ扱いにする)
+ * - resource-exhausted: 1つの計測に保存できる confirmations の数の上限に達している(5-2a)。
+ *   上限に達した状態は送り直しても変わらないため列から外す(5-2b。5-2a からの申し送り)
  * それ以外(認証切れ・サーバー内部エラー・オフライン等の通信エラー)は、やり直せば成功する可能性があるため
  * 列に残して再送する
  */
-const PERMANENT_FAILURE_CODE = 'invalid-argument';
+const PERMANENT_FAILURE_CODES = new Set(['invalid-argument', 'resource-exhausted']);
 
 function isPermanentFailure(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  return code === PERMANENT_FAILURE_CODE;
+  return typeof code === 'string' && PERMANENT_FAILURE_CODES.has(code);
 }
 
 async function callRecordStudyEvent(event: PendingStudyEvent, goalId: string): Promise<void> {
@@ -54,9 +55,9 @@ async function callRecordStudyEvent(event: PendingStudyEvent, goalId: string): P
     source: 'app',
     clientTimeMs: event.clientTimeMs,
     idempotencyKey: event.idempotencyKey,
-    // recordStudyEvent は action が 'start' のとき checkEnabled(boolean)を必須で受け取る(5-2a)。
-    // users.checkEnabled の読み込みは 5-2b で行うため、ここでは常に true を送る
-    ...(event.action === 'start' ? { checkEnabled: true } : {}),
+    // recordStudyEvent は action が 'start' のときだけ checkEnabled(boolean)を必須で受け取る(5-2a)。
+    // users.checkEnabled を読んだ値(5-2b。呼び出し側の enqueueAndSendStudyEvent が event に積む)を送る
+    ...(event.action === 'start' ? { checkEnabled: event.checkEnabled } : {}),
   });
 }
 
@@ -108,22 +109,19 @@ export async function flushStudyEventQueue(): Promise<void> {
   }
 }
 
+/** enqueueAndSendStudyEvent に渡す値。'start' だけ checkEnabled を必須で持つ(studyEventQueue と同じ理由) */
+export type EnqueueStudyEventParams =
+  | { sessionId: string; action: 'start'; clientTimeMs: number; checkEnabled: boolean }
+  | { sessionId: string; action: 'stop' | 'confirm'; clientTimeMs: number };
+
 /**
- * 開始・停止の操作を送信待ちの列に入れてから送る(requirements 3-2)。
+ * 開始・停止・確認への応答を送信待ちの列に入れてから送る(requirements 3-2)。
  * sessionId は呼び出し側(useTimerSession)が計測開始時に作ったものを渡す。
  * idempotencyKey は操作ごとにここで作り、送信に失敗して列に残っている間・再送時も同じ値を使う
  */
-export async function enqueueAndSendStudyEvent(params: {
-  sessionId: string;
-  action: StudyEventAction;
-  clientTimeMs: number;
-}): Promise<void> {
-  const event: PendingStudyEvent = {
-    sessionId: params.sessionId,
-    action: params.action,
-    clientTimeMs: params.clientTimeMs,
-    idempotencyKey: generateLocalId(),
-  };
+export async function enqueueAndSendStudyEvent(params: EnqueueStudyEventParams): Promise<void> {
+  const idempotencyKey = generateLocalId();
+  const event: PendingStudyEvent = { ...params, idempotencyKey };
   await appendStudyEvent(event);
   await flushStudyEventQueue();
 }

@@ -1,4 +1,6 @@
-import { formatElapsedClock } from '../format';
+import { formatElapsedClock, formatJstHourMinute } from '../format';
+
+const jst = (iso: string): number => Date.parse(`${iso}+09:00`);
 
 describe('formatElapsedClock(requirements 4-6: 計測していないときは 00:00:00)', () => {
   it('0 ms は 00:00:00', () => {
@@ -27,5 +29,19 @@ describe('formatElapsedClock(requirements 4-6: 計測していないときは 00
 
   it('1秒未満は切り捨てる', () => {
     expect(formatElapsedClock(999)).toBe('00:00:00');
+  });
+});
+
+describe('formatJstHourMinute(requirements 3-2, 2026-10-10 追記: 自動停止のお知らせ「○時○分」)', () => {
+  it('時は0〜23のまま(ゼロ埋めしない)、分は2桁ゼロ埋め', () => {
+    expect(formatJstHourMinute(jst('2026-10-07T14:05:00'))).toBe('14時05分');
+  });
+
+  it('1桁の時は先頭を0埋めしない', () => {
+    expect(formatJstHourMinute(jst('2026-10-07T09:00:00'))).toBe('9時00分');
+  });
+
+  it('0時0分', () => {
+    expect(formatJstHourMinute(jst('2026-10-07T00:00:00'))).toBe('0時00分');
   });
 });

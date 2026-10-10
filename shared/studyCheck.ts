@@ -110,6 +110,34 @@ export function resolveSessionEnd(session: CheckedStudySession, now: number): Se
 }
 
 /**
+ * 計測中(stopAt が null)のセッションについて、今まさに応答待ちの確認があれば、その確認時刻(t_k)を返す。
+ * 「応答待ち」= 確認時刻 t_k ≤ now ≤ t_k + 応答期限(両端を含む。resolveSessionEnd の応答判定と同じ境界)
+ * かつ、まだその確認に応答していない。確認OFF、または応答待ちの確認がなければ null
+ * (5-2b: どのタブでも画面の上に重ねて「勉強中？」を表示するための判定に使う)
+ */
+export function findPendingCheckAt(session: CheckedStudySession, now: number): number | null {
+  assertSession(session, now);
+  const { startAt, checkEnabled, confirmations } = session;
+  if (!checkEnabled) {
+    return null;
+  }
+  for (
+    let checkAt = startAt + STUDY_CHECK_INTERVAL_MS;
+    checkAt <= now;
+    checkAt += STUDY_CHECK_INTERVAL_MS
+  ) {
+    const deadline = checkAt + STUDY_CHECK_RESPONSE_WINDOW_MS;
+    if (now > deadline) {
+      // この確認はすでに無応答が確定している(resolveSessionEnd が計測を止める対象)。次の確認を見る
+      continue;
+    }
+    const answered = confirmations.some((at) => at >= checkAt && at <= deadline);
+    return answered ? null : checkAt;
+  }
+  return null;
+}
+
+/**
  * 確認による自動停止を反映したセッション(2-1 の集計関数にそのまま渡せる形)。
  * 計測中(running)は stopAt を null のまま返す。入力は変更しない。
  */

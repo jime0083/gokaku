@@ -760,3 +760,17 @@
 - 影響:
   - 5-2b のアプリ内の確認は、計測開始からの経過時間で判断する設計なので、この受信イベントは使わない
   - 5-2c は応答の受け取りに addNotificationResponseReceivedListener と getLastNotificationResponseAsync を使う。受信イベントに頼る設計にしないこと
+
+## P-030 「勉強中？」の確認が iPhone Pro Max で Dynamic Island と重なる
+- 状態: 解決済み(2026-10-10 5-2b 再レビューPASSで確認)
+- 発見: 5-2b レビュー(gokaku-review)。Pro Max のシミュレータのスクショで確認
+- 問題内容:
+  - iPhone 16 Pro Max で、確認のカードの上部が Dynamic Island(画面上部の黒い部分)と重なる
+  - iPhone SE では問題がない
+- 原因:
+  - src/features/timer/StudyCheckOverlay.tsx の container が、top: 0 と固定の paddingTop(40px)だけで配置されていた
+  - 画面の安全な領域(useSafeAreaInsets)を使っていなかった
+  - Pro Max は上の安全域(約59pt)が 40px より大きいので、カードが Dynamic Island と重なった
+- 切り出したタスク: 5-2b の差し戻し(安全域を考慮して配置する)
+- 解決日: 2026-10-10
+- 解決内容: StudyCheckOverlay.tsx で useSafeAreaInsets を使い、paddingTop を insets.top + spacing.md にした。SE と Pro Max の両方で重ならないことをスクショで確かめた

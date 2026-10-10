@@ -74,6 +74,13 @@ export function toJstDateKey(epochMs: number): DateKey {
   ].join('-');
 }
 
+/** 時刻 → その時刻の日本時間の時・分(5-2b: 自動停止のお知らせ「○時○分」の表示に使う) */
+export function toJstHourMinute(epochMs: number): { hour: number; minute: number } {
+  assertEpochMs(epochMs, 'epochMs');
+  const shifted = new Date(epochMs + JST_OFFSET_MS);
+  return { hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() };
+}
+
 /** 日付キー → その日の 0:00(日本時間)の epoch ミリ秒 */
 export function jstStartOfDay(key: DateKey): number {
   const { year, month, day } = assertDateKey(key);

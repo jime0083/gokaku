@@ -7,25 +7,29 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  */
 export const STUDY_EVENT_QUEUE_STORAGE_KEY = 'timer:studyEventQueue:v1';
 
-export type PendingStudyEvent = {
-  sessionId: string;
-  action: 'start' | 'stop';
-  clientTimeMs: number;
-  idempotencyKey: string;
-};
+/**
+ * 'start' だけ checkEnabled(計測開始時点の「勉強中？」確認の ON/OFF。5-2b)を必須で持つ
+ * (recordStudyEvent が action が 'start' のときだけ checkEnabled を必須で受け取るため)
+ */
+export type PendingStudyEvent =
+  | { sessionId: string; action: 'start'; clientTimeMs: number; idempotencyKey: string; checkEnabled: boolean }
+  | { sessionId: string; action: 'stop' | 'confirm'; clientTimeMs: number; idempotencyKey: string };
 
 function isValidPendingEvent(value: unknown): value is PendingStudyEvent {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  return (
+  const baseOk =
     typeof record.sessionId === 'string' &&
     record.sessionId.length > 0 &&
-    (record.action === 'start' || record.action === 'stop') &&
+    (record.action === 'start' || record.action === 'stop' || record.action === 'confirm') &&
     typeof record.clientTimeMs === 'number' &&
     Number.isFinite(record.clientTimeMs) &&
     typeof record.idempotencyKey === 'string' &&
-    record.idempotencyKey.length > 0
-  );
+    record.idempotencyKey.length > 0;
+  if (!baseOk) {
+    return false;
+  }
+  return record.action === 'start' ? typeof record.checkEnabled === 'boolean' : true;
 }
 
 async function readQueue(): Promise<PendingStudyEvent[]> {

@@ -33,7 +33,12 @@ const { appendStudyEvent, loadStudyEventQueue } =
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('@/features/timer/studyEventQueue') as typeof import('@/features/timer/studyEventQueue');
 
-const BASE_EVENT = { sessionId: 'session-1', action: 'start' as const, clientTimeMs: 1_000 };
+const BASE_EVENT = {
+  sessionId: 'session-1',
+  action: 'start' as const,
+  clientTimeMs: 1_000,
+  checkEnabled: true,
+};
 
 describe('studyEventSender(5-1b-2)', () => {
   beforeEach(() => {
@@ -67,6 +72,24 @@ describe('studyEventSender(5-1b-2)', () => {
       }),
     );
     expect(await loadStudyEventQueue()).toEqual([]);
+  });
+
+  it('start の checkEnabled はハードコードせず、渡された値をそのまま送る(5-2b。5-2a からの申し送り)', async () => {
+    mockCallable.mockResolvedValue({ data: { status: 'recorded' } });
+
+    await enqueueAndSendStudyEvent({ ...BASE_EVENT, checkEnabled: false });
+
+    expect(mockCallable).toHaveBeenCalledWith(expect.objectContaining({ checkEnabled: false }));
+  });
+
+  it('stop・confirm では checkEnabled を送らない', async () => {
+    mockCallable.mockResolvedValue({ data: { status: 'recorded' } });
+
+    await enqueueAndSendStudyEvent({ sessionId: 'session-1', action: 'confirm', clientTimeMs: 2_000 });
+
+    const sentArg = mockCallable.mock.calls[0][0] as Record<string, unknown>;
+    expect(sentArg.action).toBe('confirm');
+    expect('checkEnabled' in sentArg).toBe(false);
   });
 
   it('送る値に region 指定の getFunctions と recordStudyEvent 向けの httpsCallable を使う', async () => {
@@ -118,6 +141,20 @@ describe('studyEventSender(5-1b-2)', () => {
     expect(await loadStudyEventQueue()).toEqual([]);
 
     // 外れた後に flush を呼んでも、もう何も送らない(列が空のため)
+    await flushStudyEventQueue();
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+  });
+
+  it('確認の上限に達した(resource-exhausted)場合も列から外れ、送り直されない(5-2b。5-2a からの申し送り)', async () => {
+    mockCallable.mockRejectedValue({
+      code: 'resource-exhausted',
+      details: { reason: 'confirmation-limit-exceeded' },
+    });
+
+    await enqueueAndSendStudyEvent({ sessionId: 'session-1', action: 'confirm', clientTimeMs: 2_000 });
+
+    expect(await loadStudyEventQueue()).toEqual([]);
+
     await flushStudyEventQueue();
     expect(mockCallable).toHaveBeenCalledTimes(1);
   });

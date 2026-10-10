@@ -2,6 +2,7 @@ import {
   aggregateEffectiveDailyStudyMinutes,
   aggregateEffectiveDailyStudyMs,
   type CheckedStudySession,
+  findPendingCheckAt,
   resolveSessionEnd,
   STUDY_CHECK_INTERVAL_MS,
   STUDY_CHECK_RESPONSE_WINDOW_MS,
@@ -337,5 +338,40 @@ describe('境界の追加ケース(レビュー追加)', () => {
       '2026-10-08': 1440,
       '2026-10-09': 120,
     });
+  });
+});
+
+describe('findPendingCheckAt(5-2b: どのタブでも画面の上に重ねて「勉強中？」を表示する判定)', () => {
+  it('確認時刻より前は null', () => {
+    expect(findPendingCheckAt(session(), checkAt(1) - 1)).toBeNull();
+  });
+
+  it('確認時刻ちょうどから応答期限ちょうどまで(両端を含む)は応答待ち', () => {
+    expect(findPendingCheckAt(session(), checkAt(1))).toBe(checkAt(1));
+    expect(findPendingCheckAt(session(), checkAt(1) + 5 * MIN)).toBe(checkAt(1));
+    expect(findPendingCheckAt(session(), checkAt(1) + 10 * MIN)).toBe(checkAt(1));
+  });
+
+  it('応答期限を過ぎたら応答待ちではない(resolveSessionEnd が check_timeout にする対象)', () => {
+    expect(findPendingCheckAt(session(), checkAt(1) + 10 * MIN + 1)).toBeNull();
+  });
+
+  it('その確認に応答済みなら null', () => {
+    expect(findPendingCheckAt(session({ confirmations: [checkAt(1) + 2 * MIN] }), checkAt(1) + 5 * MIN)).toBeNull();
+  });
+
+  it('前回の確認への応答は次の確認を満たさない(2回目は応答待ちのまま)', () => {
+    expect(
+      findPendingCheckAt(session({ confirmations: [checkAt(1) + 2 * MIN] }), checkAt(2) + 1 * MIN),
+    ).toBe(checkAt(2));
+  });
+
+  it('確認OFFは常に null', () => {
+    expect(findPendingCheckAt(session({ checkEnabled: false }), checkAt(1) + 5 * MIN)).toBeNull();
+  });
+
+  it('1回目に応答し2回目の応答待ちの最中は2回目の確認時刻を返す', () => {
+    const confirmations = [checkAt(1) + 1 * MIN];
+    expect(findPendingCheckAt(session({ confirmations }), checkAt(2) + 3 * MIN)).toBe(checkAt(2));
   });
 });

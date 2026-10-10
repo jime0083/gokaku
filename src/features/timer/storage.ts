@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addDays, jstStartOfDay, toJstDateKey, type StudySession } from '@shared/index';
+import { addDays, jstStartOfDay, toJstDateKey, type CheckedStudySession } from '@shared/index';
 
 /**
  * 計測セッションの端末内保存(requirements 3-2)。
@@ -8,20 +8,43 @@ import { addDays, jstStartOfDay, toJstDateKey, type StudySession } from '@shared
  * 「今 − 開始時刻」で経過時間を計算できるようにする(stopAt が null のセッションが計測中)。
  *
  * sessionId は計測開始時に作る ID(5-1b-2)。サーバーへの送信(停止時)で、開始と同じ sessionId を
- * 使うために、アプリを再起動しても分かるよう保存しているセッションに含める
+ * 使うために、アプリを再起動しても分かるよう保存しているセッションに含める。
+ *
+ * checkEnabled・confirmations(5-2b。requirements 3-2)は shared/studyCheck.ts の
+ * CheckedStudySession と同じ形で持ち、resolveSessionEnd・findPendingCheckAt にそのまま渡せるようにする
  */
 export const TIMER_SESSIONS_STORAGE_KEY = 'timer:sessions:v1';
 
-export type LocalStudySession = StudySession & { sessionId: string };
+export type LocalStudySession = CheckedStudySession & { sessionId: string };
 
-function isValidSession(value: unknown): value is LocalStudySession {
-  if (typeof value !== 'object' || value === null) return false;
+/**
+ * 保存されていた値を検査し、妥当な LocalStudySession に正規化する(妥当でなければ null)。
+ * checkEnabled・confirmations が無い・壊れている場合は初期値(ON・応答なし)で補う
+ * (5-2b 以前に保存されたセッションの形が残っていても壊れたものとして捨てないため)
+ */
+function parseSession(value: unknown): LocalStudySession | null {
+  if (typeof value !== 'object' || value === null) return null;
   const record = value as Record<string, unknown>;
   const startAtOk = typeof record.startAt === 'number' && Number.isFinite(record.startAt);
   const stopAtOk =
     record.stopAt === null || (typeof record.stopAt === 'number' && Number.isFinite(record.stopAt));
   const sessionIdOk = typeof record.sessionId === 'string' && record.sessionId.length > 0;
-  return startAtOk && stopAtOk && sessionIdOk;
+  if (!startAtOk || !stopAtOk || !sessionIdOk) {
+    return null;
+  }
+  const checkEnabled = typeof record.checkEnabled === 'boolean' ? record.checkEnabled : true;
+  const confirmations = Array.isArray(record.confirmations)
+    ? record.confirmations.filter(
+        (at): at is number => typeof at === 'number' && Number.isFinite(at),
+      )
+    : [];
+  return {
+    startAt: record.startAt as number,
+    stopAt: record.stopAt as number | null,
+    sessionId: record.sessionId as string,
+    checkEnabled,
+    confirmations,
+  };
 }
 
 /**
@@ -46,7 +69,9 @@ export async function loadLocalSessions(): Promise<LocalStudySession[]> {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isValidSession);
+    return parsed
+      .map(parseSession)
+      .filter((session): session is LocalStudySession => session !== null);
   } catch {
     return [];
   }
@@ -64,26 +89,62 @@ export function findActiveSession(sessions: readonly LocalStudySession[]): Local
 /**
  * 計測を開始する(requirements 3-2)。既に計測中の場合は何もせず現在の一覧を返す
  * (開始/停止ボタンの連打で二重に開始しないため)。
- * sessionId は呼び出し側(useTimerSession)が作った値を渡す(サーバーへの送信に使うため)
+ * sessionId は呼び出し側(useTimerSession)が作った値を渡す(サーバーへの送信に使うため)。
+ * checkEnabled は計測開始時点の「勉強中？」確認の ON/OFF(5-2b。users.checkEnabled を読んだ値)
  */
-export async function startLocalSession(now: number, sessionId: string): Promise<LocalStudySession[]> {
+export async function startLocalSession(
+  now: number,
+  sessionId: string,
+  checkEnabled: boolean,
+): Promise<LocalStudySession[]> {
   const sessions = await loadLocalSessions();
   if (findActiveSession(sessions)) {
     return sessions;
   }
-  const updated = pruneOldSessions([...sessions, { startAt: now, stopAt: null, sessionId }], now);
+  const updated = pruneOldSessions(
+    [...sessions, { startAt: now, stopAt: null, sessionId, checkEnabled, confirmations: [] }],
+    now,
+  );
   await saveLocalSessions(updated);
   return updated;
 }
 
-/** 計測を停止する。計測中のセッションがなければ何もしない */
-export async function stopLocalSession(now: number): Promise<LocalStudySession[]> {
+/**
+ * 計測を停止する。計測中のセッションがなければ何もしない。
+ * stopAt(省略時は now)に停止時刻を設定する。無応答による自動停止(5-2b)では、
+ * 実際に無応答が確定した確認の時刻(t_k。now より前)を stopAt に渡す
+ */
+export async function stopLocalSession(
+  now: number,
+  stopAt: number = now,
+): Promise<LocalStudySession[]> {
   const sessions = await loadLocalSessions();
   if (!findActiveSession(sessions)) {
     return sessions;
   }
   const updated = pruneOldSessions(
-    sessions.map((session) => (session.stopAt === null ? { ...session, stopAt: now } : session)),
+    sessions.map((session) => (session.stopAt === null ? { ...session, stopAt } : session)),
+    now,
+  );
+  await saveLocalSessions(updated);
+  return updated;
+}
+
+/**
+ * 「勉強中？」確認への応答(5-2b。requirements 3-2)。計測中のセッションの confirmations に
+ * 応答時刻(now)を追加する。計測中のセッションがなければ何もしない
+ */
+export async function addLocalConfirmation(now: number): Promise<LocalStudySession[]> {
+  const sessions = await loadLocalSessions();
+  if (!findActiveSession(sessions)) {
+    return sessions;
+  }
+  const updated = pruneOldSessions(
+    sessions.map((session) =>
+      session.stopAt === null
+        ? { ...session, confirmations: [...session.confirmations, now] }
+        : session,
+    ),
     now,
   );
   await saveLocalSessions(updated);

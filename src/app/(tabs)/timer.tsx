@@ -8,10 +8,11 @@ import {
   fetchActiveGoalDailyTargets,
   type ActiveGoalDailyTargets,
 } from '@/features/goals/activeGoalRepository';
-import { formatElapsedClock } from '@/features/timer/format';
+import { formatElapsedClock, formatJstHourMinute } from '@/features/timer/format';
 import { calcProgressRatio } from '@/features/timer/progress';
 import { useTimerSessionContext } from '@/features/timer/TimerSessionContext';
 import { colors } from '@/theme/colors';
+import { radius } from '@/theme/radius';
 import { spacing } from '@/theme/spacing';
 import { typography } from '@/theme/typography';
 
@@ -29,7 +30,16 @@ function formatHoursMinutesDisplay(totalMinutes: number): string {
  */
 export default function TimerScreen() {
   const insets = useSafeAreaInsets();
-  const { isLoading, isRunning, elapsedMs, todayMinutes, start, stop } = useTimerSessionContext();
+  const {
+    isLoading,
+    isRunning,
+    elapsedMs,
+    todayMinutes,
+    start,
+    stop,
+    autoStopNotice,
+    dismissAutoStopNotice,
+  } = useTimerSessionContext();
   const [goalTargets, setGoalTargets] = useState<ActiveGoalDailyTargets | null | undefined>(undefined);
 
   useEffect(() => {
@@ -54,6 +64,21 @@ export default function TimerScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
+      {autoStopNotice ? (
+        <View testID="timer-auto-stop-notice" style={styles.notice}>
+          <Text testID="timer-auto-stop-notice-text" style={styles.noticeText}>
+            {`「勉強中？」に応答がなかったため、${formatJstHourMinute(autoStopNotice.stoppedAt)}で計測を停止しました`}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            testID="timer-auto-stop-notice-close-button"
+            onPress={() => void dismissAutoStopNotice()}
+          >
+            <Text style={styles.noticeCloseText}>閉じる</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       <View style={styles.centerArea}>
         <Text testID="timer-elapsed-text" style={styles.elapsed}>
           {formatElapsedClock(elapsedMs)}
@@ -114,6 +139,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
     justifyContent: 'space-between',
+  },
+  notice: {
+    marginTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+  },
+  noticeText: {
+    flex: 1,
+    marginRight: spacing.md,
+    fontSize: typography.caption.fontSize,
+    color: colors.text,
+  },
+  noticeCloseText: {
+    fontSize: typography.caption.fontSize,
+    fontWeight: 'bold',
+    color: colors.primary,
   },
   centerArea: {
     flex: 1,
