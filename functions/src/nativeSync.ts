@@ -6,6 +6,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { FUNCTIONS_REGION } from './config';
 import { hashDeviceToken } from './deviceTokenHash';
 import { ensureAdminApp } from './firebaseAdmin';
+import { enforceRateLimit, RateLimitExceededError } from './rateLimit';
 import {
   createProductionRecordStudySessionEventDeps,
   RECORD_STUDY_EVENT_ACTIONS,
@@ -44,8 +45,13 @@ import {
  * - 本文の形が不正(ID の形・action・clientTimeMs・start なのに checkEnabled が無い等) → 400 invalid_body
  * - Authorization が無い・トークンが不正・期限切れ・uid が持ち主と違う → 401 unauthorized(送り直しても変わらないので捨てる)
  * - 架空の goalId(本人の目標として存在しない) → 400 goal_not_found(送り直しても変わらないので捨てる)
+ * - 1分あたりの呼び出し回数の上限超え → 429 rate_limited(少し待てば通る。送り直してよい。5-3b-2)
  * - confirmations の上限超え → 429 confirmation_limit_exceeded(送り直しても変わらないので捨てる)
  * - それ以外の予期しない失敗 → 500 internal(送り直してよい)
+ *
+ * 呼び出し回数の制限(5-3b-2。requirements 3-2「大量の呼び出しへの対策」): デバイストークンの検証
+ * (持ち主・期限)に通った直後・recordStudySessionEvent を呼ぶ前に数える(不正なリクエストでカウンタを
+ * 増やさない)。recordStudyEvent(Callable。source=app)と同じ枠(kind='study-event')を共有する
  */
 
 // Firestore のドキュメントID(uid・sessionId・idempotencyKey・goalId)として安全な形式に限定する
@@ -147,6 +153,19 @@ export const nativeSync = onRequest({ region: FUNCTIONS_REGION }, async (req, re
     return;
   }
 
+  const deps = createProductionRecordStudySessionEventDeps();
+
+  try {
+    await enforceRateLimit(body.uid, 'study-event', deps);
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    res.status(500).json({ error: 'internal' });
+    return;
+  }
+
   try {
     await recordStudySessionEvent(
       body.uid,
@@ -159,7 +178,7 @@ export const nativeSync = onRequest({ region: FUNCTIONS_REGION }, async (req, re
         idempotencyKey: body.idempotencyKey,
         checkEnabled: body.checkEnabled,
       },
-      createProductionRecordStudySessionEventDeps(),
+      deps,
     );
   } catch (error) {
     if (error instanceof RecordStudySessionEventError) {

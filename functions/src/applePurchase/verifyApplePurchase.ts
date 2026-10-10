@@ -6,6 +6,7 @@ import { APIError, APIException, type JWSTransactionDecodedPayload } from '@appl
 import { FUNCTIONS_REGION } from '../config';
 import { deriveAppAccountToken, isKnownAppleIapProductId } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
+import { enforceRateLimit, RateLimitExceededError } from '../rateLimit';
 import { createAppleApiClient, createAppleSignedDataVerifier, type AppleEnvironmentName } from './appleClients';
 import { APPLE_IAP_ISSUER_ID, APPLE_IAP_KEY_ID, APPLE_IAP_SIGNING_KEY } from './config';
 
@@ -231,7 +232,13 @@ export async function verifyApplePurchaseCore(uid: string, transactionId: string
   });
 }
 
-/** onCall の入口。認証・入力チェックのうえで verifyApplePurchaseCore を呼び、エラーを HttpsError に変換する */
+/**
+ * onCall の入口。認証・呼び出し回数の制限・入力チェックのうえで verifyApplePurchaseCore を呼び、
+ * エラーを HttpsError に変換する。
+ *
+ * 呼び出し回数の制限(5-3b-2。requirements 3-2「大量の呼び出しへの対策」)は、request.auth.uid が
+ * 確定した直後(Callable は呼び出し時点で ID トークンの検証済み)・入力チェックより前に数える
+ */
 export async function handleVerifyApplePurchaseRequest(
   request: Pick<CallableRequest<unknown>, 'auth' | 'data'>,
   deps: VerifyApplePurchaseDeps,
@@ -239,6 +246,15 @@ export async function handleVerifyApplePurchaseRequest(
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError('unauthenticated', 'ログインが必要です');
+  }
+
+  try {
+    await enforceRateLimit(uid, 'purchase-verify', deps);
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) {
+      throw new HttpsError('resource-exhausted', error.message, { reason: 'rate-limited' });
+    }
+    throw new HttpsError('internal', '購入の確認中にエラーが発生しました');
   }
 
   const data = request.data as { transactionId?: unknown } | null | undefined;

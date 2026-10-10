@@ -159,6 +159,24 @@ describe('studyEventSender(5-1b-2)', () => {
     expect(mockCallable).toHaveBeenCalledTimes(1);
   });
 
+  it('呼び出し回数の上限(rate-limited)の場合は列に残り、次の機会に送り直される(5-3b-2)', async () => {
+    mockCallable.mockRejectedValueOnce({
+      code: 'resource-exhausted',
+      details: { reason: 'rate-limited' },
+    });
+
+    await enqueueAndSendStudyEvent(BASE_EVENT);
+
+    expect(await loadStudyEventQueue()).toHaveLength(1);
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+
+    mockCallable.mockResolvedValueOnce({ data: { status: 'recorded' } });
+    await flushStudyEventQueue();
+
+    expect(mockCallable).toHaveBeenCalledTimes(2);
+    expect(await loadStudyEventQueue()).toEqual([]);
+  });
+
   it('目標の ID が取れない(未ログイン・目標なし)場合は送らずに列に残す', async () => {
     mockFetchActiveGoalId.mockResolvedValue(null);
 

@@ -750,6 +750,55 @@ describe('deviceTokens(Phase 1-4 技術検証: ネイティブ同期用デバイ
   });
 });
 
+// 5-3b-2: 呼び出し回数の制限のカウンタ(rateLimits)は、deviceTokens と同じ理由で
+// クライアントから一切読み書きできてはならない(サーバー(Cloud Functions の Admin SDK)だけが読み書きする)
+describe('rateLimits(5-3b-2: 呼び出し回数の制限のカウンタ)', () => {
+  const RATE_LIMIT_DOC_ID = `${OWNER_UID}_study-event_1`;
+
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID), { count: 1 });
+    });
+  });
+
+  it('本人でも rateLimits を読めない', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID)));
+  });
+
+  it('他人も rateLimits を読めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID)));
+  });
+
+  it('本人でも rateLimits に書き込めない(カウンタの改ざん防止)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(setDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID), { count: 0 }));
+  });
+
+  it('他人も rateLimits に書き込めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(setDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID), { count: 0 }));
+  });
+
+  it('未ログインは rateLimits を読めない', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+
+    await assertFails(getDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID)));
+  });
+
+  it('未ログインは rateLimits に書き込めない', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+
+    await assertFails(setDoc(doc(db, 'rateLimits', RATE_LIMIT_DOC_ID), { count: 0 }));
+  });
+});
+
 // users/{uid}/syncEvents(Phase 1-4 技術検証用のコレクション)は、5-3b-1 で nativeSync が
 // recordStudySessionEvent(共通処理)を使うように直したことで書き込まれなくなった。
 // クライアントからの読み書きの扱いは、サーバーのみが書き込む他のコレクション(sessions・sessionEvents。

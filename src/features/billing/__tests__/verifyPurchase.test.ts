@@ -91,6 +91,13 @@ describe('verifyApplePurchase', () => {
     await expect(verifyApplePurchase('111')).resolves.toEqual({ status: 'verification-unavailable' });
   });
 
+  // 5-3b-2: 呼び出し回数の上限(resource-exhausted, reason: rate-limited)も、今の「確認できない」の
+  // 扱い(verification-unavailable。再試行を促す文言)のままで変えない(通常の使い方では起きない想定のため)
+  it('details.reason が rate-limited(呼び出し回数の上限)の場合も verification-unavailable として返す', async () => {
+    mockCallable.mockRejectedValue({ code: 'resource-exhausted', details: { reason: 'rate-limited' } });
+    await expect(verifyApplePurchase('111')).resolves.toEqual({ status: 'verification-unavailable' });
+  });
+
   it('data の形が想定外(status が active/expired 以外)の場合は verification-unavailable', async () => {
     mockCallable.mockResolvedValue({ data: null });
     await expect(verifyApplePurchase('111')).resolves.toEqual({ status: 'verification-unavailable' });

@@ -2,6 +2,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 import { addDays, jstStartOfDay, toJstDateKey } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
+import { RATE_LIMITS, rateLimitDocPath } from '../rateLimit';
 import { handleRecordStudyEventRequest } from '../studySession/recordStudyEvent';
 import {
   MAX_CONFIRMATIONS_PER_SESSION,
@@ -680,6 +681,70 @@ describe('handleRecordStudyEventRequest', () => {
     ])('%s', async (_label, data) => {
       const error = await handleRecordStudyEventRequest({ auth: authData, data }, deps).catch((e) => e);
       expect(error).toMatchObject({ code: 'invalid-argument' });
+    });
+  });
+
+  describe('呼び出し回数の制限(5-3b-2。requirements 3-2「大量の呼び出しへの対策」)', () => {
+    async function seedRateLimitCount(uid: string, nowMs: number, count: number): Promise<void> {
+      ensureAdminApp();
+      await getFirestore().doc(rateLimitDocPath(uid, 'study-event', nowMs)).set({ count });
+    }
+
+    it('上限の1回手前まで数えてあっても、もう1回は通る(境界)', async () => {
+      const authUid = uniqueId('uid-rate-ok');
+      const goalId = uniqueId('goal');
+      await createGoal(authUid, goalId);
+      const nowMs = Date.now();
+      const deps = buildDeps(nowMs);
+      await seedRateLimitCount(authUid, nowMs, RATE_LIMITS['study-event'] - 1);
+      const authData = { uid: authUid, token: {} as never, rawToken: '' };
+
+      const result = await handleRecordStudyEventRequest(
+        { auth: authData, data: buildInput({ sessionId: uniqueId('session'), goalId }) },
+        deps,
+      );
+      expect(result).toEqual({ status: 'recorded' });
+    });
+
+    it('上限に達していると HttpsError(resource-exhausted, reason: rate-limited)。sessions には保存されない', async () => {
+      const authUid = uniqueId('uid-rate-exceeded');
+      const goalId = uniqueId('goal');
+      const sessionId = uniqueId('session');
+      await createGoal(authUid, goalId);
+      const nowMs = Date.now();
+      const deps = buildDeps(nowMs);
+      await seedRateLimitCount(authUid, nowMs, RATE_LIMITS['study-event']);
+      const authData = { uid: authUid, token: {} as never, rawToken: '' };
+
+      const error = await handleRecordStudyEventRequest(
+        { auth: authData, data: buildInput({ sessionId, goalId }) },
+        deps,
+      ).catch((e) => e);
+
+      expect(error).toMatchObject({ code: 'resource-exhausted', details: { reason: 'rate-limited' } });
+      const session = await getFirestoreDoc(`users/${authUid}/sessions/${sessionId}`);
+      expect(session).toBeNull();
+    });
+
+    it('次の1分になると、上限に達していても再び通る', async () => {
+      const authUid = uniqueId('uid-rate-next-minute');
+      const goalId = uniqueId('goal');
+      await createGoal(authUid, goalId);
+      const nowMs = Date.now();
+      await seedRateLimitCount(authUid, nowMs, RATE_LIMITS['study-event']);
+      const authData = { uid: authUid, token: {} as never, rawToken: '' };
+
+      const stillLimited = await handleRecordStudyEventRequest(
+        { auth: authData, data: buildInput({ sessionId: uniqueId('session'), goalId }) },
+        buildDeps(nowMs),
+      ).catch((e) => e);
+      expect(stillLimited).toMatchObject({ code: 'resource-exhausted' });
+
+      const result = await handleRecordStudyEventRequest(
+        { auth: authData, data: buildInput({ sessionId: uniqueId('session'), goalId }) },
+        buildDeps(nowMs + 60_000),
+      );
+      expect(result).toEqual({ status: 'recorded' });
     });
   });
 });

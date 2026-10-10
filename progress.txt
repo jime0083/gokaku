@@ -497,7 +497,7 @@ Phase 5: タイマー
       - syncEvents への書き込みと、そのルールのテスト4件を廃止した
       - Swift 側は 5-3c まで古い形のまま(ロック画面からの送信は 5-3c まで届かない)
 
-[ ] 5-3b-2 呼び出し回数の制限と、通知の入口の上限  【セキュリティ確認】
+[x] 5-3b-2 呼び出し回数の制限と、通知の入口の上限  【セキュリティ確認】
     内容: ユーザーごとに1分あたりの呼び出し回数の上限を付ける(requirements 3-2。2026-10-10 決定)。
           - 対象: recordStudyEvent・nativeSync(計測の記録。目安60回/分)、verifyApplePurchase(目安10回/分)
           - 超えたら断る(resource-exhausted / 429)
@@ -509,7 +509,26 @@ Phase 5: タイマー
           - 上限を超えたら断る
           - 時間がたつと戻る
           - 通知の入口が大きすぎるデータを断る
-          アプリ側は resource-exhausted を送り直さない(5-2b で対応済み)ことを確かめる
+          アプリ側は、回数の制限(rate-limited)では送り直し、確認の上限(confirmation-limit-exceeded)では送り直さないことを確かめる
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - 1回目は FAIL: requirements に確定値を書いていなかった(メインエージェントの書き漏れ)。追記して PASS
+      - 新規: functions/src/rateLimit.ts(上限 60/10。計測の記録は Callable と nativeSync で枠を共有)
+      - appleServerNotification: maxInstances 10、64KB を超えたら 413
+      - アプリ: rate-limited なら列に残す
+      - 残りの指摘は 5-3b-3 で扱う
+
+[ ] 5-3b-3 ロック画面の入口の上限と、カウンタの片付けの設定  【セキュリティ確認】
+    内容: 5-3b-2 のレビュー・セキュリティ確認からの申し送り。
+          (1) nativeSync にも maxInstances と本文の大きさの上限を付ける(req.rawBody.byteLength で判定し、413 を返す)。値は appleServerNotification に合わせる
+          (2) firestore.indexes.json の fieldOverrides に rateLimits.expireAt の TTL(ttl: true)を書き、firebase deploy で TTL を有効にできる形にする(手動作業にしない)。
+              rateLimit.ts の「手動で設定」というコメントを直す
+          (3) appleServerNotification のコメントに、本文の解析は 413 の判定より前に走ることを書き足す
+          (4) studyEventSender で、未知の reason の resource-exhausted が列に残ることのテストを足す
+    完了条件:
+          - Emulator のテストで、nativeSync が大きすぎる本文を 413 で断ること
+          - firestore.indexes.json に TTL の設定があること(firebase-tools の形式に合っていること)
+          - 未知の reason のテストが緑であること
+          - typecheck / lint / test / test:functions / test:rules が緑であること
 
 [ ] 5-3c Swift の送信処理の一本化と本番接続の設定
     内容: modules/study-sync と targets/widget に重複している送信処理を1か所にまとめる。送信先 URL を設定から読む(http://127.0.0.1 の直書きをやめる)。

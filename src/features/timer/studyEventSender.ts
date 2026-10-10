@@ -28,16 +28,34 @@ export type StudyEventAction = PendingStudyEvent['action'];
  * - invalid-argument: 入力の形が不正・指定された目標が見つからない(4-2c-0 で確認した通り、RNFB では
  *   接頭辞なしの値。入力はこのモジュールが組み立てる固定の形のため実際には起きない想定だが、将来の変更で
  *   起きても再送を繰り返さないよう同じ扱いにする)
- * - resource-exhausted: 1つの計測に保存できる confirmations の数の上限に達している(5-2a)。
- *   上限に達した状態は送り直しても変わらないため列から外す(5-2b。5-2a からの申し送り)
  * それ以外(認証切れ・サーバー内部エラー・オフライン等の通信エラー)は、やり直せば成功する可能性があるため
  * 列に残して再送する
  */
-const PERMANENT_FAILURE_CODES = new Set(['invalid-argument', 'resource-exhausted']);
+const PERMANENT_FAILURE_CODES = new Set(['invalid-argument']);
+
+/**
+ * resource-exhausted は理由(details.reason)によって扱いを分ける(5-3b-2。5-2b からの申し送り。requirements 3-2)。
+ * - confirmation-limit-exceeded: 1つの計測に保存できる confirmations の数の上限に達している(5-2a)。
+ *   上限に達した状態は送り直しても変わらないため列から外す(5-2b からの対応を維持)
+ * - rate-limited: ユーザーごとの1分あたりの呼び出し回数の上限に達している(5-3b-2)。
+ *   少し待てば(次の1分になれば)通るようになるため、列から外さず残して再送する
+ * reason が上のどちらでもない(想定外)場合は、データを失わない側に倒して列に残す
+ */
+const PERMANENT_RESOURCE_EXHAUSTED_REASONS = new Set(['confirmation-limit-exceeded']);
 
 function isPermanentFailure(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  return typeof code === 'string' && PERMANENT_FAILURE_CODES.has(code);
+  if (typeof code !== 'string') {
+    return false;
+  }
+  if (PERMANENT_FAILURE_CODES.has(code)) {
+    return true;
+  }
+  if (code === 'resource-exhausted') {
+    const reason = (error as { details?: { reason?: unknown } } | null | undefined)?.details?.reason;
+    return typeof reason === 'string' && PERMANENT_RESOURCE_EXHAUSTED_REASONS.has(reason);
+  }
+  return false;
 }
 
 async function callRecordStudyEvent(event: PendingStudyEvent, goalId: string): Promise<void> {

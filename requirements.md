@@ -78,8 +78,16 @@
 - 大量の呼び出しへの対策(2026-10-10 ユーザー決定: 回数の制限。App Check は使わない)
   - 計測の記録(アプリからの Callable・ロック画面からの nativeSync)と購入の確認は、ユーザーごとに1分あたりの呼び出し回数に上限を設け、超えたら断る
     - 上限は、普通の使い方では届かない値にする
-    - 目安: 計測の記録は1分あたり60回、購入の確認は1分あたり10回。値は 5-3b で決めて記録する
+    - 確定値(2026-10-10。5-3b-2): 計測の記録は1人1分あたり60回(アプリの recordStudyEvent とロック画面の nativeSync で同じ枠を共有)、購入の確認(verifyApplePurchase)は1人1分あたり10回
+    - 数え方: Firestore の rateLimits/{uid}_{種類}_{分の番号} を、トランザクションで数える(1分ごとの固定の区切り)。
+      数えるのはログインやトークンの確認が通った後だけ(不正な呼び出しでは数えない)。
+      カウンタには expireAt(その分の終わりから5分後)を持たせ、Firestore の TTL で片付ける。rateLimits はクライアントから読み書きできない
+    - 超えたときの応答:
+      - Callable は resource-exhausted(details.reason = rate-limited)、nativeSync は 429 rate_limited
+      - アプリは、回数の制限で断られた記録は端末に残して後で送り直す
+      - 確認の応答の上限(confirmation-limit-exceeded)で断られたものは、送り直さない
   - 誰でも呼べる Apple の通知の入口(appleServerNotification)には、同時に動く数の上限(maxInstances)と、受け取るデータの大きさの上限を設ける
+    - 確定値(2026-10-10。5-3b-2): maxInstances 10、本文 64KB まで(超えたら 413)。Apple の通知は数KB程度
 - アプリからの記録の保存(2026-10-10 記載。サーバー内部の仕組み):
   - 計測の開始時に端末でセッションID(sessionId)を作る。開始・停止の操作は「sessionId・操作(start/stop)・端末時刻・idempotencyKey」の形で送る
     (ロック画面からの操作(5-3)も同じ sessionId と形を使い、アプリとロック画面で同じセッションを開始・停止できるようにする)

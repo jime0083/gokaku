@@ -4,6 +4,9 @@ import { AppStoreServerAPIClient, Environment, NotificationTypeV2, SignedDataVer
 
 import { deriveAppAccountToken, MONTHLY_PRODUCT_ID } from '../domain';
 import {
+  APPLE_SERVER_NOTIFICATION_MAX_BODY_BYTES,
+  APPLE_SERVER_NOTIFICATION_MAX_INSTANCES,
+  APPLE_SERVER_NOTIFICATION_OPTIONS,
   handleAppleServerNotification,
   type AppleServerNotificationDeps,
 } from '../applePurchase/appleServerNotification';
@@ -505,5 +508,34 @@ describe('appleServerNotification (Functions Emulator・HTTP)', () => {
     const res = await fetch(functionUrl('appleServerNotification'), { method: 'GET' });
     expect(res.status).toBe(405);
     expect(res.headers.get('allow')).toBe('POST');
+  });
+
+  // 5-3b-2: 誰でも呼べる入口(requirements 3-2「大量の呼び出しへの対策」)の本文サイズの上限
+  it('本文が上限(64KB)を超えると 413 を返す(秘密情報の設定がなくても判定できる)', async () => {
+    const oversizedPayload = 'a'.repeat(APPLE_SERVER_NOTIFICATION_MAX_BODY_BYTES + 1024);
+    const res = await fetch(functionUrl('appleServerNotification'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signedPayload: oversizedPayload }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('本文が上限(64KB)以内であれば 413 にはならない(不正な署名として 400 になる)', async () => {
+    const res = await fetch(functionUrl('appleServerNotification'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signedPayload: 'not-a-real-jwt' }),
+    });
+    expect(res.status).not.toBe(413);
+  });
+});
+
+// 5-3b-2: 同時に動くインスタンス数の上限(maxInstances)が設定値どおりであることを確認する
+// (Cloud Run のスケーリング自体は Emulator・Jest では再現できないため、onRequest に渡している
+// options の値をコードから直接確認する)
+describe('appleServerNotification の maxInstances(5-3b-2)', () => {
+  it('maxInstances が設定されている', () => {
+    expect(APPLE_SERVER_NOTIFICATION_OPTIONS.maxInstances).toBe(APPLE_SERVER_NOTIFICATION_MAX_INSTANCES);
   });
 });

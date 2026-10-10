@@ -4,6 +4,9 @@ import { issueDeviceTokenForUid } from '../deviceToken/issueDeviceToken';
 import { revokeDeviceToken } from '../deviceToken/revokeDeviceToken';
 import { hashDeviceToken } from '../deviceTokenHash';
 import { ensureAdminApp } from '../firebaseAdmin';
+import { RATE_LIMITS, rateLimitDocPath } from '../rateLimit';
+import { handleRecordStudyEventRequest } from '../studySession/recordStudyEvent';
+import { MAX_CONFIRMATIONS_PER_SESSION } from '../studySession/recordStudySessionEvent';
 import { functionUrl, getFirestoreDoc, listFirestoreDocs } from './emulator';
 
 /**
@@ -238,6 +241,116 @@ describe('nativeSync (Functions Emulator)', () => {
 
     const session = await getFirestoreDoc(`users/${otherUid}/sessions/${sessionId}`);
     expect(session).toBeNull();
+  });
+
+  // 5-3b-1 からの申し送り: confirmations の上限を超えたときに 429 になることを HTTP 経由で確かめる
+  it('confirmations の上限件数に達していると 429(confirmation_limit_exceeded)', async () => {
+    const uid = uniqueUid('confirm-limit');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(uid, goalId);
+    const token = await issueToken(uid);
+    ensureAdminApp();
+    const existing = Array.from({ length: MAX_CONFIRMATIONS_PER_SESSION }, (_, i) => Date.now() - i);
+    await getFirestore().doc(`users/${uid}/sessions/${sessionId}`).set({ confirmations: existing });
+
+    const res = await send(buildBody({ uid, sessionId, goalId, action: 'confirm' }), token);
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('confirmation_limit_exceeded');
+  });
+});
+
+// 5-3b-2: ユーザーごとの1分あたりの呼び出し回数の制限(requirements 3-2「大量の呼び出しへの対策」)
+describe('nativeSync の呼び出し回数の制限(5-3b-2)', () => {
+  const nativeSyncUrl = functionUrl('nativeSync');
+
+  async function issueToken(uid: string): Promise<string> {
+    const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
+    return deviceToken;
+  }
+
+  function buildBody(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      action: 'stop',
+      clientTimeMs: Date.now(),
+      idempotencyKey: uniqueId('evt'),
+      ...overrides,
+    };
+  }
+
+  async function send(body: Record<string, unknown>, token: string): Promise<Response> {
+    return fetch(nativeSyncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('上限に達していると 429(rate_limited)', async () => {
+    const uid = uniqueUid('rate-limited');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(uid, goalId);
+    const token = await issueToken(uid);
+    const nowMs = Date.now();
+    ensureAdminApp();
+    await getFirestore().doc(rateLimitDocPath(uid, 'study-event', nowMs)).set({ count: RATE_LIMITS['study-event'] });
+
+    const res = await send(buildBody({ uid, sessionId, goalId, action: 'stop' }), token);
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('rate_limited');
+    const session = await getFirestoreDoc(`users/${uid}/sessions/${sessionId}`);
+    expect(session).toBeNull();
+  });
+
+  it('不正なデバイストークンでの呼び出しはカウンタを増やさない', async () => {
+    const uid = uniqueUid('invalid-token-no-count');
+    const nowMs = Date.now();
+
+    const res = await send(buildBody({ uid, sessionId: uniqueId('session'), goalId: uniqueId('goal') }), 'invalid-token-value');
+    expect(res.status).toBe(401);
+
+    const snap = await getFirestoreDoc(rateLimitDocPath(uid, 'study-event', nowMs));
+    expect(snap).toBeNull();
+  });
+
+  it('recordStudyEvent(Callable)と nativeSync は同じ枠を共有する', async () => {
+    const uid = uniqueUid('shared-bucket');
+    const goalId = uniqueId('goal');
+    await createGoal(uid, goalId);
+    const token = await issueToken(uid);
+    const callableDeps = { now: () => Date.now() };
+    const authData = { uid, token: {} as never, rawToken: '' };
+
+    // Callable(recordStudyEvent)側だけで上限いっぱいまで呼ぶ
+    for (let i = 0; i < RATE_LIMITS['study-event']; i += 1) {
+      const result = await handleRecordStudyEventRequest(
+        {
+          auth: authData,
+          data: {
+            sessionId: uniqueId('session'),
+            goalId,
+            action: 'start',
+            source: 'app',
+            clientTimeMs: Date.now(),
+            idempotencyKey: uniqueId('evt'),
+            checkEnabled: true,
+          },
+        },
+        callableDeps,
+      );
+      expect(result).toEqual({ status: 'recorded' });
+    }
+
+    // nativeSync(ロック画面)側は同じ uid で初めての呼び出しでも、既に上限に達しているので 429
+    const res = await send(buildBody({ uid, sessionId: uniqueId('session'), goalId, action: 'stop' }), token);
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('rate_limited');
   });
 });
 

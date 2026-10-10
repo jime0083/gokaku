@@ -1,8 +1,12 @@
 import jwt from 'jsonwebtoken';
 
+import { getFirestore } from 'firebase-admin/firestore';
+
 import { AppStoreServerAPIClient, Environment, SignedDataVerifier } from '@apple/app-store-server-library';
 
 import { deriveAppAccountToken, MONTHLY_PRODUCT_ID } from '../domain';
+import { ensureAdminApp } from '../firebaseAdmin';
+import { RATE_LIMITS, rateLimitDocPath } from '../rateLimit';
 import {
   handleVerifyApplePurchaseRequest,
   verifyApplePurchaseCore,
@@ -511,5 +515,56 @@ describe('handleVerifyApplePurchaseRequest', () => {
 
     const error = await handleVerifyApplePurchaseRequest({ auth: authData, data: { transactionId } }, deps).catch((e) => e);
     expect(error).toMatchObject({ code: 'unavailable', details: { reason: 'verification-unavailable' } });
+  });
+
+  describe('呼び出し回数の制限(5-3b-2。requirements 3-2「大量の呼び出しへの対策」)', () => {
+    async function seedRateLimitCount(uid: string, nowMs: number, count: number): Promise<void> {
+      ensureAdminApp();
+      await getFirestore().doc(rateLimitDocPath(uid, 'purchase-verify', nowMs)).set({ count });
+    }
+
+    it('上限の1回手前まで数えてあっても、もう1回は通る(境界。通信エラーで確認できなくても回数は数えられている)', async () => {
+      const uid = uniqueId('uid-rate-ok');
+      const transactionId = uniqueTransactionId();
+      const nowMs = Date.now();
+      await seedRateLimitCount(uid, nowMs, RATE_LIMITS['purchase-verify'] - 1);
+      const deps = buildDeps({ production: { transactionInfo: { throws: new Error('network down') } }, now: nowMs });
+      const authData = { uid, token: {} as never, rawToken: '' };
+
+      const error = await handleVerifyApplePurchaseRequest({ auth: authData, data: { transactionId } }, deps).catch((e) => e);
+      expect(error).toMatchObject({ code: 'unavailable', details: { reason: 'verification-unavailable' } });
+    });
+
+    it('上限に達していると HttpsError(resource-exhausted, reason: rate-limited)', async () => {
+      const uid = uniqueId('uid-rate-exceeded');
+      const transactionId = uniqueTransactionId();
+      const nowMs = Date.now();
+      await seedRateLimitCount(uid, nowMs, RATE_LIMITS['purchase-verify']);
+      const deps = buildDeps({ now: nowMs });
+      const authData = { uid, token: {} as never, rawToken: '' };
+
+      const error = await handleVerifyApplePurchaseRequest({ auth: authData, data: { transactionId } }, deps).catch((e) => e);
+      expect(error).toMatchObject({ code: 'resource-exhausted', details: { reason: 'rate-limited' } });
+    });
+
+    it('次の1分になると、上限に達していても再び通る', async () => {
+      const uid = uniqueId('uid-rate-next-minute');
+      const nowMs = Date.now();
+      await seedRateLimitCount(uid, nowMs, RATE_LIMITS['purchase-verify']);
+      const authData = { uid, token: {} as never, rawToken: '' };
+
+      const stillLimited = await handleVerifyApplePurchaseRequest(
+        { auth: authData, data: { transactionId: uniqueTransactionId() } },
+        buildDeps({ now: nowMs }),
+      ).catch((e) => e);
+      expect(stillLimited).toMatchObject({ code: 'resource-exhausted' });
+
+      const error = await handleVerifyApplePurchaseRequest(
+        { auth: authData, data: { transactionId: uniqueTransactionId() } },
+        buildDeps({ production: { transactionInfo: { throws: new Error('network down') } }, now: nowMs + 60_000 }),
+      ).catch((e) => e);
+      // 上限はもう引っかからない(別のエラー=verification-unavailable になる)
+      expect(error).toMatchObject({ code: 'unavailable', details: { reason: 'verification-unavailable' } });
+    });
   });
 });

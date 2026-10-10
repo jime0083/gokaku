@@ -20,6 +20,18 @@ import {
  * 通知の種類(更新・解約・期限切れ・取り消し等)ごとに内容を組み立てず、通知の signedTransactionInfo から
  * originalTransactionId を取り出し(署名検証のうえ)、4-2a と同じ fetchAndApplyLatestSubscriptionStatus で
  * Apple から最新の状態を取り直す。通知が前後して届いても、常に最新の状態になる
+ *
+ * 大量の呼び出しへの対策(5-3b-2。requirements 3-2「誰でも呼べる Apple の通知の入口...には、同時に動く数の
+ * 上限(maxInstances)と、受け取るデータの大きさの上限を設ける」):
+ * - この入口は URL を知っていれば誰でも呼べる(Apple の署名検証はリクエストボディを読んだ後にしかできないため、
+ *   ユーザーごとの回数制限は使えない。かわりに同時に動くインスタンス数を APPLE_SERVER_NOTIFICATION_MAX_INSTANCES
+ *   に制限し、無制限な同時アクセスでの課金増加・Apple API への負荷を防ぐ)
+ * - 受け取る本文は APPLE_SERVER_NOTIFICATION_MAX_BODY_BYTES(64KB)を超えたら 413 で断る(JSON の解析・
+ *   署名検証に進む前に、実際に受信したバイト数(req.rawBody)で判定する)。
+ *   Apple の通知本文は signedPayload 1本の JWT(ヘッダー+ペイロード+署名の3パートを base64url 化した文字列)で、
+ *   ペイロードの中の signedTransactionInfo・signedRenewalInfo もそれぞれ同様の JWT 1本であり、実測・公開ドキュメントの
+ *   サンプルはいずれも数KB程度(未確認: Apple は本文サイズの上限を公式には明記していない)。64KB は想定される
+ *   実際の大きさに対して十分な余裕(10倍以上)を持たせた値
  */
 
 export interface AppleNotificationVerifierLike extends AppleTransactionVerifierLike {
@@ -43,6 +55,19 @@ export function createProductionNotificationDeps(): AppleServerNotificationDeps 
 
 export type AppleServerNotificationOutcome = 'ok' | 'test' | 'no-owner' | 'invalid' | 'unavailable';
 export type AppleServerNotificationResult = { outcome: AppleServerNotificationOutcome };
+
+/** 受け取る本文の大きさの上限(5-3b-2。requirements 3-2) */
+export const APPLE_SERVER_NOTIFICATION_MAX_BODY_BYTES = 64 * 1024;
+
+/** 同時に動くインスタンス数の上限(5-3b-2。requirements 3-2) */
+export const APPLE_SERVER_NOTIFICATION_MAX_INSTANCES = 10;
+
+/** テストから maxInstances の設定値を確認できるよう、onRequest に渡す options を公開する */
+export const APPLE_SERVER_NOTIFICATION_OPTIONS = {
+  region: FUNCTIONS_REGION,
+  secrets: [APPLE_IAP_SIGNING_KEY, APPLE_IAP_KEY_ID, APPLE_IAP_ISSUER_ID],
+  maxInstances: APPLE_SERVER_NOTIFICATION_MAX_INSTANCES,
+};
 
 function isValidNotificationBody(body: unknown): body is { signedPayload: string } {
   if (typeof body !== 'object' || body === null) {
@@ -164,13 +189,15 @@ export async function handleAppleServerNotification(body: unknown, deps: AppleSe
 }
 
 export const appleServerNotification = onRequest(
-  {
-    region: FUNCTIONS_REGION,
-    secrets: [APPLE_IAP_SIGNING_KEY, APPLE_IAP_KEY_ID, APPLE_IAP_ISSUER_ID],
-  },
+  APPLE_SERVER_NOTIFICATION_OPTIONS,
   async (req, res) => {
     if (req.method !== 'POST') {
       res.set('Allow', 'POST').status(405).json({ error: 'method_not_allowed' });
+      return;
+    }
+
+    if (req.rawBody.byteLength > APPLE_SERVER_NOTIFICATION_MAX_BODY_BYTES) {
+      res.status(413).json({ error: 'payload_too_large' });
       return;
     }
 
