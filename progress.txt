@@ -534,19 +534,77 @@ Phase 5: タイマー
       - nativeSync: maxInstances 10、64KB を超えたら 413 を返す(認証より前に判定)
       - firestore.indexes.json に rateLimits.expireAt の TTL を追加した(8-2 のデプロイで反映)
 
-[ ] 5-3c-0 調査: アプリのタイマーとロック画面の計測の共有の設計
+[x] 5-3c-0 調査: アプリのタイマーとロック画面の計測の共有の設計
     内容: アプリのタイマー(JS・AsyncStorage)と、ロック画面(ライブアクティビティ・ロック画面コントロール・Swift・App Group)が、同じ計測(sessionId・開始時刻・確認の応答)を共有する設計を、今のコードを読んで提案する。
           あわせて 5-3c 以降をタスクの大きさの基準に合うように分ける案と、ユーザーに決めてもらう必要がある点(画面や動きに関わること)を洗い出す。コードは変えない
     完了条件: 設計案・分割したタスク案・ユーザーへの確認事項がそろっていること
+    ※完了(2026-10-10):
+      - 調査の報告にもとづき、ユーザーが4点を決めた。決定は requirements 3-2 に記録した
+      - 5-3c を 5-3c-1〜5-3c-6 に分けた
+      - 調査で見つかった問題を P-031 として記録した
 
-[ ] 5-3c Swift の送信処理の一本化と本番接続の設定
-    内容: modules/study-sync と targets/widget に重複している送信処理を1か所にまとめる。送信先 URL を設定から読む(http://127.0.0.1 の直書きをやめる)。
-          Keychain の kSecAttrAccessible を明示。StopStudyIntent も Keychain の uid を基準にする
-          ※5-3b-1 の申し送り: Swift の送信を nativeSync の新しい形(sessionId・checkEnabled・confirm)に合わせる。
-            ロック画面から開始したときの sessionId をどこで作り、アプリとどう共有するか(App Group)を、着手前に設計して確かめる。
-            タスクが大きくなる見込みなら、着手前に分割する
-          ※5-3b-3 セキュリティの申し送り: Swift の送信で、応答に応じて扱いを分ける。500・通信エラー・413?・429(rate_limited)は溜めて送り直す。400・401・429(confirmation_limit_exceeded)は捨てる(401 はトークンの作り直しを待つ)。分け方を設計で決める
-    完了条件: ビルドが通り、1-4 の手順(アプリ終了状態で停止 → Firestore に記録)がシミュレータで再現できる
+[ ] 5-3c-1 Swift の検証用の通知のコードを消す(problem P-031)
+    内容: 1-4 の検証用の通知のコードを消し、「勉強中？」の通知を JS(5-2c)だけが扱うようにする。
+          消すもの:
+            - StudySyncAppDelegateSubscriber のカテゴリ・delegate の設定
+            - StudySyncNotificationDelegate
+            - scheduleCheckNotification(と dev-lockscreen-spike の呼び出し)
+          ほかの機能(ライブアクティビティ・送信)は変えない
+    完了条件:
+      - ビルドが通る
+      - 通知のカテゴリを登録するのが、JS の STUDY_CHECK / STUDY_CHECK_CONFIRM だけになっている
+      - npm test が緑
+
+[ ] 5-3c-2 Swift の送信処理の一本化と接続先の設定
+    内容:
+      - modules/study-sync と targets/widget に重複している送信処理・定数・StudyAttributes を1か所にまとめる
+      - 送信先 URL を設定から読む(開発は Emulator、本番は本番の nativeSync。http://127.0.0.1 の直書きをやめる)
+      - Keychain の kSecAttrAccessible を明示する
+      - 機能は変えない(まとめ方は着手時に検証し、難しければ報告して止まる)
+    完了条件:
+      - ビルドが通る
+      - 重複がなくなっている
+      - dev-lockscreen-spike からの開始・停止が Emulator に届く(古い形のまま 400 になってよい。届いたことをログで確かめる)
+
+[ ] 5-3c-3 計測中の状態を App Group で共有する仕組み(Swift)
+    内容: StudySyncModule に次の2種類の関数を足す。画面にはまだつながない
+      - 計測中の状態(sessionId・uid・goalId・startAt・checkEnabled・confirmations)を App Group に1件だけ置き、読み書き・消去する関数
+      - 確認 ON/OFF の設定を覚えておく関数
+    完了条件:
+      - ビルドが通る
+      - 開発用の確認画面から、読み書き・消去ができたことを確かめる(スクショ)
+      - JS の型とモックがそろう
+
+[ ] 5-3c-4 ロック画面の操作を新しい形に合わせる(Swift)
+    内容: StartStudyIntent・StopStudyIntent を、5-3c-3 の計測中の状態と nativeSync の新しい形(sessionId・checkEnabled・confirm)に合わせる。
+      - ロック画面から開始したとき:
+        - Swift が sessionId を作って、計測中の状態に書く
+        - 確認が ON なら、60分後の「勉強中？」の通知を予約する(カテゴリ STUDY_CHECK・アクション STUDY_CHECK_CONFIRM。JS と同じ)
+      - 停止したとき: 計測中の状態を消し、通知を取り消す
+      - goalId が分からないときは送らない
+    完了条件:
+      - シミュレータで、ロック画面の開始・停止が Emulator の sessions に記録される(自動化できない操作は手順とスクショ)
+      - ビルドが通る
+
+[ ] 5-3c-5 アプリのタイマーとロック画面の同期(JS)
+    内容:
+      - アプリで開始・停止したとき: 5-3c-3 の計測中の状態を書き・消し、ライブアクティビティを出す・閉じる
+      - アプリを開いたとき・他のアプリから戻ったとき: 計測中の状態を読み、ロック画面での開始・停止を端末の記録に取り込む(requirements 3-2。2026-10-10 決定の表示)
+      - 確認 ON/OFF の設定を、計測中の状態とは別に App Group に覚えさせる
+    完了条件: StudySync をモックにした画面テストで、次の4つが緑
+      - アプリで開始すると、計測中の状態が書かれる
+      - ロック画面で開始された状態を取り込む
+      - ロック画面で止められた計測を閉じる
+      - 確認の設定を覚える
+
+[ ] 5-3c-6 ロック画面の送信の応答の扱い(Swift)
+    内容: nativeSync の応答に応じて扱いを分ける
+      - 送り直す: 500・通信エラー・429 rate_limited
+      - 捨てる: 400・413・429 confirmation_limit_exceeded
+      - 401: アプリがトークンを作り直すまで溜めておき、作り直したあとに送り直す
+    完了条件:
+      - ビルドが通る
+      - Emulator で、各応答のときの溜め方を確かめた証跡がある(開発用の確認画面のログで可)
 
 [ ] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))
     内容: StopStudyIntent で Activity.activities が空になる原因を調べ、修正方針を報告する(Activity の id を Intent のパラメータで渡す案の検証を含む)
@@ -682,3 +740,6 @@ Phase 10: 将来的に必要になった場合(リリース後に明確に問題
 
 [ ] 10-1 確認 OFF のときの計測の上限と、開始時刻の受け付け範囲(problem P-027)
     内容: 確認 OFF でも1回の計測に上限を付けて自動停止し、開始時刻が今より大きく過去の記録を受け付けない(上限の値は着手時にユーザーに確認する)
+
+[ ] 10-2 送れなかった計測の操作の溜め場所の一本化(requirements 12)
+    内容: アプリ(JS・AsyncStorage)とロック画面(Swift・App Group)で別々にある溜め場所を1つにする

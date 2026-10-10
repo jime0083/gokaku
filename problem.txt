@@ -786,4 +786,4 @@
   - どちらの設定が効くかは起動の順番しだいになっている。expo-notifications も delegate を扱うので、3つが取り合っている
 - 影響: 通知のアクション「勉強中」が、どちらの処理で受け取られるかが不定。P-011 (3)(通知のアクションのタップがサーバーに反映されたか未確認)の一因の疑いがある
 - 原因: 1-4 の検証用の通知のコード(scheduleCheckNotification・カテゴリと delegate の設定・StudySyncNotificationDelegate)が、本実装(5-2c)のあとも残っている
-- 切り出すタスク: 5-3c の分割の中で、Swift の検証用の通知のコードを削除する
+- 切り出したタスク: progress.txt 5-3c-1
