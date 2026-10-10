@@ -842,6 +842,104 @@ describe('appleSubscriptions/{originalTransactionId}(Phase 4-2a: 購入の持ち
   });
 });
 
+// Phase 5-1b-1: users/{uid}/sessions・users/{uid}/sessionEvents はクライアントから一切書き込めない
+// (時刻の補正をサーバー(recordStudyEvent Callable)で行うため。requirements 3-2「アプリからの記録の保存」)。
+// 読みは本人のみ(既存の users/{uid}/{document=**} の読み取りの扱いに合わせる。明示的な match を
+// 追加していないため、書き込みはどの match にも当たらずデフォルト拒否される)
+describe('users/{uid}/sessions(Phase 5-1b-1: 計測セッション。サーバー(recordStudyEvent)のみ書き込み可)', () => {
+  const SESSION_ID = 'session-1';
+
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', OWNER_UID, 'sessions', SESSION_ID), {
+        goalId: 'goal-1',
+        startAt: 1_735_689_600_000,
+        stopAt: null,
+        source: 'app',
+        endReason: 'manual',
+      });
+    });
+  });
+
+  it('本人は自分の sessions を読める', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertSucceeds(getDoc(doc(db, 'users', OWNER_UID, 'sessions', SESSION_ID)));
+  });
+
+  it('他人は sessions を読めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'users', OWNER_UID, 'sessions', SESSION_ID)));
+  });
+
+  it('未ログインは sessions を読めない', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+
+    await assertFails(getDoc(doc(db, 'users', OWNER_UID, 'sessions', SESSION_ID)));
+  });
+
+  it('本人でも sessions に新規作成できない(時刻の補正をサーバーで行うため。偽セッションの注入防止)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(
+      setDoc(doc(db, 'users', OWNER_UID, 'sessions', 'forged-session'), {
+        goalId: 'goal-1',
+        startAt: Date.now(),
+        stopAt: null,
+      }),
+    );
+  });
+
+  it('本人でも既存の sessions を書き換えられない(勉強時間の改ざん防止)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(
+      setDoc(
+        doc(db, 'users', OWNER_UID, 'sessions', SESSION_ID),
+        { stopAt: Date.now() },
+        { merge: true },
+      ),
+    );
+  });
+});
+
+describe('users/{uid}/sessionEvents(Phase 5-1b-1: idempotencyKey の処理済みの印。サーバーのみ書き込み可)', () => {
+  const EVENT_ID = 'evt-1';
+
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', OWNER_UID, 'sessionEvents', EVENT_ID), {
+        sessionId: 'session-1',
+        action: 'start',
+      });
+    });
+  });
+
+  it('本人は自分の sessionEvents を読める', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertSucceeds(getDoc(doc(db, 'users', OWNER_UID, 'sessionEvents', EVENT_ID)));
+  });
+
+  it('他人は sessionEvents を読めない', async () => {
+    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+    await assertFails(getDoc(doc(db, 'users', OWNER_UID, 'sessionEvents', EVENT_ID)));
+  });
+
+  it('本人でも sessionEvents に書き込めない(同じ idempotencyKey を2回処理させない仕組みの改ざん防止)', async () => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+
+    await assertFails(
+      setDoc(doc(db, 'users', OWNER_UID, 'sessionEvents', 'forged-evt'), {
+        sessionId: 'session-1',
+        action: 'start',
+      }),
+    );
+  });
+});
+
 // Phase 3-5a 技術検証: React Native Firebase クライアント SDK から Emulator の Firestore に
 // 読み書きできることを確かめる専用コレクション(本番の書き込み許可は 3-5c で追加する)
 describe('devProbe/{uid}(Phase 3-5a 技術検証: クライアント SDK からの読み書き確認用)', () => {

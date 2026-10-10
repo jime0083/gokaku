@@ -60,6 +60,13 @@
     端末の時計を少しずらす程度の不正は防げないことを受け入れる
   - 送れなかった操作は App Group に溜め、次の機会(アプリ起動時・次の操作時)に再送する
   - 本実装(5-3)で、トークンの有効期限・失効(ログアウト・アカウント削除時)・定期的な作り直しを追加する
+- アプリからの記録の保存(2026-10-10 記載。サーバー内部の仕組み):
+  - 計測の開始時に端末でセッションID(sessionId)を作る。開始・停止の操作は「sessionId・操作(start/stop)・端末時刻・idempotencyKey」の形で送る
+    (ロック画面からの操作(5-3)も同じ sessionId と形を使い、アプリとロック画面で同じセッションを開始・停止できるようにする)
+  - アプリは Firebase Auth でログインした状態で Cloud Functions(Callable)に送る。sessions はクライアントから直接書けない(時刻の補正をサーバーで行うため)
+  - サーバーは上の時刻の扱い(未来・判定確定済みの日は受信時刻に置き換え)を適用して users/{uid}/sessions/{sessionId} の startAt・stopAt を保存する。
+    同じ idempotencyKey の再送は二重に記録しない。開始より先に停止が届いても、両方そろえば正しいセッションになる
+  - 送れなかった操作は端末に溜め、アプリ起動時・他のアプリから戻ったとき・次の操作時に再送する。送れたものは端末から消す
 
 ### 3-3. 達成判定とX投稿
 - 判定対象: 有効な目標の開始日〜試験日の前日までの毎日(休みの曜日指定はリリース後の機能)
@@ -256,14 +263,15 @@
 | `users/{uid}` | createdAt, activeGoalId, checkEnabled(bool), xPostEnabled(bool), xLinked(bool), xUsername, xNotice(連携切れ/投稿失敗のお知らせ), subscription{status, productId, expiresAt, originalTransactionId, environment(PRODUCTION/SANDBOX)} | ユーザー設定と課金状態(subscription はサーバーのみ書き込み) |
 | `appleSubscriptions/{originalTransactionId}` | uid, productId, environment, createdAt | 購入の持ち主(最初に確認したアカウント)。サーバーのみ読み書き可(2026-10-09 決定) |
 | `users/{uid}/goals/{goalId}` | type(exam/cert), university, targetDeviation, currentDeviation, subjectCount, certId, certOtherName, estimatedHours, targetHours, examDate(YYYY-MM-DD), minDailyMinutes, goalDailyMinutes, startDate, status(active/finished/replaced), createdAt | 目標。数値変更時は上書き、目標変更時は新規作成し旧目標を replaced にする |
-| `users/{uid}/sessions/{sessionId}` | goalId, startAt, stopAt, source(app/lockscreen), checkEnabled, confirmations[], endReason(manual/check_timeout) | 計測セッション |
+| `users/{uid}/sessions/{sessionId}` | goalId, startAt, stopAt, source(app/lockscreen), checkEnabled, confirmations[], endReason(manual/check_timeout) | 計測セッション(サーバーのみ書き込み。startAt・stopAt は epoch ミリ秒。2026-10-10 追記) |
+| `users/{uid}/sessionEvents/{idempotencyKey}` | sessionId, action, processedAt | 同じ操作の二重記録を防ぐ処理済みの印(サーバーのみ書き込み。2026-10-10 追加) |
 | `users/{uid}/dailyResults/{YYYY-MM-DD}` | goalId, studiedMinutes, metMin, metGoal, postStatus(none=投稿不要(達成)/pending=投稿待ち/posted/failed/skipped=未達成だが投稿しない), postSkipReasons | 0:00 判定結果(サーバーのみ書き込み) |
 | `xTokens/{uid}` | 暗号化した access/refresh token, expiresAt | サーバー(Cloud Functions)のみ読み書き可 |
 
 - 資格一覧・概算計算式はアプリ内の定数データとして持つ(manual-work で承認した内容)
 - 入力チェックはクライアントとセキュリティルール/Functions の両方で行う
 
-**アクセス権限方針:** 本人は自分の `users/{uid}` 配下のみ読み取り可。書き込みは、設定と目標は本人が行い、セッションは追記のみ許可する。課金状態・判定結果・Xトークンはサーバーだけが書き込む。`xTokens` はクライアントから一切アクセスできない。
+**アクセス権限方針:** 本人は自分の `users/{uid}` 配下のみ読み取り可。書き込みは、設定と目標は本人が行う。セッション(sessions・sessionEvents)はサーバーだけが書き込む(時刻の補正をサーバーで行うため。2026-10-10 変更)。課金状態・判定結果・Xトークンはサーバーだけが書き込む。`xTokens` はクライアントから一切アクセスできない。
 
 ## 6. 外部サービス・API
 | サービス | 用途 | 無料枠・料金(確認日・出典) | 規約上の制約 | 秘密情報の置き場所 |
@@ -315,9 +323,15 @@
 | 7 | X連携・0:00判定・自動投稿 |
 | 8 | リリース準備(規約ページ・費用アラート・TestFlight・審査提出) |
 | 9 | リリース後の追加機能(下記) |
+| 10 | 将来的に必要になった場合の対応(下記) |
 
 ## 11. リリース後に追加する機能(Phase 9。着手前に詳細仕様を再ヒアリングする)
 - 最低勉強時間を達成したら通知を送る(5日連続・10日連続の達成時は褒める内容)
 - 最低勉強時間を達成していない場合、毎日「23:00 − 最低勉強時間」の時刻に未達成の通知を送る
 - 毎週月曜日の最初の起動時に、先週1週間の勉強時間が直感的にわかるポップアップを表示する
 - 勉強日を「週○日以上」にする設定と、休みの曜日の事前指定(休みの曜日は判定・投稿しない)
+
+## 12. 将来的に必要になった場合の対応(Phase 10。リリース後に明確に問題になったら着手する)
+- (problem P-027)「勉強中？」確認が OFF のとき、計測を止めずに放置すると毎日最大24時間が記録され、X 投稿を避けられる。
+  2026-10-10 ユーザー決定: 当面は受け入れる(仕様どおり OFF は上限なし)。問題になったら、
+  「確認 OFF でも1回の計測に上限(例: 16時間)を付けて自動停止する」「開始時刻が今より大きく過去(例: 24時間以上前)の記録は受け付けない」を実装する(上限の値は着手時に決める)
