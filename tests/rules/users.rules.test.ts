@@ -703,10 +703,8 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
   });
 });
 
-// Phase 1-4 技術検証(gokaku-security によるルール検証): デバイストークン(ハッシュ)と
-// ネイティブ→サーバー同期のイベントログは、クライアントから一切読み書きできてはならない
-// (deviceTokens はサーバー(Cloud Functions の Admin SDK)だけが読み書きし、
-//  syncEvents はサーバーだけが書き込み、本人は自分の分だけ読める)
+// Phase 1-4 技術検証(gokaku-security によるルール検証): デバイストークン(ハッシュ)は
+// クライアントから一切読み書きできてはならない(サーバー(Cloud Functions の Admin SDK)だけが読み書きする)
 describe('deviceTokens(Phase 1-4 技術検証: ネイティブ同期用デバイストークンのハッシュ)', () => {
   beforeEach(async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
@@ -752,53 +750,11 @@ describe('deviceTokens(Phase 1-4 技術検証: ネイティブ同期用デバイ
   });
 });
 
-describe('users/{uid}/syncEvents(Phase 1-4 技術検証: ロック画面・通知アクションからの同期イベント)', () => {
-  const EVENT_ID = 'evt-1';
-
-  beforeEach(async () => {
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      const db = context.firestore();
-      await setDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID), {
-        action: 'stop',
-        source: 'live_activity',
-      });
-    });
-  });
-
-  it('本人は自分の syncEvents を読める(サーバーが書き込んだ記録の確認用)', async () => {
-    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
-
-    await assertSucceeds(getDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID)));
-  });
-
-  it('他人は syncEvents を読めない', async () => {
-    const db = testEnv.authenticatedContext(OTHER_UID).firestore();
-
-    await assertFails(getDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID)));
-  });
-
-  it('本人でも syncEvents に書き込めない(クライアントからの偽イベント注入・改ざんの防止。記録はサーバーのnativeSyncのみ)', async () => {
-    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
-
-    await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'syncEvents', 'evt-forged'), {
-        action: 'start',
-        source: 'app',
-      }),
-    );
-  });
-
-  it('本人でも既存の syncEvents を書き換えられない(過去の記録の改ざん防止)', async () => {
-    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
-
-    await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'syncEvents', EVENT_ID), {
-        action: 'start',
-        source: 'app',
-      }),
-    );
-  });
-});
+// users/{uid}/syncEvents(Phase 1-4 技術検証用のコレクション)は、5-3b-1 で nativeSync が
+// recordStudySessionEvent(共通処理)を使うように直したことで書き込まれなくなった。
+// クライアントからの読み書きの扱いは、サーバーのみが書き込む他のコレクション(sessions・sessionEvents。
+// 下の describe)と同じ明示的な match が無いため、デフォルト拒否(読み取りは
+// users/{uid}/{document=**} の共通ルールで本人のみ可)で変わらない。このコレクション専用のテストは削除した
 
 // Phase 4-2a: 購入の持ち主の固定(appleSubscriptions)はサーバー(Admin SDK)だけが読み書きする
 // (requirements 5)。クライアントからは一切アクセスできない(明示的な match がないため default deny)

@@ -6,21 +6,50 @@ import { hashDeviceToken } from '../deviceTokenHash';
 import { ensureAdminApp } from '../firebaseAdmin';
 import { functionUrl, getFirestoreDoc, listFirestoreDocs } from './emulator';
 
+/**
+ * ロック画面・通知アクションからの同期を受ける nativeSync の Emulator テスト(5-3b-1)。
+ * issueDeviceTokenForUid(5-3a。issueDeviceToken Callable が呼ぶ共通の処理)でトークンを発行し、
+ * nativeSync に送って users/{uid}/sessions を確認する
+ * (5-3b-1 で recordStudySessionEvent(共通処理)を使うようになり、検証用の syncEvents への書き込みはやめた)。
+ */
+
 function uniqueUid(label: string): string {
   return `test-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/**
- * ロック画面・通知アクションからの同期を受ける nativeSync の Emulator テスト。
- * issueDeviceTokenForUid(5-3a。issueDeviceToken Callable が呼ぶ共通の処理)でトークンを発行し、
- * nativeSync に送って Firestore を確認する(5-3a-2: devIssueDeviceToken は削除済みのため使わない)
- */
+function uniqueId(label: string): string {
+  return `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** テスト対象の uid 配下に有効な目標(goals/{goalId})を作る */
+async function createGoal(uid: string, goalId: string): Promise<void> {
+  ensureAdminApp();
+  await getFirestore().doc(`users/${uid}/goals/${goalId}`).set({ type: 'cert' });
+}
+
 describe('nativeSync (Functions Emulator)', () => {
   const nativeSyncUrl = functionUrl('nativeSync');
 
   async function issueToken(uid: string): Promise<string> {
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
     return deviceToken;
+  }
+
+  function buildBody(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      action: 'stop',
+      clientTimeMs: Date.now(),
+      idempotencyKey: uniqueId('evt'),
+      ...overrides,
+    };
+  }
+
+  async function send(body: Record<string, unknown>, token: string): Promise<Response> {
+    return fetch(nativeSyncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
   }
 
   it('POST 以外は 405 を返す', async () => {
@@ -32,125 +61,183 @@ describe('nativeSync (Functions Emulator)', () => {
     const res = await fetch(nativeSyncUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        uid: 'nouid',
-        goalId: 'g1',
-        action: 'stop',
-        source: 'live_activity',
-        clientTimeMs: Date.now(),
-        idempotencyKey: 'k1',
-      }),
+      body: JSON.stringify(buildBody({ uid: 'nouid', goalId: 'g1' })),
     });
     expect(res.status).toBe(401);
   });
 
   it('不正な(発行されていない)デバイストークンは 401', async () => {
     const uid = uniqueUid('bad-token');
-    const res = await fetch(nativeSyncUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer invalid-token-value',
-      },
-      body: JSON.stringify({
-        uid,
-        goalId: 'g1',
-        action: 'stop',
-        source: 'live_activity',
-        clientTimeMs: Date.now(),
-        idempotencyKey: 'k1',
-      }),
-    });
+    const res = await send(
+      buildBody({ uid, sessionId: uniqueId('session'), goalId: uniqueId('goal') }),
+      'invalid-token-value',
+    );
     expect(res.status).toBe(401);
   });
 
-  it('必須項目が欠けていると 400', async () => {
+  it.each([
+    ['uid がパス区切りを含む', { uid: 'has/slash' }],
+    ['sessionId が長すぎる', { sessionId: 'a'.repeat(129) }],
+    ['goalId が空文字', { goalId: '' }],
+    ['idempotencyKey が不正な文字を含む', { idempotencyKey: 'bad key!' }],
+    ['action が決まった値でない', { action: 'pause' }],
+    ['clientTimeMs が数値でない', { clientTimeMs: 'not-a-number' }],
+    ['start なのに checkEnabled が無い', { action: 'start', checkEnabled: undefined }],
+    ['start なのに checkEnabled が真偽値でない', { action: 'start', checkEnabled: 'yes' }],
+  ])('不正な形の本文(%s)は 400', async (_label, overrides) => {
     const uid = uniqueUid('invalid-body');
     const token = await issueToken(uid);
+    const body = buildBody({
+      uid,
+      sessionId: uniqueId('session'),
+      goalId: uniqueId('goal'),
+      ...overrides,
+    });
+    // undefined のキーは JSON.stringify で落ちるので「無い」を再現できる
+    const res = await send(body, token);
+    expect(res.status).toBe(400);
+  });
+
+  it('不正な形の本文(clientTimeMs が有限でない)は 400', async () => {
+    const uid = uniqueUid('invalid-body-infinite');
+    const token = await issueToken(uid);
+    // JSON.stringify は Infinity を null にしてしまい typeof チェックで弾かれるだけになるため、
+    // Number.isFinite のチェックを実際に通す値(JSON の範囲を超える巨大指数。パース後は Infinity になる)を
+    // 生の JSON 文字列として送る
+    const rawBody = JSON.stringify(
+      buildBody({ uid, sessionId: uniqueId('session'), goalId: uniqueId('goal'), action: 'stop' }),
+    ).replace(/"clientTimeMs":\d+/, '"clientTimeMs":1e400');
     const res = await fetch(nativeSyncUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ uid, action: 'stop' }),
+      body: rawBody,
     });
     expect(res.status).toBe(400);
   });
 
-  it('正しいトークンで送ると、端末時刻とサーバー受信時刻の両方を記録する(ロック画面からの停止を模擬)', async () => {
-    const uid = uniqueUid('stop-ok');
+  it('架空の goalId(本人の目標として存在しない)は 400', async () => {
+    const uid = uniqueUid('no-goal');
     const token = await issueToken(uid);
-    const clientTimeMs = Date.now() - 1234;
-    const idempotencyKey = `evt-${Math.random().toString(36).slice(2)}`;
-
-    const beforeRequestMs = Date.now();
-    const res = await fetch(nativeSyncUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        uid,
-        goalId: 'goal-1',
-        action: 'stop',
-        source: 'live_activity',
-        clientTimeMs,
-        idempotencyKey,
-      }),
-    });
-    expect(res.status).toBe(200);
-
-    const doc = await getFirestoreDoc(`users/${uid}/syncEvents/${idempotencyKey}`);
-    expect(doc).not.toBeNull();
-    expect(doc?.goalId).toBe('goal-1');
-    expect(doc?.action).toBe('stop');
-    expect(doc?.source).toBe('live_activity');
-    expect(doc?.clientTime).toBe(new Date(clientTimeMs).toISOString());
-    expect(typeof doc?.serverReceivedAt).toBe('string');
-    const serverReceivedAtMs = Date.parse(doc?.serverReceivedAt as string);
-    expect(serverReceivedAtMs).toBeGreaterThanOrEqual(beforeRequestMs);
+    const res = await send(
+      buildBody({ uid, sessionId: uniqueId('session'), goalId: uniqueId('missing-goal'), action: 'stop' }),
+      token,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('goal_not_found');
   });
 
-  it('同じ idempotencyKey を再送しても重複レコードにならない(リプレイで上書きのみ)', async () => {
-    const uid = uniqueUid('replay');
+  it('start・停止・確認が sessions に保存される(source は lockscreen)', async () => {
+    const uid = uniqueUid('full-session');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(uid, goalId);
     const token = await issueToken(uid);
-    const idempotencyKey = `evt-${Math.random().toString(36).slice(2)}`;
-    const payload = {
-      uid,
-      goalId: 'goal-1',
-      action: 'confirm' as const,
-      source: 'notification_action' as const,
-      clientTimeMs: Date.now(),
-      idempotencyKey,
-    };
+
+    const startAtMs = Date.now() - 120_000;
+    const startRes = await send(
+      buildBody({ uid, sessionId, goalId, action: 'start', clientTimeMs: startAtMs, checkEnabled: true }),
+      token,
+    );
+    expect(startRes.status).toBe(200);
+
+    const confirmAtMs = Date.now() - 60_000;
+    const confirmRes = await send(
+      buildBody({ uid, sessionId, goalId, action: 'confirm', clientTimeMs: confirmAtMs }),
+      token,
+    );
+    expect(confirmRes.status).toBe(200);
+
+    const stopAtMs = Date.now();
+    const stopRes = await send(
+      buildBody({ uid, sessionId, goalId, action: 'stop', clientTimeMs: stopAtMs }),
+      token,
+    );
+    expect(stopRes.status).toBe(200);
+
+    const session = await getFirestoreDoc(`users/${uid}/sessions/${sessionId}`);
+    expect(session?.goalId).toBe(goalId);
+    expect(session?.source).toBe('lockscreen');
+    expect(session?.checkEnabled).toBe(true);
+    expect(session?.startAt).toBe(startAtMs);
+    expect(session?.stopAt).toBe(stopAtMs);
+    expect(session?.confirmations).toEqual([confirmAtMs]);
+  });
+
+  it('端末時刻がサーバー受信時刻より未来だと、受信時刻に補正される(時刻の補正あり)', async () => {
+    const uid = uniqueUid('future-time');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(uid, goalId);
+    const token = await issueToken(uid);
+
+    const futureClientTimeMs = Date.now() + 10 * 60 * 1000;
+    const beforeRequestMs = Date.now();
+    const res = await send(
+      buildBody({ uid, sessionId, goalId, action: 'stop', clientTimeMs: futureClientTimeMs }),
+      token,
+    );
+    expect(res.status).toBe(200);
+
+    const session = await getFirestoreDoc(`users/${uid}/sessions/${sessionId}`);
+    expect(session?.stopAt).toBeGreaterThanOrEqual(beforeRequestMs);
+    expect(session?.stopAt).toBeLessThan(futureClientTimeMs);
+  });
+
+  it('過去の端末時刻は補正されずそのまま使われる(時刻の補正なし)', async () => {
+    const uid = uniqueUid('past-time');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(uid, goalId);
+    const token = await issueToken(uid);
+
+    const pastClientTimeMs = Date.now() - 5 * 60 * 1000;
+    const res = await send(
+      buildBody({ uid, sessionId, goalId, action: 'stop', clientTimeMs: pastClientTimeMs }),
+      token,
+    );
+    expect(res.status).toBe(200);
+
+    const session = await getFirestoreDoc(`users/${uid}/sessions/${sessionId}`);
+    expect(session?.stopAt).toBe(pastClientTimeMs);
+  });
+
+  it('同じ idempotencyKey を再送しても二重に記録されない(sessionEvents は1件のまま)', async () => {
+    const uid = uniqueUid('replay');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(uid, goalId);
+    const token = await issueToken(uid);
+    const idempotencyKey = uniqueId('evt');
+    const body = buildBody({ uid, sessionId, goalId, action: 'confirm', idempotencyKey });
 
     for (let i = 0; i < 2; i += 1) {
-      const res = await fetch(nativeSyncUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
+      const res = await send(body, token);
       expect(res.status).toBe(200);
     }
 
-    const docs = await listFirestoreDocs(`users/${uid}/syncEvents`);
-    expect(docs.length).toBe(1);
+    const events = await listFirestoreDocs(`users/${uid}/sessionEvents`);
+    expect(events.length).toBe(1);
+    const session = await getFirestoreDoc(`users/${uid}/sessions/${sessionId}`);
+    expect(session?.confirmations).toEqual([body.clientTimeMs]);
   });
 
-  it('トークンの uid と body の uid が一致しないと 401', async () => {
+  it('トークンの uid と body の uid が一致しないと 401(他人の sessions には書けない)', async () => {
     const ownerUid = uniqueUid('owner');
     const otherUid = uniqueUid('other');
+    const goalId = uniqueId('goal');
+    const sessionId = uniqueId('session');
+    await createGoal(otherUid, goalId);
     const ownerToken = await issueToken(ownerUid);
 
-    const res = await fetch(nativeSyncUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
-      body: JSON.stringify({
-        uid: otherUid,
-        goalId: 'goal-1',
-        action: 'stop',
-        source: 'live_activity',
-        clientTimeMs: Date.now(),
-        idempotencyKey: 'evt-cross-uid',
-      }),
-    });
+    const res = await send(
+      buildBody({ uid: otherUid, sessionId, goalId, action: 'stop', idempotencyKey: 'evt-cross-uid' }),
+      ownerToken,
+    );
     expect(res.status).toBe(401);
+
+    const session = await getFirestoreDoc(`users/${otherUid}/sessions/${sessionId}`);
+    expect(session).toBeNull();
   });
 });
 
@@ -159,12 +246,14 @@ describe('nativeSync (Functions Emulator)', () => {
 describe('nativeSync のデバイストークンの期限・失効(5-3a)', () => {
   const nativeSyncUrl = functionUrl('nativeSync');
 
-  function buildBody(uid: string, idempotencyKey: string): Record<string, unknown> {
+  async function buildBodyWithGoal(uid: string, idempotencyKey: string): Promise<Record<string, unknown>> {
+    const goalId = uniqueId('goal');
+    await createGoal(uid, goalId);
     return {
       uid,
-      goalId: 'goal-1',
+      sessionId: uniqueId('session'),
+      goalId,
       action: 'stop',
-      source: 'live_activity',
       clientTimeMs: Date.now(),
       idempotencyKey,
     };
@@ -184,7 +273,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
     const issuedAtMs = Date.now() - 31 * 24 * 60 * 60 * 1000;
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => issuedAtMs });
 
-    const res = await sendWithToken(buildBody(uid, 'evt-expired'), deviceToken);
+    const res = await sendWithToken(await buildBodyWithGoal(uid, 'evt-expired'), deviceToken);
 
     expect(res.status).toBe(401);
   });
@@ -193,7 +282,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
     const uid = uniqueUid('not-expired');
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
 
-    const res = await sendWithToken(buildBody(uid, 'evt-not-expired'), deviceToken);
+    const res = await sendWithToken(await buildBodyWithGoal(uid, 'evt-not-expired'), deviceToken);
 
     expect(res.status).toBe(200);
   });
@@ -203,10 +292,10 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
     const oldToken = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
     const newToken = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
 
-    const oldRes = await sendWithToken(buildBody(uid, 'evt-old'), oldToken.deviceToken);
+    const oldRes = await sendWithToken(await buildBodyWithGoal(uid, 'evt-old'), oldToken.deviceToken);
     expect(oldRes.status).toBe(401);
 
-    const newRes = await sendWithToken(buildBody(uid, 'evt-new'), newToken.deviceToken);
+    const newRes = await sendWithToken(await buildBodyWithGoal(uid, 'evt-new'), newToken.deviceToken);
     expect(newRes.status).toBe(200);
   });
 
@@ -216,11 +305,11 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
 
     await revokeDeviceToken(uid);
 
-    const res = await sendWithToken(buildBody(uid, 'evt-revoked'), deviceToken);
+    const res = await sendWithToken(await buildBodyWithGoal(uid, 'evt-revoked'), deviceToken);
     expect(res.status).toBe(401);
   });
 
-  // 5-3a-2: expiresAt が無い・数値でないトークンはフェイルクローズで拒否する(5-3a レビュー指摘)。
+  // expiresAt が無い・数値でないトークンはフェイルクローズで拒否する(5-3a-2)。
   // issueDeviceToken は常に expiresAt(number)を設定するため、ここでは「壊れたデータ」を直接
   // Firestore(Admin SDK)に書き込んで再現する
   it('expiresAt が無いデバイストークンは 401(フェイルクローズ)', async () => {
@@ -232,7 +321,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
       issuedAt: Date.now(),
     });
 
-    const res = await sendWithToken(buildBody(uid, 'evt-no-expires-at'), rawToken);
+    const res = await sendWithToken(await buildBodyWithGoal(uid, 'evt-no-expires-at'), rawToken);
 
     expect(res.status).toBe(401);
   });
@@ -247,7 +336,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
       expiresAt: '2099-01-01T00:00:00.000Z',
     });
 
-    const res = await sendWithToken(buildBody(uid, 'evt-non-numeric-expires-at'), rawToken);
+    const res = await sendWithToken(await buildBodyWithGoal(uid, 'evt-non-numeric-expires-at'), rawToken);
 
     expect(res.status).toBe(401);
   });

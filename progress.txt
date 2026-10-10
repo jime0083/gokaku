@@ -210,6 +210,7 @@ Phase 3: オンボーディング・認証
     ※ Sign in with Apple の App ID 登録は Xcode の自動署名で行う(App Store Connect のアプリ登録=W6 は不要)
     内容: Sign in with Apple → Firebase Auth → users/{uid} の作成。初回起動画面に「アカウントをお持ちの方」のログイン導線を追加。
           users のセキュリティルール(本人のみ)
+          ※5-3b-1 セキュリティ指摘(未確認事項): 本番の Firebase Auth の uid(Sign in with Apple)が ^[A-Za-z0-9_-]{1,128}$ に収まるか、実際にログインしたときの uid で確かめる(収まらないと nativeSync が 400 で断る)
     完了条件: Emulator 上でログインと users 作成のテスト、ルールのテストが緑。シミュレータでのログイン動作の証跡
 
 [x] 3-5c-1 目標の保存処理とセキュリティルール  【セキュリティ確認】
@@ -478,7 +479,7 @@ Phase 5: タイマー
       - nativeSync は expiresAt がなければ 401 にした(fail-closed)
       - timer.test.tsx の AppState のヘルパーを、登録されたすべてのリスナーに配る形に直した
 
-[ ] 5-3b-1 nativeSync を計測記録の共通処理につなぐ  【セキュリティ確認】
+[x] 5-3b-1 nativeSync を計測記録の共通処理につなぐ  【セキュリティ確認】
     内容: nativeSync の受け取る形を、アプリの記録と同じ形にする(sessionId・action(start/stop/confirm)・clientTimeMs・idempotencyKey・goalId、start のときは checkEnabled)。
           5-1b-1 の共通処理(recordStudySessionEvent)で sessions に保存する(時刻の補正・二重記録の防止・goalId の実在確認は共通処理に任せる)。
           source は 'lockscreen'。ID の形の検査(^[A-Za-z0-9_-]{1,128}$)を行う。ハッシュの照合は crypto.timingSafeEqual にする。
@@ -489,6 +490,12 @@ Phase 5: タイマー
           - 不正な形・架空の goalId を拒否する
           - トークンが不正・期限切れなら 401
           - 他人の uid には書けない
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - nativeSync の本文をアプリと同じ形にした(source は lockscreen)
+      - 照合は timingSafeEqual、uid も ID の形で検査する
+      - 応答: 400 invalid_body / goal_not_found、401 unauthorized、429 confirmation_limit_exceeded、500 internal(500 だけ送り直す)
+      - syncEvents への書き込みと、そのルールのテスト4件を廃止した
+      - Swift 側は 5-3c まで古い形のまま(ロック画面からの送信は 5-3c まで届かない)
 
 [ ] 5-3b-2 呼び出し回数の制限と、通知の入口の上限  【セキュリティ確認】
     内容: ユーザーごとに1分あたりの呼び出し回数の上限を付ける(requirements 3-2。2026-10-10 決定)。
@@ -496,6 +503,7 @@ Phase 5: タイマー
           - 超えたら断る(resource-exhausted / 429)
           - 実際の値と数え方(Firestore のカウンタ等)を決めて requirements に記録する
           appleServerNotification には maxInstances と、受け取るデータの大きさの上限を付ける(4-2a・4-2b のセキュリティ指摘)
+          ※5-3b-1 レビューの軽微な指摘: nativeSync で confirmations の上限を超えたときに 429 になることを、HTTP 経由のテストで確かめる
     完了条件: Emulator 上で次のテストが緑
           - 上限の手前は通る
           - 上限を超えたら断る

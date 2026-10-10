@@ -284,7 +284,7 @@
 | `appleSubscriptions/{originalTransactionId}` | uid, productId, environment, createdAt | 購入の持ち主(最初に確認したアカウント)。サーバーのみ読み書き可(2026-10-09 決定) |
 | `users/{uid}/goals/{goalId}` | type(exam/cert), university, targetDeviation, currentDeviation, subjectCount, certId, certOtherName, estimatedHours, targetHours, examDate(YYYY-MM-DD), minDailyMinutes, goalDailyMinutes, startDate, status(active/finished/replaced), createdAt | 目標。数値変更時は上書き、目標変更時は新規作成し旧目標を replaced にする |
 | `users/{uid}/sessions/{sessionId}` | goalId, startAt, stopAt, source(app/lockscreen), checkEnabled, confirmations[], endReason(manual/check_timeout) | 計測セッション(サーバーのみ書き込み。startAt・stopAt は epoch ミリ秒。2026-10-10 追記) |
-| `users/{uid}/sessionEvents/{idempotencyKey}` | sessionId, action, processedAt | 同じ操作の二重記録を防ぐ処理済みの印(サーバーのみ書き込み。2026-10-10 追加) |
+| `users/{uid}/sessionEvents/{idempotencyKey}` | sessionId, action, processedAt | 同じ操作の二重記録を防ぐ処理済みの印(サーバーのみ書き込み。2026-10-10 追加)。アプリ(recordStudyEvent)とロック画面(nativeSync)の両方で使う |
 | `users/{uid}/dailyResults/{YYYY-MM-DD}` | goalId, studiedMinutes, metMin, metGoal, postStatus(none=投稿不要(達成)/pending=投稿待ち/posted/failed/skipped=未達成だが投稿しない), postSkipReasons | 0:00 判定結果(サーバーのみ書き込み) |
 | `deviceTokens/{uid}` | tokenHash, issuedAt, expiresAt | ロック画面からの操作(nativeSync)に使うデバイストークンのハッシュ。有効期限30日、1人1つ(常に上書き)。サーバーのみ読み書き可(2026-10-10 追加) |
 | `xTokens/{uid}` | 暗号化した access/refresh token, expiresAt | サーバー(Cloud Functions)のみ読み書き可 |
