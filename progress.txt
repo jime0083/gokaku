@@ -325,12 +325,20 @@ Phase 4: 課金
 Phase 5: タイマー
 =====================================
 
-[ ] 5-1a 下部タブとタイマー画面
+[x] 5-1a 下部タブとタイマー画面
     内容: ホーム/タイマーのタブ、開始/停止、今日の勉強時間と進捗の表示(記録は端末内。サーバー保存は 5-1b)。画面構成は requirements 4-6「タイマー」(2026-10-09 決定)
     完了条件: 画面テストで開始→停止で今日の勉強時間が増える。E2E 正常系が2機種で緑
+    ※完了(2026-10-10): レビューPASS
+      - src/app/(tabs)/(_layout・home(仮)・timer)
+      - src/features/timer/(storage・useTimerSession・TimerSessionContext・format・progress)
+      - activeGoalRepository.ts、ProgressBar.tsx
+      - @expo/vector-icons を追加
+      - E2E の項目は 5-E2E で確認する
+      - タブの印が2つ描かれるのは react-navigation の切り替え用の重ね描き(片方は透明)。不具合ではない
 
 [ ] 5-1b セッションのサーバー保存とオフライン再送
     内容: 開始/停止を sessions に保存。オフライン時は端末に記録して通信回復時に送信(requirements 3-2 の時刻の扱いを含む)
+          ※5-1a の実装担当の報告: 端末内のセッション一覧(AsyncStorage の timer:sessions:v1)は今は増え続ける。サーバーに送れたものを整理する仕組みをこのタスクで入れる
     完了条件: Emulator 上で保存・オフライン後の再送・二重記録なしのテストが緑
 
 [ ] 5-2 「勉強中？」確認
