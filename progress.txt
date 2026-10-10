@@ -394,15 +394,26 @@ Phase 5: タイマー
       - 分かった制約は 5-2c の内容に追記した
       - 前の担当が利用上限で中断したため、新しい担当が引き継いだ
 
-[ ] 5-2a 確認への応答の保存(Function の拡張)  【セキュリティ確認】
+[x] 5-2a 確認への応答の保存(Function の拡張)  【セキュリティ確認】
     内容: 5-1b-1 の共通処理に 'confirm' 操作を足し、sessions の confirmations[] に応答時刻(時刻の補正つき)を保存する。
           開始時の checkEnabled を保存する(requirements 3-2。2026-10-10 追記)
     完了条件: Emulator 上で応答の保存・再送で二重にならない・未認証の拒否のテストが緑
+    ※完了(2026-10-10): レビューPASS・セキュリティPASS
+      - 'confirm' 操作を追加した
+      - confirmations[] は epoch ミリ秒で、順番は問わない
+      - checkEnabled は start のときに必須で、最初の値を残す
+      - confirmations の上限は 500 件。超えたら resource-exhausted
+      - 時刻補正の境界テストを常設した
+      - appleServerNotification のコメントを直した
+      - test:functions 109件
 
 [ ] 5-2b アプリ内の確認と自動停止
     内容: 計測中、60分ごとに同じ画面の上に「勉強中？」を重ねて表示し、ボタン「勉強中」で応答を送る(5-2a)。
           shared の studyCheck で無応答を判断して確認の時刻で止め、次に開いたときに一度だけ停止の知らせを出す。
           確認 ON/OFF は users.checkEnabled を読む(初期値 ON)。本番の値が60分/10分であることをテストで確かめる
+          ※5-2a からの申し送り:
+            - studyEventSender の checkEnabled は仮で true を送っている。users.checkEnabled を読んで送るように差し替える
+            - サーバーは confirmations が上限(500件)を超えると resource-exhausted を返す。送り直しても成功しないので、invalid-argument と同じく列から外す
     完了条件: 時刻を進める画面テストで、応答あり(続く)・応答なし(確認の時刻で止まり、知らせが一度だけ出る)・OFF(確認が出ない)が緑
 
 [ ] 5-2c 「勉強中？」の通知

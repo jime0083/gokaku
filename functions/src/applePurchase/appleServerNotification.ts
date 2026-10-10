@@ -54,8 +54,10 @@ function isValidNotificationBody(body: unknown): body is { signedPayload: string
 
 /**
  * JWT(署名検証前)の payload 部分だけを読み、どちらの環境(Production/Sandbox)の通知かを判定する
- * ために使う。署名はまだ確認していないため、ここで読んだ値は「どの検証器を使うか」の判断にのみ使い、
- * 実際の内容としては信用しない(内容は verifyAndDecodeNotification の検証後の値を使う)
+ * ために使う。署名検証の前に読んだこの値は「どの検証器(createVerifier)を選ぶか」の判断にのみ使う。
+ * 検証器は environment が一致しない取引を INVALID_ENVIRONMENT で拒否するため(verifyApplePurchase.ts
+ * と同じ仕組み)、verifyAndDecodeNotification の検証を通った後は、この値をそのまま検証済みの環境として
+ * 扱ってよい(以降の Apple API 呼び出し・検証器の選択にも同じ値を使っている)
  */
 function peekUnverifiedEnvironment(signedPayload: string): AppleEnvironmentName | null {
   const parts = signedPayload.split('.');

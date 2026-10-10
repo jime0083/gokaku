@@ -13,7 +13,8 @@ import {
 } from './recordStudySessionEvent';
 
 /**
- * 5-1b-1: アプリ内タイマーの開始・停止を受け取る Callable(requirements 3-2「アプリからの記録の保存」)。
+ * 5-1b-1・5-2a: アプリ内タイマーの開始・停止・「勉強中？」確認への応答を受け取る Callable
+ * (requirements 3-2「アプリからの記録の保存」)。
  * 時刻の補正・idempotencyKey による二重記録の防止・保存は recordStudySessionEvent(共通処理)が行う。
  *
  * uid はクライアントから受け取らず、必ず request.auth.uid(Firebase Auth で検証済みの ID トークン)を使う。
@@ -50,6 +51,10 @@ function parseInput(data: unknown): RecordStudySessionEventInput | null {
   if (typeof d.clientTimeMs !== 'number' || !Number.isFinite(d.clientTimeMs)) {
     return null;
   }
+  // checkEnabled(5-2a)は action が 'start' のときだけ必須。他の action では送られてきても無視する
+  if (d.action === 'start' && typeof d.checkEnabled !== 'boolean') {
+    return null;
+  }
   return {
     sessionId: d.sessionId,
     goalId: d.goalId,
@@ -57,6 +62,7 @@ function parseInput(data: unknown): RecordStudySessionEventInput | null {
     action: d.action,
     source: d.source,
     clientTimeMs: d.clientTimeMs,
+    checkEnabled: d.action === 'start' ? (d.checkEnabled as boolean) : undefined,
   };
 }
 
@@ -79,7 +85,8 @@ export async function handleRecordStudyEventRequest(
     return await recordStudySessionEvent(uid, input, deps);
   } catch (error) {
     if (error instanceof RecordStudySessionEventError) {
-      throw new HttpsError('invalid-argument', error.message, { reason: error.reason });
+      const code = error.reason === 'confirmation-limit-exceeded' ? 'resource-exhausted' : 'invalid-argument';
+      throw new HttpsError(code, error.message, { reason: error.reason });
     }
     throw new HttpsError('internal', '記録の処理中にエラーが発生しました');
   }

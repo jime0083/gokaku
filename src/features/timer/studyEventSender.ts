@@ -54,6 +54,9 @@ async function callRecordStudyEvent(event: PendingStudyEvent, goalId: string): P
     source: 'app',
     clientTimeMs: event.clientTimeMs,
     idempotencyKey: event.idempotencyKey,
+    // recordStudyEvent は action が 'start' のとき checkEnabled(boolean)を必須で受け取る(5-2a)。
+    // users.checkEnabled の読み込みは 5-2b で行うため、ここでは常に true を送る
+    ...(event.action === 'start' ? { checkEnabled: true } : {}),
   });
 }
 

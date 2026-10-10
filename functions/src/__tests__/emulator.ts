@@ -54,6 +54,11 @@ function unwrapFirestoreValue(value: Record<string, unknown>): unknown {
     const fields = (value.mapValue as { fields?: Record<string, Record<string, unknown>> }).fields ?? {};
     return unwrapFirestoreFields(fields);
   }
+  if ('arrayValue' in value) {
+    // confirmations[] など(5-2a)の配列フィールドを読むために使う
+    const values = (value.arrayValue as { values?: Record<string, unknown>[] }).values ?? [];
+    return values.map((element) => unwrapFirestoreValue(element));
+  }
   return undefined;
 }
 
