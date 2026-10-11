@@ -574,7 +574,7 @@ Phase 5: タイマー
       - 共通のファイルは targets/_shared/ に置き、modules/study-sync/ios からはシンボリックリンクで参照する
       - 送信先 URL は Info.plist の NativeSyncBaseURL から読む(plugins/withNativeSyncBaseURL.js で、Debug は Emulator、Release は本番)
 
-[ ] 5-3c-3 計測中の状態を App Group で共有する仕組み(Swift)
+[x] 5-3c-3 計測中の状態を App Group で共有する仕組み(Swift)
     内容: StudySyncModule に次の2種類の関数を足す。画面にはまだつながない
       - 計測中の状態(sessionId・uid・goalId・startAt・checkEnabled・confirmations)を App Group に1件だけ置き、読み書き・消去する関数
       - 確認 ON/OFF の設定を覚えておく関数
@@ -582,6 +582,13 @@ Phase 5: タイマー
       - ビルドが通る
       - 開発用の確認画面から、読み書き・消去ができたことを確かめる(スクショ)
       - JS の型とモックがそろう
+    ※完了(2026-10-12): レビューPASS
+      - App Group のキー:
+        - studySync.activeSession.v1: JSON で1件(sessionId・uid・goalId・startAt・checkEnabled・confirmations)
+        - studySync.checkEnabledSetting.v1: Bool。初期値は true
+      - StudySyncModule の関数: getActiveSession / setActiveSession(形が不正なら false)/ clearActiveSession / getCheckEnabledSetting / setCheckEnabledSetting
+      - 手動モック: modules/study-sync/src/__mocks__/StudySyncModule.ts
+      - 壊れた JSON を読んでもアプリは落ちず、null になる
 
 [ ] 5-3c-4 ロック画面の操作を新しい形に合わせる(Swift)
     内容: StartStudyIntent・StopStudyIntent を、5-3c-3 の計測中の状態と nativeSync の新しい形(sessionId・checkEnabled・confirm)に合わせる。

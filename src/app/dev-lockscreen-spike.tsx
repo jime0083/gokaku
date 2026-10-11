@@ -21,6 +21,9 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  * 現在のユーザー(request.auth.uid)向けにしか発行できないため、入力欄の uid を
  * Auth Emulator 専用のテストユーザーのメールアドレスの一部として使ってサインインし、
  * 実際に発行された uid で Keychain への保存・以後の開始/停止を行う(uid の入力欄の値を上書きする)
+ *
+ * 5-3c-3: 計測中の状態(App Group に 1 件だけ置く値)・確認 ON/OFF の設定の読み・書き・消去を
+ * 手動で確かめるボタンもこの画面に足す(画面(タイマー)や Intent にはまだつながない)
  */
 
 export default function DevLockscreenSpikeScreen() {
@@ -123,6 +126,51 @@ export default function DevLockscreenSpikeScreen() {
     appendLog(`未送信キュー: ${StudySync.getPendingQueueCount()}件`);
   }
 
+  // 5-3c-3: 計測中の状態(App Group)の読み・書き・消去を手動で確かめる
+  function handleWriteActiveSession() {
+    const written = StudySync.setActiveSession({
+      sessionId: 'spike-active-session-1',
+      uid,
+      goalId,
+      startAt: Date.now(),
+      checkEnabled: true,
+      confirmations: [],
+    });
+    appendLog(`計測中の状態を書いた: ${written}`);
+  }
+
+  function handleWriteInvalidActiveSession() {
+    const written = StudySync.setActiveSession({
+      // sessionId が空文字(不正な形)。書き込みが断られることを確かめる
+      sessionId: '',
+      uid,
+      goalId,
+      startAt: Date.now(),
+      checkEnabled: true,
+      confirmations: [],
+    });
+    appendLog(`不正な形の書き込み結果(false になるはず): ${written}`);
+  }
+
+  function handleReadActiveSession() {
+    const session = StudySync.getActiveSession();
+    appendLog(`計測中の状態: ${session === null ? 'なし' : JSON.stringify(session)}`);
+  }
+
+  function handleClearActiveSession() {
+    StudySync.clearActiveSession();
+    appendLog('計測中の状態を消した');
+  }
+
+  function handleWriteCheckEnabledSetting(enabled: boolean) {
+    StudySync.setCheckEnabledSetting(enabled);
+    appendLog(`確認ON/OFFの設定を書いた: ${enabled}`);
+  }
+
+  function handleReadCheckEnabledSetting() {
+    appendLog(`確認ON/OFFの設定: ${StudySync.getCheckEnabledSetting()}`);
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>1-4 技術検証</Text>
@@ -134,6 +182,14 @@ export default function DevLockscreenSpikeScreen() {
       <Button title="停止" onPress={handleStop} />
       <Button title="キューを再送" onPress={handleFlushQueue} />
       <Button title="未送信キュー件数を表示" onPress={handleShowQueueCount} />
+      <Text style={styles.title}>5-3c-3 計測中の状態(App Group)</Text>
+      <Button title="計測中の状態を書く" onPress={handleWriteActiveSession} />
+      <Button title="不正な形で書く(断られる確認)" onPress={handleWriteInvalidActiveSession} />
+      <Button title="計測中の状態を読む" onPress={handleReadActiveSession} />
+      <Button title="計測中の状態を消す" onPress={handleClearActiveSession} />
+      <Button title="確認設定を書く(ON)" onPress={() => handleWriteCheckEnabledSetting(true)} />
+      <Button title="確認設定を書く(OFF)" onPress={() => handleWriteCheckEnabledSetting(false)} />
+      <Button title="確認設定を読む" onPress={handleReadCheckEnabledSetting} />
       {log.map((line) => (
         <Text key={line} style={styles.log}>
           {line}

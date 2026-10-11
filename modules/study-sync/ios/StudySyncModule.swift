@@ -30,6 +30,34 @@ public class StudySyncModule: Module {
             StudySyncSharedState.setCurrentGoalId(goalId)
         }
 
+        // 5-3c-3: 計測中の状態(sessionId・uid・goalId・startAt・checkEnabled・confirmations)を
+        // App Group に 1 件だけ置く。アプリ・ロック画面のどちらからも読み書き・消去できる
+        // (この時点ではタイマー画面・Intent からはまだ呼ばれない。5-3c-4・5-3c-5 でつなぐ)
+        Function("getActiveSession") { () -> [String: Any]? in
+            StudySyncSharedState.activeSession()?.asDictionary()
+        }
+
+        /// 形が不正な値(必須項目が無い・型が違う)は書き込みを断り false を返す(例外は投げない)
+        Function("setActiveSession") { (session: [String: Any]) -> Bool in
+            guard let parsed = StudySyncActiveSession(dictionary: session) else {
+                return false
+            }
+            return StudySyncSharedState.setActiveSession(parsed)
+        }
+
+        Function("clearActiveSession") {
+            StudySyncSharedState.clearActiveSession()
+        }
+
+        /// 確認 ON/OFF の設定(計測中の状態とは別に App Group に覚えておく値。初期値 true)
+        Function("getCheckEnabledSetting") { () -> Bool in
+            StudySyncSharedState.checkEnabledSetting()
+        }
+
+        Function("setCheckEnabledSetting") { (enabled: Bool) in
+            StudySyncSharedState.setCheckEnabledSetting(enabled)
+        }
+
         AsyncFunction("startMeasurement") { (uid: String, goalId: String) -> Bool in
             let startedAt = Date()
             let event = StudySyncEvent(

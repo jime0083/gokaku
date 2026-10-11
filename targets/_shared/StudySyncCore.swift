@@ -253,7 +253,7 @@ enum StudySyncAPI {
 /// アプリ側(StudySyncModule.swift)が setCurrentGoalId で書き、ロック画面コントロール
 /// (targets/widget/StudyControlWidget.swift の StartStudyIntent)が currentGoalId() で読む
 enum StudySyncSharedState {
-    private static var defaults: UserDefaults? {
+    fileprivate static var defaults: UserDefaults? {
         UserDefaults(suiteName: StudySyncConstants.appGroupIdentifier)
     }
 
@@ -263,5 +263,101 @@ enum StudySyncSharedState {
 
     static func currentGoalId() -> String? {
         defaults?.string(forKey: "studySync.currentGoalId")
+    }
+}
+
+/// 計測中の状態(5-3c-3。requirements 3-2「アプリとロック画面の計測の共有」)。
+/// アプリ・ロック画面(ライブアクティビティ・ロック画面コントロール)のどちらで開始した計測でも、
+/// App Group に 1 件だけ置く(計測中でなければ存在しない)。どちらからも読み書き・消去できる。
+/// shared/studyCheck.ts の CheckedStudySession(JS 側の計測中セッションの形)と対応させてある
+/// (sessionId・goalId は StudySyncEvent と同じ役割、startAt・confirmations は epoch ミリ秒)
+struct StudySyncActiveSession: Codable, Equatable {
+    let sessionId: String
+    let uid: String
+    let goalId: String
+    /// 計測開始時刻(epoch ミリ秒)
+    let startAt: Double
+    let checkEnabled: Bool
+    /// 「勉強中」と応答した時刻(epoch ミリ秒)の配列。順不同
+    let confirmations: [Double]
+}
+
+extension StudySyncActiveSession {
+    /// JS(ExpoModulesCore)へ渡すための辞書形式。`[String: Any]` はそのまま JS のオブジェクトに変換される
+    /// (expo-iap の fetchProducts 等と同じ、ExpoModulesCore が提供する Dictionary の AnyArgument 対応)
+    func asDictionary() -> [String: Any] {
+        [
+            "sessionId": sessionId,
+            "uid": uid,
+            "goalId": goalId,
+            "startAt": startAt,
+            "checkEnabled": checkEnabled,
+            "confirmations": confirmations,
+        ]
+    }
+
+    /// JS から受け取った辞書を検査し、妥当な値なら StudySyncActiveSession を作る。
+    /// 必須項目が無い・型が違う・confirmations に数値でない要素がある場合は nil
+    /// (呼び出し元の StudySyncModule.setActiveSession が false を返し、書き込みを断る。5-3c-3)
+    init?(dictionary: [String: Any]) {
+        guard
+            let sessionId = dictionary["sessionId"] as? String, !sessionId.isEmpty,
+            let uid = dictionary["uid"] as? String, !uid.isEmpty,
+            let goalId = dictionary["goalId"] as? String, !goalId.isEmpty,
+            let startAt = dictionary["startAt"] as? Double, startAt.isFinite,
+            let checkEnabled = dictionary["checkEnabled"] as? Bool
+        else {
+            return nil
+        }
+        let confirmationsRaw = dictionary["confirmations"] as? [Any] ?? []
+        let confirmations = confirmationsRaw.compactMap { $0 as? Double }.filter { $0.isFinite }
+        guard confirmations.count == confirmationsRaw.count else {
+            // 数値でない要素があった(壊れた入力)。全体を不正として扱う
+            return nil
+        }
+        self.sessionId = sessionId
+        self.uid = uid
+        self.goalId = goalId
+        self.startAt = startAt
+        self.checkEnabled = checkEnabled
+        self.confirmations = confirmations
+    }
+}
+
+extension StudySyncSharedState {
+    private static let activeSessionKey = "studySync.activeSession.v1"
+    /// 確認 ON/OFF の設定を覚えておく値(計測中の状態とは別に持つ。requirements 3-2:
+    /// 「確認の ON/OFF は、アプリが端末に覚えておいた設定を使う」。ロック画面から計測を開始したとき
+    /// (5-3c-4)に、計測中でなくてもこの設定を読めるようにするため、活動中の状態(activeSessionKey)とは
+    /// 別のキーにする
+    private static let checkEnabledSettingKey = "studySync.checkEnabledSetting.v1"
+
+    static func activeSession() -> StudySyncActiveSession? {
+        guard let data = defaults?.data(forKey: activeSessionKey) else { return nil }
+        return try? JSONDecoder().decode(StudySyncActiveSession.self, from: data)
+    }
+
+    /// 書き込みに成功したら true。JSON へのエンコードに失敗した場合(通常発生しない)は false
+    @discardableResult
+    static func setActiveSession(_ session: StudySyncActiveSession) -> Bool {
+        guard let data = try? JSONEncoder().encode(session) else { return false }
+        defaults?.set(data, forKey: activeSessionKey)
+        return true
+    }
+
+    static func clearActiveSession() {
+        defaults?.removeObject(forKey: activeSessionKey)
+    }
+
+    /// 初期値は ON(true)。requirements 3-2「勉強中？」確認(初期値ON)
+    static func checkEnabledSetting() -> Bool {
+        guard let defaults, defaults.object(forKey: checkEnabledSettingKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: checkEnabledSettingKey)
+    }
+
+    static func setCheckEnabledSetting(_ enabled: Bool) {
+        defaults?.set(enabled, forKey: checkEnabledSettingKey)
     }
 }

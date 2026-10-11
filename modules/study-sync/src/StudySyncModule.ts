@@ -1,5 +1,7 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
+import type { ActiveStudySession } from './StudySync.types';
+
 /**
  * Phase 1-4 技術検証用の native ブリッジ。
  * アプリを開かずに行うロック画面・通知アクションからのサーバー同期の土台で、
@@ -17,6 +19,21 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
   requestNotificationPermission(): Promise<boolean>;
   /** 直前の送信(startMeasurement/stopMeasurement/flushQueue)が失敗した理由。無ければ null */
   getLastSyncErrorReason(): string | null;
+
+  /**
+   * 計測中の状態(5-3c-3。App Group に 1 件だけ置く。requirements 3-2)を読む。
+   * 計測中でなければ null
+   */
+  getActiveSession(): ActiveStudySession | null;
+  /**
+   * 計測中の状態を書く。形が不正(必須項目が無い・型が違う)な場合は書き込みを断り false を返す
+   * (例外は投げない)。書き込めたら true
+   */
+  setActiveSession(session: ActiveStudySession): boolean;
+  clearActiveSession(): void;
+  /** 確認 ON/OFF の設定(計測中の状態とは別に App Group に覚えておく値)を読む。初期値 true */
+  getCheckEnabledSetting(): boolean;
+  setCheckEnabledSetting(enabled: boolean): void;
 }
 
 export default requireNativeModule<StudySyncModule>('StudySync');

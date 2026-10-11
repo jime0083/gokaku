@@ -164,6 +164,7 @@ manual-work.txt(手動作業)に追加
   2. `text:` で部分一致させたい場合は、必ず `.*判定したい文字列.*` のように前後を `.*` で囲む
 - 新しい画面・フローを書いたときは、上のどちらかで実装されていることをレビューで確認する
 - 単発でスクショを撮るときも、`launchApp` だけで済ませず、`openLink` で `<scheme>://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081` を開いて Metro に接続する(launchApp だけだと dev-client が「Searching for development servers...」で止まる。1-3・3-4b-3 で確認)
+- 開発用の dev-* 画面を直接開くときは、まず上の URL(パスなし)で Metro につないでから、`gokaku:///<ルート名>` を openLink で開く(Metro の URL にパスを付けると読み込みに失敗する。5-3c-3 で確認)
 
 ## ユーザーへの案内ルール
 
