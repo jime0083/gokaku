@@ -7,5 +7,9 @@
       <key>NSExtensionPointIdentifier</key>
       <string>com.apple.widgetkit-extension</string>
     </dict>
+    <!-- nativeSync の送信先(5-3c-2)。plugins/withNativeSyncBaseURL.js が
+         Debug/Release ごとに書き分ける build setting NATIVE_SYNC_BASE_URL を展開する -->
+    <key>NativeSyncBaseURL</key>
+    <string>$(NATIVE_SYNC_BASE_URL)</string>
   </dict>
 </plist>

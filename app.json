@@ -15,7 +15,8 @@
       "supportsTablet": false,
       "googleServicesFile": "./config/GoogleService-Info.emulator.plist",
       "infoPlist": {
-        "NSSupportsLiveActivities": true
+        "NSSupportsLiveActivities": true,
+        "NativeSyncBaseURL": "$(NATIVE_SYNC_BASE_URL)"
       },
       "entitlements": {
         "com.apple.security.application-groups": [
@@ -38,6 +39,7 @@
         }
       ],
       "@bacons/apple-targets",
+      "./plugins/withNativeSyncBaseURL",
       "@react-native-community/datetimepicker",
       "@react-native-firebase/app",
       "@react-native-firebase/auth",

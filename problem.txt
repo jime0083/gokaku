@@ -798,3 +798,18 @@
   - 開発中に押すと、本番の確認のアクションが一時的に置き換わる
 - 原因: 5-2-0 の検証用の画面が、本実装(5-2c)のあとも残っている
 - 切り出したタスク: progress.txt 5-3c-5 の中で、このファイルを消す
+
+## P-033 デバイストークンの Keychain の設定に ThisDeviceOnly が付いておらず、バックアップから別の端末へ移りうる
+- 状態: 解決済み(2026-10-11 5-3c-2 再レビューPASS・セキュリティPASSで確認)
+- 発見: 5-3c-2 セキュリティ確認(gokaku-security)
+- 問題内容:
+  - デバイストークンを kSecAttrAccessibleAfterFirstUnlock で保存している
+  - この設定では、暗号化された iCloud・Finder のバックアップにトークンが含まれ、別の端末に復元できてしまう
+  - バックアップを奪われると、本人になりすましてロック画面の操作(開始・停止・確認)を送れてしまう
+- 原因: targets/_shared/StudySyncCore.swift の write() で ThisDeviceOnly の付かない値を選んでいた。ThisDeviceOnly との比較の検討がなかった
+- 対応: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly に変える。
+  機種変更をしたときは、トークンがない状態から issueDeviceToken で作り直す(5-3a-2)。デバイストークンは端末ごとに作る設計なので、不都合はない
+- あわせて直す(セキュリティ担当の申し送り):
+  StudySyncConstants.nativeSyncBaseURL は、Info.plist の値を読めないと fatalError でアプリが落ちる。読めないときは送らずに、操作を溜めておく形にする
+- 解決日: 2026-10-11
+- 解決内容: write() を kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly にした。nativeSyncBaseURL は読めないと nil を返し、送らずにキューに残すようにした

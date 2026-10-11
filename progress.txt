@@ -559,7 +559,7 @@ Phase 5: タイマー
       - 起動時の flushQueue は残した
       - あわせて 5-3c-0 の調査の主な事実(4点)が正しいことを、レビューで確かめた
 
-[ ] 5-3c-2 Swift の送信処理の一本化と接続先の設定
+[x] 5-3c-2 Swift の送信処理の一本化と接続先の設定
     内容:
       - modules/study-sync と targets/widget に重複している送信処理・定数・StudyAttributes を1か所にまとめる
       - 送信先 URL を設定から読む(開発は Emulator、本番は本番の nativeSync。http://127.0.0.1 の直書きをやめる)
@@ -569,6 +569,10 @@ Phase 5: タイマー
       - ビルドが通る
       - 重複がなくなっている
       - dev-lockscreen-spike からの開始・停止が Emulator に届く(古い形のまま 400 になってよい。届いたことをログで確かめる)
+    ※完了(2026-10-11): レビューPASS・セキュリティPASS
+      - 差し戻し1回: P-033。Keychain を ThisDeviceOnly にした。URL が読めないと fatalError で落ちていたのを直した
+      - 共通のファイルは targets/_shared/ に置き、modules/study-sync/ios からはシンボリックリンクで参照する
+      - 送信先 URL は Info.plist の NativeSyncBaseURL から読む(plugins/withNativeSyncBaseURL.js で、Debug は Emulator、Release は本番)
 
 [ ] 5-3c-3 計測中の状態を App Group で共有する仕組み(Swift)
     内容: StudySyncModule に次の2種類の関数を足す。画面にはまだつながない
@@ -586,6 +590,7 @@ Phase 5: タイマー
         - 確認が ON なら、60分後の「勉強中？」の通知を予約する(カテゴリ STUDY_CHECK・アクション STUDY_CHECK_CONFIRM。JS と同じ)
       - 停止したとき: 計測中の状態を消し、通知を取り消す
       - goalId が分からないときは送らない
+          ※5-3c-2 の申し送り: ロック画面の部品(ウィジェットの拡張)から、送信先 URL(Info.plist の NativeSyncBaseURL)が正しく読めることを、実際の開始・停止のログで確かめる
     完了条件:
       - シミュレータで、ロック画面の開始・停止が Emulator の sessions に記録される(自動化できない操作は手順とスクショ)
       - ビルドが通る
@@ -607,6 +612,7 @@ Phase 5: タイマー
       - 送り直す: 500・通信エラー・429 rate_limited
       - 捨てる: 400・413・429 confirmation_limit_exceeded
       - 401: アプリがトークンを作り直すまで溜めておき、作り直したあとに送り直す
+          ※5-3c-2 セキュリティの申し送り(軽微): Info.plist の NativeSyncBaseURL が展開されずに "$(NATIVE_SYNC_BASE_URL)" のまま残った場合も nil として扱う(スキームが http・https のときだけ有効にする)
     完了条件:
       - ビルドが通る
       - Emulator で、各応答のときの溜め方を確かめた証跡がある(開発用の確認画面のログで可)

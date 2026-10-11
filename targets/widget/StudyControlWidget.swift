@@ -54,14 +54,3 @@ struct StartStudyIntent: AppIntent {
         return .result()
     }
 }
-
-/// App Group に保存する「現在の目標ID」等、ロック画面コントロール/通知から参照する最小の共有状態
-enum StudySyncSharedState {
-    private static var defaults: UserDefaults? {
-        UserDefaults(suiteName: StudySyncConstants.appGroupIdentifier)
-    }
-
-    static func currentGoalId() -> String? {
-        defaults?.string(forKey: "studySync.currentGoalId")
-    }
-}

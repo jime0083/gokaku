@@ -18,5 +18,12 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES',
   }
 
+  # StudySyncConstants.swift・StudySyncCore.swift・StudyAttributes.swift はこのディレクトリの
+  # シンボリックリンク(targets/_shared/ の実体を指す。5-3c-2)。CocoaPods の source_files は
+  # podspec のディレクトリ外のパスを glob で拾えない(Pod::Sandbox::PathList がポッド自身の
+  # ディレクトリ配下しかファイル一覧を作らないため、`../` で外に出る glob は常に0件になる。
+  # cocoapods gem の path_list.rb の read_file_system で確認した)。
+  # シンボリックリンクならポッド自身のディレクトリ内の1ファイルとして列挙されるため、
+  # 以下の通常の glob だけで targets/_shared/ の実体を(複製せずに)取り込める
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
 end
