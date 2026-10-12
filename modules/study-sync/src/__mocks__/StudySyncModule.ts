@@ -28,6 +28,19 @@ const studySyncModuleMock = {
   ),
   flushQueue: jest.fn<Promise<number>, []>(() => Promise.resolve(0)),
   getPendingQueueCount: jest.fn<number, []>(() => 0),
+  getPendingQueueWaitingForTokenCount: jest.fn<number, []>(() => 0),
+  debugSendStudySyncEvent: jest.fn<
+    Promise<boolean>,
+    [
+      uid: string,
+      sessionId: string,
+      goalId: string,
+      action: 'start' | 'stop' | 'confirm',
+      clientTimeMs: number,
+      idempotencyKey: string,
+      checkEnabled: boolean | null,
+    ]
+  >(() => Promise.resolve(true)),
   requestNotificationPermission: jest.fn<Promise<boolean>, []>(() => Promise.resolve(true)),
   getActiveSession: jest.fn<ActiveStudySession | null, []>(() => null),
   setActiveSession: jest.fn<boolean, [session: ActiveStudySession]>(() => true),

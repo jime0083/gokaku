@@ -138,27 +138,70 @@ enum StudySyncKeychain {
     }
 }
 
+/// App Group のキューに積む1件(5-3c-6)。元の操作(event)に加え、nativeSync から 401 を受けたときに
+/// 立てる「トークンを待つ」印(waitingForToken)を持たせる。印の付いた項目は、通常の再送
+/// (StudySyncAPI.flushQueue)では送らない(同じ古いトークンで何度も401を受けないため)。
+/// アプリが StudySyncModule.setAuthContext で新しいトークンを保存したときだけ、その uid の
+/// 印付きの項目を送り直す(StudySyncAPI.flushWaitingForToken)
+struct StudySyncQueueItem: Codable {
+    let event: StudySyncEvent
+    var waitingForToken: Bool
+}
+
 /// 送れなかった操作を App Group の UserDefaults に溜めておく簡易キュー
 enum StudySyncQueue {
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: StudySyncConstants.appGroupIdentifier)
     }
 
-    static func enqueue(_ event: StudySyncEvent) {
-        guard let defaults = defaults, let data = try? JSONEncoder().encode(event) else { return }
+    /// キューに積める件数の上限(StudySyncConstants.queueMaxItems を参照。5-3c-6)
+    static var maxItems: Int { StudySyncConstants.queueMaxItems }
+
+    /// 末尾に積む。上限(maxItems)を超えたら、最も古いものから捨てる(古い順に並んでいる前提。5-3c-6)
+    static func enqueue(_ item: StudySyncQueueItem) {
+        guard let defaults = defaults, let data = try? JSONEncoder().encode(item) else { return }
         var items = rawItems()
         items.append(data)
+        if items.count > maxItems {
+            items.removeFirst(items.count - maxItems)
+        }
         defaults.set(items, forKey: StudySyncConstants.pendingQueueKey)
     }
 
-    static func drain() -> [StudySyncEvent] {
-        let items = rawItems()
-        defaults?.removeObject(forKey: StudySyncConstants.pendingQueueKey)
-        return items.compactMap { try? JSONDecoder().decode(StudySyncEvent.self, from: $0) }
+    /// キューの内容を全て読み出す(空にはしない。読み込めない項目は捨てる。既存の動き)。
+    /// 5-3c-6: 以前はここでキューを空にしてから(drain)、送信結果に応じて書き戻していたが、
+    /// 書き戻す前にプロセスが終了する(setAuthContext の fire-and-forget な Task が
+    /// 完了を待たれずにプロセスごと終了する等)と、まだ一度も読み出していない・このフラッシュの
+    /// 対象ですらない項目までキューから消えてしまう(実機の確認で再現した)。
+    /// そのため読み出し(peekAll)と置き換え(replaceAll)を分離し、StudySyncAPI.flush が
+    /// 計算を終えた最後に1回だけ replaceAll で書き戻す形にする(book 木に途中経過を書かない)
+    static func peekAll() -> [StudySyncQueueItem] {
+        decodedItems()
+    }
+
+    /// キューの内容を丸ごと置き換える(1回の書き込み)。上限(maxItems)を超えたら、
+    /// 最も古いものから捨てる(渡された配列が古い順に並んでいる前提)
+    static func replaceAll(_ items: [StudySyncQueueItem]) {
+        guard let defaults = defaults else { return }
+        var trimmed = items
+        if trimmed.count > maxItems {
+            trimmed.removeFirst(trimmed.count - maxItems)
+        }
+        let encoded = trimmed.compactMap { try? JSONEncoder().encode($0) }
+        defaults.set(encoded, forKey: StudySyncConstants.pendingQueueKey)
     }
 
     static func count() -> Int {
         rawItems().count
+    }
+
+    /// 「トークンを待つ」印が付いている件数(キューを空にせずに数えるだけ。確認画面での表示用。5-3c-6)
+    static func waitingForTokenCount() -> Int {
+        decodedItems().filter(\.waitingForToken).count
+    }
+
+    private static func decodedItems() -> [StudySyncQueueItem] {
+        rawItems().compactMap { try? JSONDecoder().decode(StudySyncQueueItem.self, from: $0) }
     }
 
     private static func rawItems() -> [Data] {
@@ -185,50 +228,124 @@ enum StudySyncLastSyncError {
     }
 }
 
+/// nativeSync への1回の送信結果の扱い(5-3c-6。functions/src/nativeSync.ts のエラー応答のコメントに対応)。
+/// - success: 200。キューから消す(呼び出し元は再度積まない)
+/// - retry(reason): 送り直す(500・通信エラー・429 rate_limited・本文が読めない429・それ以外の想定外の
+///   応答。いずれも「少し待てば・設定が直れば通る可能性がある」失敗)。キューに残す(印は付けない)
+/// - discard(reason): 捨てる(400・413・429 confirmation_limit_exceeded。送り直しても結果が変わらない)。
+///   キューに戻さない(理由だけ StudySyncLastSyncError に記録する)
+/// - waitingForToken(reason): 401。アプリが setAuthContext で新しいトークンを保存するまで、
+///   「トークンを待つ」印を付けてキューに残す(Keychain にトークンが無い場合も同じ扱い。
+///   どちらも「有効なトークンが無い」という同じ状態のため)
+private enum StudySyncPostResult {
+    case success
+    case retry(reason: String)
+    case discard(reason: String)
+    case waitingForToken(reason: String)
+}
+
 enum StudySyncAPI {
-    /// 操作を nativeSync(Cloud Functions)へ送る。失敗した場合は App Group のキューに積んで false を返す
+    /// 操作を nativeSync(Cloud Functions)へ送る。送れなければ応答に応じてキューに積む
+    /// (捨てる場合は積まない)。戻り値は送れたか(true=200)
     @discardableResult
     static func send(_ event: StudySyncEvent) async -> Bool {
-        let ok = await post(event)
-        if !ok {
-            StudySyncQueue.enqueue(event)
-        }
-        return ok
+        let result = await post(event)
+        return applyAndEnqueueIfNeeded(event: event, result: result)
     }
 
-    /// 次の機会(アプリ起動時・次の操作時)に溜まっていたキューを送り直す
+    /// 次の機会(アプリ起動時・次の操作時)に溜まっていたキューを送り直す。
+    /// 「トークンを待つ」印の付いた項目は送らない(印の付いていない項目だけが対象。5-3c-6)
     static func flushQueue() async -> Int {
-        let pending = StudySyncQueue.drain()
+        await flush { !$0.waitingForToken }
+    }
+
+    /// setAuthContext で新しいトークンを保存した直後に呼ぶ(5-3c-6)。その uid の
+    /// 「トークンを待つ」印が付いた項目だけを送り直す(ほかの uid の印付き項目はそのまま残す)
+    static func flushWaitingForToken(forUid uid: String) async -> Int {
+        await flush { $0.waitingForToken && $0.event.uid == uid }
+    }
+
+    /// キューを(空にせずに)読み出し、`shouldSend` に合う項目だけを古い順に送る。合わない項目は
+    /// そのまま残す。送信を試みて「送り直す」または「トークンを待つ」になった項目が出た時点で、
+    /// それ以降の項目は試みずそのまま残す(同じ原因(通信不可・サーバー障害・同じ古いトークン)で
+    /// 後続も同じ結果になると見込まれるため。5-3c-6 で決定)。「捨てる」になった項目は残さず、
+    /// 後続の項目は引き続き試みる(その項目限りの失敗のため)。
+    /// 計算した新しいキューの内容は、最後に1回だけ書き戻す(StudySyncQueue.replaceAll。
+    /// 送信中にプロセスが終了しても、書き戻し前であれば元のキューの内容がそのまま残る)
+    private static func flush(matching shouldSend: (StudySyncQueueItem) -> Bool) async -> Int {
+        let pending = StudySyncQueue.peekAll()
         var sentCount = 0
-        for event in pending {
-            if await post(event) {
+        var newQueue: [StudySyncQueueItem] = []
+        var stopped = false
+
+        for item in pending {
+            guard !stopped, shouldSend(item) else {
+                newQueue.append(item)
+                continue
+            }
+            let result = await post(item.event)
+            switch result {
+            case .success:
                 sentCount += 1
-            } else {
-                StudySyncQueue.enqueue(event)
+                StudySyncLastSyncError.set(nil)
+            case .retry(let reason):
+                StudySyncLastSyncError.set(reason)
+                newQueue.append(StudySyncQueueItem(event: item.event, waitingForToken: false))
+                stopped = true
+            case .waitingForToken(let reason):
+                StudySyncLastSyncError.set(reason)
+                newQueue.append(StudySyncQueueItem(event: item.event, waitingForToken: true))
+                stopped = true
+            case .discard(let reason):
+                StudySyncLastSyncError.set(reason)
+                // 新しいキューに入れない(捨てる)。後続の項目は引き続き試みる
             }
         }
+
+        StudySyncQueue.replaceAll(newQueue)
         return sentCount
     }
 
-    private static func post(_ event: StudySyncEvent) async -> Bool {
-        guard let auth = StudySyncKeychain.readDeviceToken() else {
-            StudySyncLastSyncError.set("Keychainにデバイストークンが無い(未発行、または書き込み失敗)")
+    /// post の結果を StudySyncLastSyncError に記録し、必要ならキューに積む。戻り値は送れたか
+    @discardableResult
+    private static func applyAndEnqueueIfNeeded(event: StudySyncEvent, result: StudySyncPostResult) -> Bool {
+        switch result {
+        case .success:
+            StudySyncLastSyncError.set(nil)
+            return true
+        case .retry(let reason):
+            StudySyncLastSyncError.set(reason)
+            StudySyncQueue.enqueue(StudySyncQueueItem(event: event, waitingForToken: false))
             return false
+        case .waitingForToken(let reason):
+            StudySyncLastSyncError.set(reason)
+            StudySyncQueue.enqueue(StudySyncQueueItem(event: event, waitingForToken: true))
+            return false
+        case .discard(let reason):
+            StudySyncLastSyncError.set(reason)
+            return false
+        }
+    }
+
+    private static func post(_ event: StudySyncEvent) async -> StudySyncPostResult {
+        guard let auth = StudySyncKeychain.readDeviceToken() else {
+            // トークンが無い(未発行・ログアウト直後など)のは、401(トークンが無効)と同じ
+            // 「有効なトークンが無い」状態なので同じ扱いにする(setAuthContext 後に送り直す)
+            return .waitingForToken(reason: "Keychainにデバイストークンが無い(未発行、または書き込み失敗)")
         }
         guard auth.uid == event.uid else {
-            StudySyncLastSyncError.set("Keychainのuidと送信対象のuidが一致しない")
-            return false
+            // Keychain の uid(今ログイン中のアカウント)と、この操作の uid が異なる。
+            // 別アカウントの操作であり、今のトークンでは(新しいトークンに替わっても他人の uid のままなら)
+            // 届けられないため、送り直さず捨てる
+            return .discard(reason: "Keychainのuidと送信対象のuidが一致しない(別アカウントの操作)")
         }
         guard let body = try? JSONEncoder().encode(event) else {
-            StudySyncLastSyncError.set("イベントのエンコードに失敗した")
-            return false
+            return .discard(reason: "イベントのエンコードに失敗した")
         }
         guard let baseURL = StudySyncConstants.nativeSyncBaseURL else {
             studySyncLogger.error("NativeSyncBaseURL が読めない・不正(action=\(event.action.rawValue, privacy: .public))")
-            StudySyncLastSyncError.set(
-                "送信先の設定(Info.plist の NativeSyncBaseURL)が読めない・不正なため送信できない"
-            )
-            return false
+            // 設定が直れば送れるようになるため、捨てずに送り直す対象にする
+            return .retry(reason: "送信先の設定(Info.plist の NativeSyncBaseURL)が読めない・不正なため送信できない")
         }
         studySyncLogger.info(
             "NativeSyncBaseURL を読めた(host=\(baseURL.host ?? "?", privacy: .public), action=\(event.action.rawValue, privacy: .public))"
@@ -242,21 +359,62 @@ enum StudySyncAPI {
         request.httpBody = body
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                StudySyncLastSyncError.set("HTTPURLResponseを取得できなかった")
-                return false
+                return .retry(reason: "HTTPURLResponseを取得できなかった")
             }
             if (200..<300).contains(http.statusCode) {
-                StudySyncLastSyncError.set(nil)
-                return true
+                return .success
             }
-            StudySyncLastSyncError.set("サーバーが \(http.statusCode) を返した")
-            return false
+            return classifyFailureResponse(statusCode: http.statusCode, body: data)
         } catch {
-            StudySyncLastSyncError.set("通信エラー: \(error.localizedDescription)")
-            return false
+            return .retry(reason: "通信エラー: \(error.localizedDescription)")
         }
+    }
+
+    /// nativeSync(functions/src/nativeSync.ts)のエラー応答を、送り直す・捨てる・トークンを待つに分ける
+    /// (5-3c-6)。応答の形は `{ "error": "<理由>" }`
+    private static func classifyFailureResponse(statusCode: Int, body: Data) -> StudySyncPostResult {
+        switch statusCode {
+        case 401:
+            // トークンが無い・ハッシュが不一致・期限切れのいずれも 401(nativeSync.ts)。
+            // アプリが setAuthContext で新しいトークンを保存するまで待つ
+            return .waitingForToken(reason: "サーバーが 401 を返した(トークンが無効・期限切れ)")
+        case 400:
+            // invalid_body(本文の形が不正)・goal_not_found(架空の goalId)のいずれも、
+            // 送り直しても結果は変わらない(nativeSync.ts のコメント参照)
+            return .discard(reason: "サーバーが 400 を返した(本文が不正、または存在しない目標)")
+        case 413:
+            // payload_too_large。正しい形の本文はこの大きさを超えないため、送り直しても変わらない
+            return .discard(reason: "サーバーが 413 を返した(本文が大きすぎる)")
+        case 429:
+            guard let errorReason = errorField(from: body) else {
+                // 本文が読めない(壊れている・空)場合は、原因を区別できないので送り直す側に倒す(5-3c-6 決定)
+                return .retry(reason: "サーバーが 429 を返したが、本文から理由を読み取れなかった")
+            }
+            if errorReason == "confirmation_limit_exceeded" {
+                // 確認の上限超え。送り直しても結果は変わらない
+                return .discard(reason: "サーバーが 429(confirmation_limit_exceeded)を返した")
+            }
+            // rate_limited、または未知の理由は、少し待てば通る可能性があるため送り直す
+            return .retry(reason: "サーバーが 429(\(errorReason))を返した")
+        case 500:
+            return .retry(reason: "サーバーが 500 を返した")
+        default:
+            // nativeSync.ts が返すのは上記のみだが、想定外の応答(502 等)は安全側に倒して送り直す
+            return .retry(reason: "サーバーが \(statusCode) を返した")
+        }
+    }
+
+    /// 応答本文の `{ "error": "..." }` を読む。形が JSON でない・error が文字列でない場合は nil
+    private static func errorField(from body: Data) -> String? {
+        guard
+            let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+            let error = json["error"] as? String
+        else {
+            return nil
+        }
+        return error
     }
 }
 

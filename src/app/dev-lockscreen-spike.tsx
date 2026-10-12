@@ -38,6 +38,14 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  * 作ってしまうと、毎回別のテストユーザー(=別の uid)になってしまう。
  * そのため、最初に押したときの入力欄の値を authLabel に覚えておき、2回目以降はそれを使う
  * (同じテストユーザー・同じ uid で発行し直す)
+ *
+ * 5-3c-6: nativeSync の応答(200・400・401・通信エラー等)に応じて、送り直す・捨てる・
+ * トークンを待つを振り分ける StudySyncAPI の動きを確かめるボタンを足した。
+ * ロック画面コントロール・通知アクション(StartStudyIntent/StopStudyIntent)からの送信は
+ * システムの操作でしか起動できず自動化できないため、代わりに debugSendStudySyncEvent で
+ * 同じ送信処理を直接試す(「デバイストークンを発行」で Keychain に保存した uid・token を使う)。
+ * 401 を試すには Emulator UI で deviceTokens/{uid} を削除し、通信エラーを試すには Emulator を
+ * 止める(手動の手順。5-3c-6 の確認手順)
  */
 
 export default function DevLockscreenSpikeScreen() {
@@ -151,7 +159,29 @@ export default function DevLockscreenSpikeScreen() {
   }
 
   function handleShowQueueCount() {
-    appendLog(`未送信キュー: ${StudySync.getPendingQueueCount()}件`);
+    appendLog(
+      `未送信キュー: ${StudySync.getPendingQueueCount()}件(トークン待ち: ${StudySync.getPendingQueueWaitingForTokenCount()}件)`,
+    );
+  }
+
+  // 5-3c-6: StudySyncAPI.send を直接試す(ロック画面の Intent は自動化できないため代わりに使う)。
+  // goalId を架空の値に変えると 400(goal_not_found)、デバイストークンを Emulator UI で消すと 401、
+  // Emulator を止めると通信エラー(送り直す対象)になることを確かめられる
+  async function handleDebugSend(action: 'start' | 'confirm', targetGoalId: string) {
+    const sessionIdForSend = generateLocalId();
+    const sent = await StudySync.debugSendStudySyncEvent(
+      uid,
+      sessionIdForSend,
+      targetGoalId,
+      action,
+      Date.now(),
+      generateLocalId(),
+      action === 'start' ? true : null,
+    );
+    const reason = StudySync.getLastSyncErrorReason();
+    appendLog(
+      `debugSend(${action}, goalId=${targetGoalId}): 送信=${sent}${reason ? `(理由: ${reason})` : ''}`,
+    );
   }
 
   // 5-3c-3: 計測中の状態(App Group)の読み・書き・消去を手動で確かめる
@@ -223,6 +253,13 @@ export default function DevLockscreenSpikeScreen() {
       <Button title="停止" onPress={handleStop} />
       <Button title="キューを再送" onPress={handleFlushQueue} />
       <Button title="未送信キュー件数を表示" onPress={handleShowQueueCount} />
+      <Text style={styles.title}>5-3c-6 nativeSync の応答の扱い</Text>
+      <Button title="送る: start(正常。200の見込み)" onPress={() => handleDebugSend('start', goalId)} />
+      <Button
+        title="送る: start(架空のgoalId。400の見込み)"
+        onPress={() => handleDebugSend('start', 'nonexistent-goal-00000000')}
+      />
+      <Button title="送る: confirm(正常。200の見込み)" onPress={() => handleDebugSend('confirm', goalId)} />
       <Text style={styles.title}>5-3c-3 計測中の状態(App Group)</Text>
       <Button title="計測中の状態を書く" onPress={handleWriteActiveSession} />
       <Button title="不正な形で書く(断られる確認)" onPress={handleWriteInvalidActiveSession} />

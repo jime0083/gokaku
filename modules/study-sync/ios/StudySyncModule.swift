@@ -14,8 +14,15 @@ public class StudySyncModule: Module {
         /// 検証用のデバイストークンを Keychain(App Group 共有)に保存する。
         /// 本来の発行方法(Firebase Auth との紐付け等)は 3-5・5-3 で確定する。
         /// Keychain への書き込みに失敗した場合は例外を投げる(JS 側に呼び出し元として伝える。problem P-012)
+        ///
+        /// 5-3c-6: 保存できたら、この uid の「トークンを待つ」印が付いたキューの項目
+        /// (以前の 401 で溜めていた操作)を送り直す(requirements 3-2)。待たずに返す(fire-and-forget。
+        /// 失敗してもキューに残り続けるだけで、次の機会にまた試みられる)
         Function("setAuthContext") { (uid: String, deviceToken: String) in
             try StudySyncKeychain.save(uid: uid, token: deviceToken)
+            Task {
+                _ = await StudySyncAPI.flushWaitingForToken(forUid: uid)
+            }
         }
 
         Function("clearAuthContext") {
@@ -132,6 +139,42 @@ public class StudySyncModule: Module {
 
         Function("getPendingQueueCount") { () -> Int in
             StudySyncQueue.count()
+        }
+
+        /// キューに溜まっている項目のうち、「トークンを待つ」印が付いている件数(5-3c-6。確認画面での
+        /// 証跡用。キューを空にせずに数えるだけ)
+        Function("getPendingQueueWaitingForTokenCount") { () -> Int in
+            StudySyncQueue.waitingForTokenCount()
+        }
+
+        /// 確認用(5-3c-6): nativeSync への1回の送信(StudySyncAPI.send)を直接試す。
+        /// ロック画面コントロール・通知アクションからの送信(StartStudyIntent/StopStudyIntent)は
+        /// システムの操作でしか起動できず自動化できないため、この関数で同じ送信処理
+        /// (応答に応じて送り直す・捨てる・トークンを待つの振り分け)を確認画面(dev-lockscreen-spike)
+        /// から直接試せるようにする。戻り値は送れたか(true=200)
+        AsyncFunction("debugSendStudySyncEvent") {
+            (
+                uid: String,
+                sessionId: String,
+                goalId: String,
+                action: String,
+                clientTimeMs: Double,
+                idempotencyKey: String,
+                checkEnabled: Bool?
+            ) -> Bool in
+            guard let studySyncAction = StudySyncAction(rawValue: action) else {
+                return false
+            }
+            let event = StudySyncEvent(
+                uid: uid,
+                sessionId: sessionId,
+                goalId: goalId,
+                action: studySyncAction,
+                clientTimeMs: clientTimeMs,
+                idempotencyKey: idempotencyKey,
+                checkEnabled: checkEnabled
+            )
+            return await StudySyncAPI.send(event)
         }
 
         AsyncFunction("requestNotificationPermission") { () -> Bool in

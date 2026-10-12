@@ -40,6 +40,22 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
   stopMeasurement(uid: string, goalId: string, sessionId: string): Promise<boolean>;
   flushQueue(): Promise<number>;
   getPendingQueueCount(): number;
+  /** キューに溜まっている項目のうち、「トークンを待つ」印が付いている件数(5-3c-6) */
+  getPendingQueueWaitingForTokenCount(): number;
+  /**
+   * 確認用(5-3c-6): nativeSync への1回の送信(StudySyncAPI.send)を直接試す。
+   * ロック画面コントロール・通知アクションからの送信は自動化できないため、dev-lockscreen-spike から
+   * 直接この関数で試す。戻り値は送れたか(true=200)
+   */
+  debugSendStudySyncEvent(
+    uid: string,
+    sessionId: string,
+    goalId: string,
+    action: 'start' | 'stop' | 'confirm',
+    clientTimeMs: number,
+    idempotencyKey: string,
+    checkEnabled: boolean | null,
+  ): Promise<boolean>;
   requestNotificationPermission(): Promise<boolean>;
   /** 直前の送信(startMeasurement/stopMeasurement/flushQueue)が失敗した理由。無ければ null */
   getLastSyncErrorReason(): string | null;

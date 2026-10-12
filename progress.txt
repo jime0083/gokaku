@@ -655,7 +655,7 @@ Phase 5: タイマー
       - P-032(dev-notification-probe を削除)・P-034(authLabel)を直した
       - npm test 634件
 
-[ ] 5-3c-6 ロック画面の送信の応答の扱い(Swift)
+[x] 5-3c-6 ロック画面の送信の応答の扱い(Swift)
     内容: nativeSync の応答に応じて扱いを分ける
       - 送り直す: 500・通信エラー・429 rate_limited
       - 捨てる: 400・413・429 confirmation_limit_exceeded
@@ -664,6 +664,12 @@ Phase 5: タイマー
     完了条件:
       - ビルドが通る
       - Emulator で、各応答のときの溜め方を確かめた証跡がある(開発用の確認画面のログで可)
+    ※完了(2026-10-12): レビューPASS・セキュリティPASS
+      - 前の担当が利用上限で中断したため、新しい担当が確認して仕上げた
+      - 応答ごとの扱い: 送り直す(500・通信エラー・429 rate_limited)/ 捨てる(400・413・429 confirmation_limit_exceeded)/ 401 は「トークンを待つ」印を付け、setAuthContext のあとで送り直す
+      - 送り直しになったら、キューの残りは送らずに止める。キューは 200 件まで
+      - シミュレータの UDID が変わった。今は SE 6DAC94C9…・16 Pro Max 99E1FF39…(いずれも iOS 18.6)
+      - 申し送り: P-036(開発用の画面と debug 用の関数が本番に残る)、P-037(キューの読み書きの競合)
 
 [ ] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))
     内容: StopStudyIntent で Activity.activities が空になる原因を調べ、修正方針を報告する(Activity の id を Intent のパラメータで渡す案の検証を含む)
@@ -718,6 +724,7 @@ Phase 6: ホーム・編集・アカウント管理
 [ ] 6-4 ログアウトとアカウント削除  【セキュリティ確認】
     内容: ログアウト、アカウント削除(確認ダイアログ、Firestore の全データ・Xトークン・デバイストークン削除、Firebase Auth のユーザー削除)
           ※5-3a・5-3a-2 の申し送り: ログアウトでもサーバーのデバイストークンを失効(revokeDeviceToken)し、端末の Keychain を StudySync.clearAuthContext で消し、AsyncStorage の deviceToken:meta:v1 も消す
+          ※5-3c-6 の申し送り: ログアウト・アカウント削除のときに、ロック画面側の送信待ちのキュー(App Group)からその uid の項目も消す(401 で「トークンを待つ」印の付いた項目が残り続けないようにする)
     完了条件: Emulator 上で削除後にデータとトークンが残っていないことをテストで確認
 
 =====================================
@@ -786,6 +793,11 @@ Phase 8: リリース準備
 [ ] 8-4 審査用の素材
     内容: スクリーンショット、説明文、審査用メモ(テストアカウントの扱い、X 連携の説明)を用意する
     完了条件: ユーザーが素材を確認し OK を出す(その後 manual-work W10)
+
+[ ] 8-0 本番のビルドから開発用の画面・関数を外す(problem P-036)  【セキュリティ確認】
+    内容: src/app/dev-* の画面を、本番のビルドで到達できないようにする(ルートから外す・__DEV__ のときだけ登録する等)。
+          StudySyncModule の debug 用の関数(debugSendStudySyncEvent 等)を #if DEBUG で外す
+    完了条件: 本番相当のビルドで gokaku:///dev-* を開いても画面が出ない。debug 用の関数が本番のビルドにない。typecheck/lint/test が緑
 
 [ ] 8-5 リリース前の依存脆弱性の再確認(problem P-001)
     内容: npm audit(dev を含む)を再実行し、P-001・P-010 で受け入れた脆弱性(特にアプリ本体に含まれる decode-uri-component、firebase-tools 由来の4件、functions の uuid)が更新で解消されたかを確認する。
