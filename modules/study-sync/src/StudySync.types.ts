@@ -1,9 +1,4 @@
 /**
- * Phase 1-4 技術検証用の native ブリッジの型。本実装(5-3)で正式な形に見直す
- */
-export type StudySyncSource = 'app' | 'live_activity' | 'control_widget' | 'notification_action';
-
-/**
  * 計測中の状態(5-3c-3。requirements 3-2「アプリとロック画面の計測の共有」)。
  * App Group に 1 件だけ置く値の形。アプリ・ロック画面(ライブアクティビティ・ロック画面コントロール)の
  * どちらで開始した計測でも同じ形で持ち、どちらからも読み書き・消去できる。

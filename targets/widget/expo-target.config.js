@@ -11,7 +11,9 @@ module.exports = (config) => ({
   // 本体アプリ(17.0)と同じ最低 iOS バージョン。iOS 18 専用の機能(ControlWidget)は
   // Swift 側で @available(iOS 18.0, *) / if #available で分岐する
   deploymentTarget: '17.0',
-  frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit', 'AppIntents'],
+  // UserNotifications: 5-3c-4。ロック画面コントロールで開始したときに「勉強中？」の通知を予約・
+  // 取り消す(StudySyncCheckNotification。targets/_shared/StudySyncCore.swift)ために追加
+  frameworks: ['SwiftUI', 'WidgetKit', 'ActivityKit', 'AppIntents', 'UserNotifications'],
   entitlements: {
     'com.apple.security.application-groups':
       config.ios.entitlements['com.apple.security.application-groups'],

@@ -590,7 +590,7 @@ Phase 5: タイマー
       - 手動モック: modules/study-sync/src/__mocks__/StudySyncModule.ts
       - 壊れた JSON を読んでもアプリは落ちず、null になる
 
-[ ] 5-3c-4 ロック画面の操作を新しい形に合わせる(Swift)
+[x] 5-3c-4 ロック画面の操作を新しい形に合わせる(Swift)
     内容: StartStudyIntent・StopStudyIntent を、5-3c-3 の計測中の状態と nativeSync の新しい形(sessionId・checkEnabled・confirm)に合わせる。
       - ロック画面から開始したとき:
         - Swift が sessionId を作って、計測中の状態に書く
@@ -599,8 +599,16 @@ Phase 5: タイマー
       - goalId が分からないときは送らない
           ※5-3c-2 の申し送り: ロック画面の部品(ウィジェットの拡張)から、送信先 URL(Info.plist の NativeSyncBaseURL)が正しく読めることを、実際の開始・停止のログで確かめる
     完了条件:
-      - シミュレータで、ロック画面の開始・停止が Emulator の sessions に記録される(自動化できない操作は手順とスクショ)
       - ビルドが通る
+      - 新しい送信の形で、Emulator の sessions に source=lockscreen・startAt・stopAt が記録される(アプリの StudySyncModule 経由で確かめる)
+      - StartStudyIntent・StopStudyIntent のコードが、内容のとおりになっている
+    ※2026-10-12: ロック画面コントロールとライブアクティビティのボタンは、自動では押せない(P-011。Maestro と simctl はシステムの画面を操作できない)。
+      実際にボタンを押す確認は、手順を用意してユーザーに 5-3e で行ってもらう(実装担当が作った手順は 5-3e に引き継ぐ)
+    ※完了(2026-10-12): レビューPASS
+      - StudySyncEvent を新しい形にした(sessionId・checkEnabled あり、source なし)
+      - StudySyncCheckNotification(JS と同じ識別子・カテゴリ・文言)を作った
+      - StudySyncModule.startMeasurement(uid, goalId, sessionId, checkEnabled) / stopMeasurement(uid, goalId, sessionId)。sessionId は JS が作って渡す
+      - 古い形でキューに溜まっていた操作は、読み込めないので捨てる
 
 [ ] 5-3c-5 アプリのタイマーとロック画面の同期(JS)
     内容:
@@ -608,6 +616,7 @@ Phase 5: タイマー
       - アプリを開いたとき・他のアプリから戻ったとき: 計測中の状態を読み、ロック画面での開始・停止を端末の記録に取り込む(requirements 3-2。2026-10-10 決定の表示)
       - 確認 ON/OFF の設定を、計測中の状態とは別に App Group に覚えさせる
           あわせて検証用の src/app/dev-notification-probe.tsx を消す(problem P-032)
+          あわせて dev-lockscreen-spike の「デバイストークンを発行」を2回押すと uid が変わる問題を直す(problem P-034。5-3e の手動の確認で使うため)
     完了条件: StudySync をモックにした画面テストで、次の4つが緑
       - アプリで開始すると、計測中の状態が書かれる
       - ロック画面で開始された状態を取り込む
@@ -630,6 +639,13 @@ Phase 5: タイマー
 
 [ ] 5-3e ロック画面コントロールの開始・通知アクションの確認(problem P-011 (2)(3))
     内容: iOS 18 のロック画面コントロールからの開始と、通知アクション「勉強中」のタップがサーバーに反映されることを確かめ、問題があれば直す
+          ※5-3c-4 から引き継いだ手動の確認手順:
+            1. Emulator を起動し、Pro Max(iOS 18.6)で dev-lockscreen-spike を開き、「通知の許可」→「デバイストークンを発行」を押す
+            2. Emulator UI で users/{uid}/goals/{goalId} を1件作る
+            3. 設定 → コントロールセンター で「勉強ウォッチ」を追加する
+            4. ロック画面のコントロールで開始する → ライブアクティビティが出る → sessions に source=lockscreen・startAt が入る
+            5. dev-notification-probe で、study-check-notification が予約されていることを確かめる
+            6. ライブアクティビティの「停止」を押す → stopAt が入り、予約が0件になる
     完了条件: シミュレータでそれぞれサーバーに反映される証跡(自動化できない操作は手順とスクショ)
 
 [ ] 5-3f 実機での確認(画面ロック中の操作)

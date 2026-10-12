@@ -67,7 +67,11 @@ private struct StopButton: View {
 }
 
 /// ロック画面・Dynamic Island の停止ボタン。
-/// `LiveActivityIntent` に準拠させることで、アプリを開かずに WidgetKit 拡張プロセス内で実行される
+/// `LiveActivityIntent` に準拠させることで、アプリを開かずに WidgetKit 拡張プロセス内で実行される。
+///
+/// 5-3c-4(requirements 3-2「アプリとロック画面の計測の共有」): sessionId は計測中の状態
+/// (5-3c-3。App Group に 1 件だけ置く)から読む。uid・goalId パラメータはライブアクティビティの
+/// 属性から渡ってくる値で、どの Activity を終了するかの判定に使う
 struct StopStudyIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "勉強を停止"
 
@@ -88,15 +92,23 @@ struct StopStudyIntent: LiveActivityIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        let event = StudySyncEvent(
-            uid: uid,
-            goalId: goalId,
-            action: .stop,
-            source: .liveActivity,
-            clientTimeMs: Date().timeIntervalSince1970 * 1000,
-            idempotencyKey: UUID().uuidString
-        )
-        await StudySyncAPI.send(event)
+        // 計測中の状態があれば、その sessionId で stop を送り、状態を消し、通知の予約を取り消す
+        // (計測中の状態がすでに無い=別の経路でこの計測が止められている場合は、送信せずに
+        // ライブアクティビティの後片付けだけ行う)
+        if let session = StudySyncSharedState.activeSession() {
+            let event = StudySyncEvent(
+                uid: session.uid,
+                sessionId: session.sessionId,
+                goalId: session.goalId,
+                action: .stop,
+                clientTimeMs: Date().timeIntervalSince1970 * 1000,
+                idempotencyKey: UUID().uuidString,
+                checkEnabled: nil
+            )
+            await StudySyncAPI.send(event)
+            StudySyncSharedState.clearActiveSession()
+            StudySyncCheckNotification.cancel()
+        }
 
         for activity in Activity<StudyActivityAttributes>.activities
         where activity.attributes.uid == uid {

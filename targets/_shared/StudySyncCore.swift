@@ -1,5 +1,12 @@
 import Foundation
+import os
 import Security
+import UserNotifications
+
+/// Console.app(unified logging)で確認するためのログ。メインアプリ・WidgetKit 拡張のどちらの
+/// プロセスで実行していても、それぞれの実行時に出力される(5-3c-4: ウィジェットの拡張からも
+/// NativeSyncBaseURL が読めていることを確かめるため)
+private let studySyncLogger = Logger(subsystem: "com.jime0083.gokakuwatch.studysync", category: "StudySyncAPI")
 
 /// Phase 5-3c-2: アプリ側(Expo Module)・ロック画面側(WidgetKit 拡張)の両方が使う、
 /// Cloud Functions(nativeSync)への送信・Keychain(デバイストークン)・App Group キュー
@@ -11,22 +18,22 @@ enum StudySyncAction: String, Codable {
     case confirm
 }
 
-enum StudySyncSource: String, Codable {
-    case app
-    case liveActivity = "live_activity"
-    case controlWidget = "control_widget"
-    case notificationAction = "notification_action"
-}
-
+/// nativeSync(functions/src/nativeSync.ts)が受け取る本文の形(5-3c-4。requirements 3-2)。
+/// アプリの記録(recordStudyEvent。5-1b-1・5-2a)と揃えてある: sessionId・action・clientTimeMs・
+/// idempotencyKey・goalId、action が start のときだけ checkEnabled を送る。
+/// source は本文に含めない(nativeSync からの記録は常に 'lockscreen' とサーバー側が決める)
 struct StudySyncEvent: Codable {
     let uid: String
+    let sessionId: String
     let goalId: String
     let action: StudySyncAction
-    let source: StudySyncSource
     /// 端末時刻(epoch ms)。サーバー側は受信時刻(serverReceivedAt)も別途記録する
     let clientTimeMs: Double
     /// 再送時の重複書き込みを防ぐための冪等キー(UUID)
     let idempotencyKey: String
+    /// action が .start のときだけ値を持つ。nil の場合、JSONEncoder はキー自体を省く
+    /// (Swift の自動合成された Encodable は Optional プロパティに encodeIfPresent を使うため)
+    let checkEnabled: Bool?
 }
 
 /// Keychain への書き込み(delete→add)が失敗した場合に投げるエラー。
@@ -217,11 +224,15 @@ enum StudySyncAPI {
             return false
         }
         guard let baseURL = StudySyncConstants.nativeSyncBaseURL else {
+            studySyncLogger.error("NativeSyncBaseURL が読めない・不正(action=\(event.action.rawValue, privacy: .public))")
             StudySyncLastSyncError.set(
                 "送信先の設定(Info.plist の NativeSyncBaseURL)が読めない・不正なため送信できない"
             )
             return false
         }
+        studySyncLogger.info(
+            "NativeSyncBaseURL を読めた(host=\(baseURL.host ?? "?", privacy: .public), action=\(event.action.rawValue, privacy: .public))"
+        )
 
         var request = URLRequest(url: baseURL)
         request.httpMethod = "POST"
@@ -321,6 +332,47 @@ extension StudySyncActiveSession {
         self.startAt = startAt
         self.checkEnabled = checkEnabled
         self.confirmations = confirmations
+    }
+}
+
+/// ロック画面から開始した計測の「勉強中？」確認の通知(5-3c-4。requirements 3-2)。
+/// JS 側(src/features/timer/studyCheckNotifications.ts)とまったく同じ識別子・カテゴリ・アクション・
+/// 文言を使う(通知センター・ロック画面には区別がないため、どちらから予約しても同じ見え方・同じ
+/// アクションの応答の受け取り方になる必要がある)。カテゴリ(STUDY_CHECK)・アクション
+/// (STUDY_CHECK_CONFIRM)自体の登録は JS 側(configureStudyCheckNotifications)が行うため、
+/// ここでは登録しない
+enum StudySyncCheckNotification {
+    /// 通知のアクションのカテゴリ識別子(JS の STUDY_CHECK_CATEGORY_IDENTIFIER と同じ)
+    static let categoryIdentifier = "STUDY_CHECK"
+    /// 予約する通知の識別子(JS の STUDY_CHECK_NOTIFICATION_IDENTIFIER と同じ。固定値なので
+    /// 同じ識別子で予約し直すと置き換わる)
+    static let notificationIdentifier = "study-check-notification"
+    /// 「勉強中？」確認の間隔(計測開始から60分ごと。requirements 3-2。shared/studyCheck.ts の
+    /// STUDY_CHECK_INTERVAL_MS と同じ値)
+    static let firstCheckIntervalSeconds: TimeInterval = 60 * 60
+
+    /// 計測開始から `firstCheckIntervalSeconds` 後に通知を1件予約する(既存の予約があれば置き換える)
+    static func scheduleFirstCheck() async {
+        let content = UNMutableNotificationContent()
+        content.title = "勉強中？"
+        content.categoryIdentifier = categoryIdentifier
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: firstCheckIntervalSeconds,
+            repeats: false
+        )
+        let request = UNNotificationRequest(
+            identifier: notificationIdentifier,
+            content: content,
+            trigger: trigger
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    /// 予約中の確認の通知を取り消す(予約がなくても安全に呼べる)
+    static func cancel() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(
+            withIdentifiers: [notificationIdentifier]
+        )
     }
 }
 

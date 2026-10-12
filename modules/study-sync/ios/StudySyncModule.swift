@@ -2,9 +2,10 @@ import ActivityKit
 import ExpoModulesCore
 import UserNotifications
 
-/// Phase 1-4 技術検証用の最小ブリッジ。JS(アプリ内タイマー画面の予定地。Phase 5 で本実装)から
-/// ライブアクティビティ・ロック画面コントロールの土台となる native 処理を呼び出せるようにする。
-/// このモジュール自体は 1-4 の検証用スキャフォルドであり、5-3 で正式な形に置き換える
+/// JS(アプリ内タイマー画面。src/features/timer)から、ライブアクティビティ・ロック画面コントロール・
+/// 計測中の状態(App Group)・デバイストークン(Keychain)を扱う native 処理を呼び出すブリッジ。
+/// 1-4 の技術検証用スキャフォルドから、5-3 で requirements 3-2 の正式な形に合わせてきている
+/// (startMeasurement/stopMeasurement の sessionId・checkEnabled は 5-3c-4 で揃えた)
 public class StudySyncModule: Module {
     public func definition() -> ModuleDefinition {
         Name("StudySync")
@@ -58,15 +59,19 @@ public class StudySyncModule: Module {
             StudySyncSharedState.setCheckEnabledSetting(enabled)
         }
 
-        AsyncFunction("startMeasurement") { (uid: String, goalId: String) -> Bool in
+        // 5-3c-4: sessionId はアプリ(JS)側で作って渡す(5-1b-2 の id.ts で作る sessionId と、
+        // 端末内保存(LocalStudySession)・Callable への記録(recordStudyEvent)に使う sessionId を
+        // 1つに揃えるため。checkEnabled も、start のときに nativeSync へ送る値として受け取る
+        AsyncFunction("startMeasurement") { (uid: String, goalId: String, sessionId: String, checkEnabled: Bool) -> Bool in
             let startedAt = Date()
             let event = StudySyncEvent(
                 uid: uid,
+                sessionId: sessionId,
                 goalId: goalId,
                 action: .start,
-                source: .app,
                 clientTimeMs: startedAt.timeIntervalSince1970 * 1000,
-                idempotencyKey: UUID().uuidString
+                idempotencyKey: UUID().uuidString,
+                checkEnabled: checkEnabled
             )
             let sent = await StudySyncAPI.send(event)
 
@@ -79,14 +84,15 @@ public class StudySyncModule: Module {
             return sent
         }
 
-        AsyncFunction("stopMeasurement") { (uid: String, goalId: String) -> Bool in
+        AsyncFunction("stopMeasurement") { (uid: String, goalId: String, sessionId: String) -> Bool in
             let event = StudySyncEvent(
                 uid: uid,
+                sessionId: sessionId,
                 goalId: goalId,
                 action: .stop,
-                source: .app,
                 clientTimeMs: Date().timeIntervalSince1970 * 1000,
-                idempotencyKey: UUID().uuidString
+                idempotencyKey: UUID().uuidString,
+                checkEnabled: nil
             )
             let sent = await StudySyncAPI.send(event)
 

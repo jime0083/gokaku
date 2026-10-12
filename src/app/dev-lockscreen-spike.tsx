@@ -7,6 +7,7 @@ import { connectFirebaseEmulatorsIfNeeded } from '../config/firebase';
 import { getFirebaseEmulatorConfig } from '../config/firebase-emulator';
 import { callIssueDeviceToken } from '../features/deviceToken/deviceTokenApi';
 import { saveDeviceTokenToKeychain } from '../features/deviceToken/studySyncAuthContext';
+import { generateLocalId } from '../features/timer/id';
 // study-sync は Phase 1-4 専用の検証用ローカル Expo Module(modules/study-sync)
 import StudySync from '../../modules/study-sync/src/StudySyncModule';
 
@@ -31,6 +32,9 @@ export default function DevLockscreenSpikeScreen() {
   const [uid, setUid] = useState('spike-user-1');
   const [goalId, setGoalId] = useState('spike-goal-1');
   const [log, setLog] = useState<string[]>([]);
+  // 5-3c-4: startMeasurement/stopMeasurement は sessionId を呼び出し側(JS)から渡す形になった。
+  // 開始時に作った sessionId を停止まで覚えておく
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   function appendLog(message: string) {
     setLog((prev) => [`${new Date().toLocaleTimeString()} ${message}`, ...prev].slice(0, 20));
@@ -99,13 +103,20 @@ export default function DevLockscreenSpikeScreen() {
   }
 
   async function handleStart() {
-    const sent = await StudySync.startMeasurement(uid, goalId);
-    appendLog(`開始(ライブアクティビティ表示)。送信: ${sent}${failureReasonSuffix(sent)}`);
+    const newSessionId = generateLocalId();
+    setSessionId(newSessionId);
+    const sent = await StudySync.startMeasurement(uid, goalId, newSessionId, true);
+    appendLog(`開始(ライブアクティビティ表示)。sessionId=${newSessionId} 送信: ${sent}${failureReasonSuffix(sent)}`);
   }
 
   async function handleStop() {
-    const sent = await StudySync.stopMeasurement(uid, goalId);
+    if (!sessionId) {
+      appendLog('停止: 開始していないため sessionId が無い');
+      return;
+    }
+    const sent = await StudySync.stopMeasurement(uid, goalId, sessionId);
     appendLog(`停止。送信: ${sent}${failureReasonSuffix(sent)}`);
+    setSessionId(null);
   }
 
   /** 送信に失敗した場合、直前の失敗理由(problem P-012: 401・通信不可等)を併記する */

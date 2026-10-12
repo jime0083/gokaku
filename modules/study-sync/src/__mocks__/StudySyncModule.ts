@@ -19,10 +19,11 @@ const studySyncModuleMock = {
   clearAuthContext: jest.fn<void, []>(),
   getLastSyncErrorReason: jest.fn<string | null, []>(() => null),
   setCurrentGoalId: jest.fn<void, [goalId: string | null]>(),
-  startMeasurement: jest.fn<Promise<boolean>, [uid: string, goalId: string]>(() =>
-    Promise.resolve(true),
-  ),
-  stopMeasurement: jest.fn<Promise<boolean>, [uid: string, goalId: string]>(() =>
+  startMeasurement: jest.fn<
+    Promise<boolean>,
+    [uid: string, goalId: string, sessionId: string, checkEnabled: boolean]
+  >(() => Promise.resolve(true)),
+  stopMeasurement: jest.fn<Promise<boolean>, [uid: string, goalId: string, sessionId: string]>(() =>
     Promise.resolve(true),
   ),
   flushQueue: jest.fn<Promise<number>, []>(() => Promise.resolve(0)),

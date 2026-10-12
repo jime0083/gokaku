@@ -12,8 +12,14 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
   setAuthContext(uid: string, deviceToken: string): void;
   clearAuthContext(): void;
   setCurrentGoalId(goalId: string | null): void;
-  startMeasurement(uid: string, goalId: string): Promise<boolean>;
-  stopMeasurement(uid: string, goalId: string): Promise<boolean>;
+  /**
+   * 計測の開始(5-3c-4)。sessionId は呼び出し側(JS)が作って渡す(端末内保存・Callable への記録と
+   * 同じ sessionId を使うため。src/features/timer/id.ts の generateLocalId で作る想定)。
+   * checkEnabled は nativeSync へ送る開始時の確認 ON/OFF(requirements 3-2)
+   */
+  startMeasurement(uid: string, goalId: string, sessionId: string, checkEnabled: boolean): Promise<boolean>;
+  /** 計測の停止(5-3c-4)。sessionId は開始時と同じ値を渡す */
+  stopMeasurement(uid: string, goalId: string, sessionId: string): Promise<boolean>;
   flushQueue(): Promise<number>;
   getPendingQueueCount(): number;
   requestNotificationPermission(): Promise<boolean>;
