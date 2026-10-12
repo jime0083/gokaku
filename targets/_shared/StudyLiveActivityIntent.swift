@@ -89,3 +89,90 @@ struct StopStudyIntent: LiveActivityIntent {
         return .result()
     }
 }
+
+/// ロック画面コントロールから計測を開始する App Intent(requirements.md 3-2「アプリとロック画面の
+/// 計測の共有」iOS 18+。`ControlWidgetButton` の action に使うため `targets/widget/StudyControlWidget.swift`
+/// から呼ばれる)。uid・現在の goalId はログイン・目標設定済みのメインアプリが App Group に
+/// 書き込んでおいた値を読む。
+///
+/// problem P-038: この型はもともと `AppIntent`(無印)に準拠しており、`targets/widget`
+/// (ウィジェット拡張ターゲット)にしか定義されていなかった。Apple の公式ドキュメント
+/// (ActivityKit の `Activity.request(attributes:content:pushType:)`)に次の記述がある:
+/// 「Use this function to request and start a Live Activity from your app while it's in the
+/// foreground. Note that you can't do this while your app is in the background, unless you
+/// adopt AppIntents and start the Live Activity using a LiveActivityIntent.」
+/// つまりロック画面コントロール(アプリが前面にない状態)から `Activity.request()` を確実に
+/// 実行するには、素の `AppIntent` ではなく `LiveActivityIntent` に準拠させる必要がある。
+/// `StopStudyIntent` と同じ理由(上記コメント参照)で、`LiveActivityIntent` はアプリ本体の
+/// プロセスで実行されるため、この型を `targets/_shared/` に置いてアプリ本体ターゲット・
+/// ウィジェット拡張ターゲットの両方に含める(5-3d-2)。
+///
+/// `LiveActivityIntent` は iOS 17.0 以降で使える(AppIntents.framework の
+/// `@available(iOS 17.0, *) public protocol LiveActivityIntent`)。このプロジェクトの
+/// deploymentTarget はすでに 17.0 のため、`@available` の指定は不要(`StopStudyIntent` と同じ)。
+/// `ControlWidgetButton(action:)` は `Action: AppIntents.AppIntent` を要求するが、
+/// `LiveActivityIntent: SystemIntent: AppIntent` のためこの型のままで渡せる
+/// (WidgetKit.framework の swiftinterface で確認)。
+///
+/// 5-3c-4(requirements 3-2): 計測中の状態(5-3c-3。App Group に 1 件だけ置く)を正として扱う。
+/// すでに計測中であれば何もしない(アプリで始めた計測をロック画面から二重に start しない)。
+/// uid・デバイストークン・goalId のどれかが分からない場合も何もしない
+/// (ログイン・目標設定が済んでいない端末からの操作を無視する)
+struct StartStudyIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "勉強を開始"
+    static var openAppWhenRun: Bool = false
+
+    func perform() async throws -> some IntentResult {
+        guard StudySyncSharedState.activeSession() == nil else {
+            return .result()
+        }
+        guard let auth = StudySyncKeychain.readDeviceToken() else {
+            return .result()
+        }
+        guard let goalId = StudySyncSharedState.currentGoalId(), !goalId.isEmpty else {
+            return .result()
+        }
+
+        let sessionId = UUID().uuidString
+        let startedAt = Date()
+        let checkEnabled = StudySyncSharedState.checkEnabledSetting()
+
+        // ネットワークの成否に関わらず、計測中の状態はまず App Group に書く
+        // (アプリ側の表示・ロック画面の停止操作は、この状態を正として動く。5-3c-3)
+        StudySyncSharedState.setActiveSession(
+            StudySyncActiveSession(
+                sessionId: sessionId,
+                uid: auth.uid,
+                goalId: goalId,
+                startAt: startedAt.timeIntervalSince1970 * 1000,
+                checkEnabled: checkEnabled,
+                confirmations: []
+            )
+        )
+
+        let event = StudySyncEvent(
+            uid: auth.uid,
+            sessionId: sessionId,
+            goalId: goalId,
+            action: .start,
+            clientTimeMs: startedAt.timeIntervalSince1970 * 1000,
+            idempotencyKey: UUID().uuidString,
+            checkEnabled: checkEnabled
+        )
+        // 送れなければ StudySyncAPI.send が App Group のキューに積む(5-3c-6 で送り直し方を整理する)
+        await StudySyncAPI.send(event)
+
+        let attributes = StudyActivityAttributes(uid: auth.uid)
+        let state = StudyActivityAttributes.ContentState(startedAt: startedAt, goalId: goalId)
+        _ = try? Activity<StudyActivityAttributes>.request(
+            attributes: attributes,
+            content: ActivityContent(state: state, staleDate: nil)
+        )
+
+        if checkEnabled {
+            await StudySyncCheckNotification.scheduleFirstCheck()
+        }
+
+        return .result()
+    }
+}
