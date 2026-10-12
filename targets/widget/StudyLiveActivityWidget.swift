@@ -66,68 +66,11 @@ private struct StopButton: View {
     }
 }
 
-/// ロック画面・Dynamic Island の停止ボタン。
-/// `LiveActivityIntent` に準拠させることで、アプリを開かずに WidgetKit 拡張プロセス内で実行される。
-///
-/// 5-3c-4(requirements 3-2「アプリとロック画面の計測の共有」): sessionId は計測中の状態
-/// (5-3c-3。App Group に 1 件だけ置く)から読む。uid・goalId パラメータはライブアクティビティの
-/// 属性から渡ってくる値で、どの Activity を終了するかの判定に使う。
-/// 5-3c-5a: 計測中の状態を消すときに「最後にロック画面で止めた計測」(sessionId・stopAt)を残す
-struct StopStudyIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "勉強を停止"
-
-    @Parameter(title: "uid")
-    var uid: String
-
-    @Parameter(title: "goalId")
-    var goalId: String
-
-    init() {
-        self.uid = ""
-        self.goalId = ""
-    }
-
-    init(uid: String, goalId: String) {
-        self.uid = uid
-        self.goalId = goalId
-    }
-
-    func perform() async throws -> some IntentResult {
-        // 計測中の状態があれば、その sessionId で stop を送り、状態を消し、通知の予約を取り消す
-        // (計測中の状態がすでに無い=別の経路でこの計測が止められている場合は、送信せずに
-        // ライブアクティビティの後片付けだけ行う)。
-        // 5-3c-5a: 消す前に、この sessionId・止めた時刻(stopAt)を「最後にロック画面で止めた計測」
-        // として App Group に残す(1件だけ。上書き)。アプリを次に開いたとき(5-3c-5b)に、
-        // この sessionId・stopAt を使って端末内の記録を「ロック画面で止まった計測」として取り込むため
-        if let session = StudySyncSharedState.activeSession() {
-            let stoppedAt = Date()
-            let event = StudySyncEvent(
-                uid: session.uid,
-                sessionId: session.sessionId,
-                goalId: session.goalId,
-                action: .stop,
-                clientTimeMs: stoppedAt.timeIntervalSince1970 * 1000,
-                idempotencyKey: UUID().uuidString,
-                checkEnabled: nil
-            )
-            await StudySyncAPI.send(event)
-            StudySyncSharedState.setLastLockscreenStop(
-                StudySyncLastLockscreenStop(
-                    sessionId: session.sessionId,
-                    stopAt: stoppedAt.timeIntervalSince1970 * 1000
-                )
-            )
-            StudySyncSharedState.clearActiveSession()
-            StudySyncCheckNotification.cancel()
-        }
-
-        for activity in Activity<StudyActivityAttributes>.activities
-        where activity.attributes.uid == uid {
-            await activity.end(
-                ActivityContent(state: activity.content.state, staleDate: nil),
-                dismissalPolicy: .immediate
-            )
-        }
-        return .result()
-    }
-}
+// `StopStudyIntent`(LiveActivityIntent)の定義は `targets/_shared/StudyLiveActivityIntent.swift` に
+// 移した(problem P-011 (1)。5-3d で修正)。`LiveActivityIntent` に準拠する intent は、Apple のドキュメント
+// (Adding interactivity to widgets and Live Activities)により「システムがアプリ本体のプロセスで実行し、
+// アプリ本体のターゲットにも追加すること」と明記されており、ウィジェット拡張ターゲットだけに置くと
+// `Activity<StudyActivityAttributes>.activities` が空になり `activity.end()` が実行されない
+// (アプリ本体のプロセスで ActivityKit が管理している Activity が、別プロセスのウィジェット拡張からは
+// 見えないため)。`_shared` に置くことで、アプリ本体・ウィジェット拡張の両方のターゲットに同じ型が
+// コンパイルされ、上のボタンからはそのまま同じ型名で参照できる

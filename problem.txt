@@ -279,7 +279,7 @@
 
 ## P-011: 1-4 の技術検証で未確認・不具合だった点(ライブアクティビティが停止後に残る 他)
 - 記録日: 2026-10-07
-- 状態: 修正中(5-3 で対応)
+- 状態: 修正中(5-3 で対応。(1)は 2026-10-12 解決。(2)(3)(4) は 5-3e・5-3f で引き続き対応)
 - 発生箇所: targets/widget(StopStudyIntent)、ControlWidget、通知アクション
 - 問題内容:
   (1) 停止ボタンで stop はサーバーに記録されるが、StopStudyIntent.perform() 内の Activity<StudyActivityAttributes>.activities が空配列を返し、
@@ -292,12 +292,63 @@
 - 原因調査:
   (1) 実装担当の調査: Activity.request() はアプリのプロセスでは成功している(state: active)。
       同じシミュレータで再インストールを繰り返したことによる ActivityKit の状態のずれ、またはシミュレータ特有の制約の可能性がある。原因は確定していない
+  (1) 5-3d の追加調査(2026-10-12): Apple の公式ドキュメント「Adding interactivity to widgets and Live
+      Activities」(https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities)
+      に、次のとおり明記されている(取得日 2026-10-12):
+      「If you adopt the LiveActivityIntent or AudioPlaybackIntent protocol, the system runs the app
+      intent in the app's process. Make sure to add your custom app intent to your app target.」
+      「If you adopt the AppIntent protocol, add your custom app intent to your widget extension
+      target and your app target.」「By default, the system runs the app intent in the same process
+      as the widget extension. However, ... the intent conforms to [LiveActivityIntent 等] ... the
+      system performs the app intent in the app's process.」
+      つまり `LiveActivityIntent`(StopStudyIntent が準拠)は、ウィジェット拡張のプロセスではなく
+      アプリ本体のプロセスで実行される仕様で、そのためには intent の型をアプリ本体のターゲットにも
+      追加する必要がある。
+      コードを確認したところ、StopStudyIntent は targets/widget(StudyWidget 拡張ターゲットのみ)に
+      定義されており、アプリ本体のターゲット(gokaku)には含まれていなかった(targets/_shared/ にある
+      StudyAttributes.swift 等とは違う扱い)。これが「アプリのプロセスで Activity.request() した
+      ライブアクティビティを、stop の intent から見つけられない(activities が空)」の原因と整合する
+      (ActivityKit の別モジュール間の扱いは targets/_shared/StudyAttributes.swift のコメントのとおり
+      Codable の構造一致で成立するが、そもそも intent 自体がアプリのプロセスで実行されていなければ
+      Activity.request() を呼んだのと同じプロセスの Activity.activities には辿り着けない)
+      実測(iPhone 16 Pro Max・iOS 18.6。Maestro で Dynamic Island を展開し「停止」をタップ): 修正前の
+      コードで、アプリの「開始」(StudySync.startMeasurement)でライブアクティビティを出し、
+      Dynamic Island の「停止」をタップすると、Cloud Functions(Emulator)の nativeSync は1回実行される
+      (= StopStudyIntent.perform() 自体は動き、サーバーへの送信は成功する)のに、数十秒待っても
+      Dynamic Island の表示(経過時間が時間とともに増え続ける)が消えないことを確認した。
+      これは P-011 (1) の症状(「stop はサーバーに記録されるが表示が残る」)と完全に一致する
 - 特定した原因:
-  (未確定。5-3 で、Activity の id を Intent のパラメータとして渡す方式に変えて実機で再検証する)
+  (1) StopStudyIntent(LiveActivityIntent 準拠)が targets/widget(ウィジェット拡張ターゲット)にしか
+      定義されておらず、アプリ本体のターゲットに含まれていなかったこと。Apple のドキュメントにより
+      LiveActivityIntent はアプリ本体のプロセスで実行される仕様であり、アプリ本体のターゲットに
+      その型が無いと、Activity.request() を呼んだプロセス(アプリ本体)の Activity.activities に
+      正しく辿り着けない(5-3d で特定。上記の出典・実測より)
 - 切り出したタスク:
   progress.txt 5-3d(1)・5-3e(2)(3)・5-3f(実機確認)(2026-10-08 に 5-3 を分割)
-- 解決日:
+- 解決日: 2026-10-12((1)のみ。(2)(3)(4) は 5-3e・5-3f で引き続き対応)
 - 解決内容:
+  (1) StopStudyIntent の定義を targets/widget/StudyLiveActivityWidget.swift から
+      targets/_shared/StudyLiveActivityIntent.swift に移した(StudyAttributes.swift と同じ方式。
+      @bacons/apple-targets が targets/_shared/ 配下のファイルを自動的にメインアプリターゲット・
+      ウィジェット拡張ターゲットの両方に追加する仕組みを使う。node_modules/@bacons/apple-targets/
+      build/with-xcode-changes.js の configureTargetWithGlobalSharedAssets で確認した)。
+      ウィジェット側の StudyLiveActivityWidget.swift の StopButton はそのまま同じ型名で参照できる。
+      `npx expo prebuild --clean` で ios/gokaku.xcodeproj/project.pbxproj の "_shared" グループの
+      メンバーシップ例外(gokaku ターゲット・StudyWidget ターゲットの両方)に
+      StudyLiveActivityIntent.swift が追加されたことを確認した
+      修正後、iPhone 16 Pro Max(iOS 18.6)で同じ手順(アプリで「開始」→ Dynamic Island を展開 →
+      「停止」をタップ)を行うと、nativeSync が1回実行され(送信は成功)、かつ Dynamic Island の表示が
+      直後に消えることを確認した(スクリーンショットで確認。タップ前は経過時間が増え続けていた
+      Dynamic Island が、タップ直後の画面には存在しない)
+      iPhone SE(3rd gen・iOS 18.6。Dynamic Island 非搭載)では、ホーム画面に常時表示される領域が
+      無いため(ライブアクティビティは Lock Screen にのみバナー表示される)、この Mac でのシミュレータへの
+      キー送信(画面ロック)に必要な Accessibility 権限が無い制約(P-011 (4)と同じ)により、
+      ホーム画面上での目視確認はできなかった。SE では「開始」操作後にホーム画面を長押ししても
+      何も展開されない(アイコンの並べ替えモードになるだけ)ことを確認しており、これは
+      Dynamic Island 非搭載機の仕様どおりで新たな問題ではない。SE での「停止」操作そのものの確認は
+      5-3f(実機確認)に引き継ぐ
+      typecheck・lint・npm test(634件、タイムゾーン違いの shared 分を含め計1164件)は全て green
+  (2)(3)(4) は未着手・未解決(5-3e・5-3f で扱う)
 
 ## P-012: 1-4 の証跡の手順どおりに再現すると、開始の送信が失敗する(送信: false、syncEvents 0件)
 - 記録日: 2026-10-07
@@ -861,3 +912,18 @@
     - 送り直しの結果が消える
 - 影響: 記録が失われる可能性は低い。サーバー側で二重記録は防がれている。実機で再現したわけではない
 - 対応: 5-3e(実機に近い確認)と合わせて、直すかどうかを判断する(直すなら、キューの読み書きを1つずつ順番に行うようにする)
+
+## P-038 StartStudyIntent(ロック画面コントロール)が、アプリが前面にない状態での Activity.request() に失敗するかもしれない
+- 状態: 原因特定済み・対応タスク待ち(2026-10-12。公式ドキュメントで裏付けがとれた)
+- 発見: 5-3d の調査中(範囲外の参考の指摘。修正はしていない)
+- 問題内容:
+  - targets/widget/StudyControlWidget.swift の StartStudyIntent は、素の `AppIntent` に準拠している(`LiveActivityIntent` ではない)
+  - Apple の公式ドキュメント(ActivityKit の Activity.request(attributes:content:pushType:))に、次の記述がある:
+    "Use this function to request and start a Live Activity from your app while it's in the foreground.
+     Note that you can't do this while your app is in the background, unless you adopt AppIntents and start the Live Activity using a LiveActivityIntent."
+    (2026-10-12 の 5-3d レビューで出典を訂正した。最初の記録では、別の記事を出典にしていた)
+  - StartStudyIntent は perform() 内で `Activity<StudyActivityAttributes>.request()` を直接呼んでいるが、
+    素の `AppIntent` のままなので、ロック画面コントロール(アプリは前面にない状態)からの実行時に
+    Activity.request() が失敗する(`try?` で握りつぶしているため、失敗してもエラーにならず気づけない)おそれがある
+- 影響: 確認できていない(ロック画面コントロールからの開始の自動化ができないため。5-3e で手動確認が必要)
+- 対応: 5-3e の手動の確認の前に、StartStudyIntent を LiveActivityIntent にして targets/_shared に移す(progress.txt 5-3d-2)

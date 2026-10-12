@@ -671,9 +671,24 @@ Phase 5: タイマー
       - シミュレータの UDID が変わった。今は SE 6DAC94C9…・16 Pro Max 99E1FF39…(いずれも iOS 18.6)
       - 申し送り: P-036(開発用の画面と debug 用の関数が本番に残る)、P-037(キューの読み書きの競合)
 
-[ ] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))
+[x] 5-3d 調査: 停止後もライブアクティビティが残る問題(problem P-011 (1))
     内容: StopStudyIntent で Activity.activities が空になる原因を調べ、修正方針を報告する(Activity の id を Intent のパラメータで渡す案の検証を含む)
     完了条件: 原因と根拠を problem.txt に記録できる材料がそろう。修正が小さければ修正し、シミュレータで停止後に表示が消える証跡
+    ※完了(2026-10-12): レビューPASS
+      - 原因: StopStudyIntent(LiveActivityIntent)はアプリ本体のプロセスで動くのに、アプリ本体のターゲットに入っていなかった
+      - 修正: targets/_shared/StudyLiveActivityIntent.swift に移した
+      - 16 Pro Max の Dynamic Island の「停止」で表示が消え、stop が1回届くことを確かめた
+      - Dynamic Island のボタンは、Maestro の長押しで広げれば押せる
+
+[ ] 5-3d-2 ロック画面コントロールの開始を LiveActivityIntent にする(problem P-038)
+    内容: StartStudyIntent を LiveActivityIntent に準拠させ、targets/_shared に移す(アプリ本体とウィジェットの拡張の両方に入れる)。
+          ロック画面コントロール(ControlWidgetButton)から今までどおり呼べること。処理の中身は変えない
+    完了条件:
+      - SE・Pro Max でビルドが通る
+      - prebuild 後に、両方のターゲットに入っている
+      - 処理の中身が移す前と同じ
+      - typecheck / lint / test が緑
+      - ロック画面コントロールから実際に開始できるかは、5-3e でユーザーに確かめてもらう
 
 [ ] 5-3e ロック画面コントロールの開始・通知アクションの確認(problem P-011 (2)(3))
     内容: iOS 18 のロック画面コントロールからの開始と、通知アクション「勉強中」のタップがサーバーに反映されることを確かめ、問題があれば直す
