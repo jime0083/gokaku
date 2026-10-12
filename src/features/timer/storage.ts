@@ -131,6 +131,38 @@ export async function stopLocalSession(
 }
 
 /**
+ * ロック画面で始まった計測(App Group の計測中の状態。5-3c-3)を端末の記録に取り込む
+ * (5-3c-5b。requirements 3-2「ロック画面で始めた計測は、アプリを開くと続きとして表示する」)。
+ * startAt・checkEnabled・confirmations はロック画面側の値をそのまま使う。
+ * 端末にすでに計測中のセッションがある場合は何もしない(呼び出し側が「端末が計測していない」ことを
+ * 確認してから呼ぶ想定の保険)
+ */
+export async function adoptRemoteActiveSession(
+  now: number,
+  remote: { sessionId: string; startAt: number; checkEnabled: boolean; confirmations: number[] },
+): Promise<LocalStudySession[]> {
+  const sessions = await loadLocalSessions();
+  if (findActiveSession(sessions)) {
+    return sessions;
+  }
+  const updated = pruneOldSessions(
+    [
+      ...sessions,
+      {
+        sessionId: remote.sessionId,
+        startAt: remote.startAt,
+        stopAt: null,
+        checkEnabled: remote.checkEnabled,
+        confirmations: remote.confirmations,
+      },
+    ],
+    now,
+  );
+  await saveLocalSessions(updated);
+  return updated;
+}
+
+/**
  * 「勉強中？」確認への応答(5-2b。requirements 3-2)。計測中のセッションの confirmations に
  * 応答時刻(now)を追加する。計測中のセッションがなければ何もしない
  */

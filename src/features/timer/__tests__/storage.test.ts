@@ -3,6 +3,7 @@ import { addDays, jstStartOfDay, MS_PER_DAY } from '@shared/index';
 
 import {
   addLocalConfirmation,
+  adoptRemoteActiveSession,
   findActiveSession,
   loadLocalSessions,
   startLocalSession,
@@ -138,6 +139,34 @@ describe('タイマーの端末内保存(requirements 3-2。サーバー保存�
       const sessions = await addLocalConfirmation(9000);
       expect(sessions).toEqual([
         { startAt: 1000, stopAt: 5000, sessionId: 'session-1', checkEnabled: true, confirmations: [] },
+      ]);
+    });
+  });
+
+  describe('ロック画面で始まった計測の取り込み(5-3c-5b)', () => {
+    it('端末に計測中のセッションが無ければ、渡した値で計測中のセッションを追加する', async () => {
+      const sessions = await adoptRemoteActiveSession(5000, {
+        sessionId: 'lockscreen-session',
+        startAt: 1000,
+        checkEnabled: false,
+        confirmations: [2000],
+      });
+      expect(sessions).toEqual([
+        { startAt: 1000, stopAt: null, sessionId: 'lockscreen-session', checkEnabled: false, confirmations: [2000] },
+      ]);
+      expect(await loadLocalSessions()).toEqual(sessions);
+    });
+
+    it('端末にすでに計測中のセッションがある場合は何もしない(保険)', async () => {
+      await startLocalSession(1000, 'session-1', true);
+      const sessions = await adoptRemoteActiveSession(5000, {
+        sessionId: 'lockscreen-session',
+        startAt: 2000,
+        checkEnabled: true,
+        confirmations: [],
+      });
+      expect(sessions).toEqual([
+        { startAt: 1000, stopAt: null, sessionId: 'session-1', checkEnabled: true, confirmations: [] },
       ]);
     });
   });

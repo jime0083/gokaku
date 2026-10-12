@@ -31,6 +31,13 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  * そのため、この画面での「送信: true/false」の確認ボタンは削除した(確認すべきことが無くなったため)。
  * 代わりに、計測中の状態(App Group)が書かれる・消えることをログで確かめられるようにし、
  * 「最後にロック画面で止めた計測」(5-3c-5a で追加)を読む・消すボタンを足した
+ *
+ * 5-3c-5b(problem P-034): 「デバイストークンを発行」を押すと、サインインできた実際の uid を
+ * uid の入力欄に上書きする(上の 5-3a-2 の説明のとおり)。2回目以降に同じボタンを押したとき、
+ * サインインに使うメールアドレスの元になる「ラベル」を、上書きされた後の uid 入力欄の値から
+ * 作ってしまうと、毎回別のテストユーザー(=別の uid)になってしまう。
+ * そのため、最初に押したときの入力欄の値を authLabel に覚えておき、2回目以降はそれを使う
+ * (同じテストユーザー・同じ uid で発行し直す)
  */
 
 export default function DevLockscreenSpikeScreen() {
@@ -38,6 +45,9 @@ export default function DevLockscreenSpikeScreen() {
   const [uid, setUid] = useState('spike-user-1');
   const [goalId, setGoalId] = useState('spike-goal-1');
   const [log, setLog] = useState<string[]>([]);
+  // 5-3c-5b(P-034): 「デバイストークンを発行」のサインインに使うラベル。最初に押したときの
+  // uid 入力欄の値を覚えておき、2回目以降は(uid が signedInUid に上書きされていても)これを使う
+  const [authLabel, setAuthLabel] = useState<string | null>(null);
   // 5-3c-4: startMeasurement/stopMeasurement は sessionId を呼び出し側(JS)から渡す形になった。
   // 開始時に作った sessionId を停止まで覚えておく
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -81,7 +91,10 @@ export default function DevLockscreenSpikeScreen() {
 
   async function handleIssueToken() {
     try {
-      const signedInUid = await signInDevTestUser(uid);
+      // 2回目以降は、uid 入力欄がすでに signedInUid に上書きされていても、最初に押したときの
+      // ラベルでサインインし直す(同じテストユーザー・同じ uid になる。problem P-034)
+      const label = authLabel ?? uid;
+      const signedInUid = await signInDevTestUser(label);
       if (!signedInUid) {
         return;
       }
@@ -95,6 +108,7 @@ export default function DevLockscreenSpikeScreen() {
         appendLog('Keychain への保存に失敗');
         return;
       }
+      setAuthLabel(label);
       setUid(signedInUid);
       StudySync.setCurrentGoalId(goalId);
       appendLog(`デバイストークンを Keychain(App Group)に保存した(uid=${signedInUid})`);

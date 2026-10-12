@@ -791,13 +791,15 @@
 - 解決内容: Swift の起動時のカテゴリ登録・delegate の設定・StudySyncNotificationDelegate・scheduleCheckNotification を消した。STUDY_CHECK を起動時に登録するのは JS(studyCheckNotifications.ts)だけになった
 
 ## P-032 検証用の画面 dev-notification-probe が、本番と同じ通知カテゴリを別のアクションで登録できる
-- 状態: 原因特定済み・対応タスク待ち(2026-10-10)
+- 状態: 解決済み(2026-10-12 5-3c-5b レビューPASSで確認)
 - 発見: 5-3c-1 レビュー
 - 問題内容:
   - src/app/dev-notification-probe.tsx(5-2-0 の検証用。開発ビルドだけ・画面遷移なし)のボタンを押すと、本番と同じカテゴリ名 STUDY_CHECK が、別のアクション識別子 STUDY_CHECK_YES で登録される
   - 開発中に押すと、本番の確認のアクションが一時的に置き換わる
 - 原因: 5-2-0 の検証用の画面が、本実装(5-2c)のあとも残っている
 - 切り出したタスク: progress.txt 5-3c-5 の中で、このファイルを消す
+- 解決日: 2026-10-12
+- 解決内容: src/app/dev-notification-probe.tsx を削除した(5-3c-5b)
 
 ## P-033 デバイストークンの Keychain の設定に ThisDeviceOnly が付いておらず、バックアップから別の端末へ移りうる
 - 状態: 解決済み(2026-10-11 5-3c-2 再レビューPASS・セキュリティPASSで確認)
@@ -815,7 +817,7 @@
 - 解決内容: write() を kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly にした。nativeSyncBaseURL は読めないと nil を返し、送らずにキューに残すようにした
 
 ## P-034 dev-lockscreen-spike で「デバイストークンを発行」を2回押すと、別のユーザーになる
-- 状態: 原因特定済み・対応タスク待ち(2026-10-12)
+- 状態: 解決済み(2026-10-12 5-3c-5b レビューPASSで確認)
 - 発見: 5-3c-4 レビュー
 - 問題内容: 「デバイストークンを発行」を2回続けて押すと、uid の欄の値が変わり、毎回新しい Auth のユーザーが作られる。前に作った goals が新しい uid にはないため、送信が 400 になる
 - 再現手順: dev-lockscreen-spike で「デバイストークンを発行」を2回続けて押す → uid の欄の値が変わる
@@ -823,6 +825,8 @@
   2回目は、その新しい uid から dev-lockscreen-spike-${uid}@example.com という別のメールアドレスを作ってサインインする
 - 影響: 開発用の画面だけ(本番の画面遷移には影響しない)。5-3e の手動の確認がわかりにくくなる
 - 切り出したタスク: progress.txt 5-3c-5 の中で直す
+- 解決日: 2026-10-12
+- 解決内容: authLabel で最初に押したときのラベルを保持し、2回目以降も同じテストユーザーでサインインするようにした(5-3c-5b)
 
 ## P-035 StopStudyIntent が「止めた計測」を残す前に計測中の状態を消している
 - 状態: 解決済み(2026-10-12 5-3c-5a 再レビューPASSで確認)

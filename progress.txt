@@ -632,7 +632,7 @@ Phase 5: タイマー
       - startMeasurement / stopMeasurement は送信しなくなった(状態とライブアクティビティだけを扱う)
       - getLastLockscreenStop / clearLastLockscreenStop を追加した
 
-[ ] 5-3c-5b アプリのタイマーとロック画面の同期(JS)
+[x] 5-3c-5b アプリのタイマーとロック画面の同期(JS)
     内容:
       - アプリで開始・停止したとき: 5-3c-3 の計測中の状態を書き・消し、ライブアクティビティを出す・閉じる
       - アプリを開いたとき・他のアプリから戻ったとき: 計測中の状態を読み、ロック画面での開始・停止を端末の記録に取り込む(requirements 3-2。2026-10-10 決定の表示)
@@ -649,6 +649,11 @@ Phase 5: タイマー
       - ロック画面で開始された状態を取り込む
       - ロック画面で止められた計測を閉じる
       - 確認の設定を覚える
+    ※完了(2026-10-12): レビューPASS
+      - src/features/timer/lockscreenSync.ts を作った(開始・停止・応答・設定の同期、ロック画面からの開始・停止の取り込み)
+      - 想定外の場合は端末の記録を変えない(requirements 3-2)
+      - P-032(dev-notification-probe を削除)・P-034(authLabel)を直した
+      - npm test 634件
 
 [ ] 5-3c-6 ロック画面の送信の応答の扱い(Swift)
     内容: nativeSync の応答に応じて扱いを分ける

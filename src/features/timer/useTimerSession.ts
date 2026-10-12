@@ -13,6 +13,13 @@ import { clearAutoStopNotice, loadAutoStopNotice, writeAutoStopNotice, type Auto
 import { fetchCheckEnabled } from './checkEnabledRepository';
 import { generateLocalId } from './id';
 import {
+  addNativeConfirmation,
+  notifyNativeMeasurementStart,
+  notifyNativeMeasurementStop,
+  reconcileWithLockscreen,
+  rememberCheckEnabledSetting,
+} from './lockscreenSync';
+import {
   addLocalConfirmation,
   findActiveSession,
   loadLocalSessions,
@@ -141,6 +148,7 @@ export function useTimerSession(): TimerSessionState {
     const updated = await addLocalConfirmation(now);
     setSessions(updated);
     setTick(Date.now());
+    addNativeConfirmation(now);
     void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'confirm', clientTimeMs: now });
     await syncScheduledNotification(findActiveSession(updated), now);
   }, []);
@@ -153,19 +161,23 @@ export function useTimerSession(): TimerSessionState {
       void applyConfirmation(sessionsRef.current, respondedAtMs);
     });
 
-    loadLocalSessions().then((loaded) => {
+    loadLocalSessions().then(async (loaded) => {
       if (!mounted) return;
-      setSessions(loaded);
-      sessionsRef.current = loaded;
+      const now = Date.now();
+      // ロック画面での開始・停止を端末の記録に取り込む(5-3c-5b。requirements 3-2)
+      const reconciled = await reconcileWithLockscreen(loaded, now);
+      if (!mounted) return;
+      setSessions(reconciled.sessions);
+      sessionsRef.current = reconciled.sessions;
       setTick(Date.now());
       setIsLoading(false);
 
       // アプリが終了していて通知のアクションから起動された場合の応答(5-2-0 の制約)
       const launchResponse = consumeLastStudyCheckConfirmOnLaunch();
       if (launchResponse) {
-        void applyConfirmation(loaded, launchResponse.respondedAtMs);
+        void applyConfirmation(reconciled.sessions, launchResponse.respondedAtMs);
       } else {
-        void syncScheduledNotification(findActiveSession(loaded), Date.now());
+        void syncScheduledNotification(findActiveSession(reconciled.sessions), Date.now());
       }
     });
     loadAutoStopNotice().then((notice) => {
@@ -184,10 +196,18 @@ export function useTimerSession(): TimerSessionState {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') {
-        const now = Date.now();
-        setTick(now);
-        void flushStudyEventQueue();
-        void syncScheduledNotification(findActiveSession(sessionsRef.current), now);
+        void (async () => {
+          const now = Date.now();
+          // ロック画面での開始・停止を端末の記録に取り込む(5-3c-5b。requirements 3-2)
+          const reconciled = await reconcileWithLockscreen(sessionsRef.current, now);
+          if (reconciled.changed) {
+            setSessions(reconciled.sessions);
+            sessionsRef.current = reconciled.sessions;
+          }
+          setTick(Date.now());
+          void flushStudyEventQueue();
+          await syncScheduledNotification(findActiveSession(reconciled.sessions), now);
+        })();
       }
     });
     return () => subscription.remove();
@@ -219,6 +239,7 @@ export function useTimerSession(): TimerSessionState {
       setSessions(updated);
       await writeAutoStopNotice(stoppedAt);
       setAutoStopNoticeState({ stoppedAt });
+      void notifyNativeMeasurementStop(sessionId).catch(() => {});
       void enqueueAndSendStudyEvent({ sessionId, action: 'stop', clientTimeMs: stoppedAt });
       await cancelStudyCheckNotification();
     })().finally(() => {
@@ -238,9 +259,11 @@ export function useTimerSession(): TimerSessionState {
     // 初めて計測を開始したときにだけ、通知の許可を求める(requirements 3-2)
     await requestNotificationPermissionOnce();
     const checkEnabled = await fetchCheckEnabled();
+    rememberCheckEnabledSetting(checkEnabled);
     const updated = await startLocalSession(now, sessionId, checkEnabled);
     setSessions(updated);
     setTick(Date.now());
+    void notifyNativeMeasurementStart(sessionId, now, checkEnabled).catch(() => {});
     void enqueueAndSendStudyEvent({ sessionId, action: 'start', clientTimeMs: now, checkEnabled });
     await syncScheduledNotification(findActiveSession(updated), now);
   }, []);
@@ -252,6 +275,7 @@ export function useTimerSession(): TimerSessionState {
     setSessions(updated);
     setTick(Date.now());
     if (target) {
+      void notifyNativeMeasurementStop(target.sessionId).catch(() => {});
       void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'stop', clientTimeMs: now });
     }
     await cancelStudyCheckNotification();

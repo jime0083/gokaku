@@ -40,6 +40,24 @@ jest.mock('@/features/timer/checkEnabledRepository', () => ({
 }));
 
 /**
+ * ロック画面との同期(5-3c-5b)。lockscreenSync の内部(StudySync・Firebase の呼び出し)は
+ * lockscreenSync.test.ts で確認するため、ここでは画面(useTimerSession)が正しい引数で呼ぶこと・
+ * reconcileWithLockscreen の結果を正しく取り込むことだけを確かめる
+ */
+const mockNotifyNativeMeasurementStart = jest.fn();
+const mockNotifyNativeMeasurementStop = jest.fn();
+const mockAddNativeConfirmation = jest.fn();
+const mockRememberCheckEnabledSetting = jest.fn();
+const mockReconcileWithLockscreen = jest.fn();
+jest.mock('@/features/timer/lockscreenSync', () => ({
+  notifyNativeMeasurementStart: mockNotifyNativeMeasurementStart,
+  notifyNativeMeasurementStop: mockNotifyNativeMeasurementStop,
+  addNativeConfirmation: mockAddNativeConfirmation,
+  rememberCheckEnabledSetting: mockRememberCheckEnabledSetting,
+  reconcileWithLockscreen: mockReconcileWithLockscreen,
+}));
+
+/**
  * studyCheckNotifications は checkEnabledRepository を静的 import するため、ここを通常の import 文にすると
  * (import 文は require より先に実行される)、上の jest.mock のモック変数が代入される前に
  * checkEnabledRepository のモックファクトリが呼ばれ、fetchCheckEnabled が undefined になる
@@ -115,6 +133,12 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       goalDailyMinutes: 120,
     });
     mockFetchCheckEnabled.mockResolvedValue(true);
+    mockNotifyNativeMeasurementStart.mockResolvedValue(undefined);
+    mockNotifyNativeMeasurementStop.mockResolvedValue(undefined);
+    // 既定: ロック画面側の取り込みは無し(渡された sessions をそのまま返す)
+    mockReconcileWithLockscreen.mockImplementation(
+      async (sessions: unknown) => ({ sessions, changed: false }),
+    );
   });
 
   afterEach(async () => {
@@ -606,6 +630,116 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
 
       await waitFor(() => screen.getByTestId('timer-toggle-button'));
       expect(screen.queryByTestId('timer-notification-permission-notice')).toBeNull();
+    });
+  });
+
+  describe('ロック画面との同期(5-3c-5b。requirements 3-2「アプリとロック画面の計測の共有」)', () => {
+    it('開始すると StudySync に正しい引数(sessionId・startAt・checkEnabled)で開始を伝え、確認の設定を覚えさせる', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+
+      await waitFor(() => expect(mockNotifyNativeMeasurementStart).toHaveBeenCalledTimes(1));
+      const [sessionId, startAtArg, checkEnabledArg] = mockNotifyNativeMeasurementStart.mock.calls[0] as [
+        string,
+        number,
+        boolean,
+      ];
+      expect(typeof sessionId).toBe('string');
+      expect(sessionId.length).toBeGreaterThan(0);
+      expect(startAtArg).toBe(startAt);
+      expect(checkEnabledArg).toBe(true);
+      expect(mockRememberCheckEnabledSetting).toHaveBeenCalledWith(true);
+    });
+
+    it('停止すると StudySync に開始と同じ sessionId で停止を伝える', async () => {
+      jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+      await waitFor(() => expect(mockNotifyNativeMeasurementStart).toHaveBeenCalledTimes(1));
+      const [startedSessionId] = mockNotifyNativeMeasurementStart.mock.calls[0] as [string];
+
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+
+      await waitFor(() => expect(mockNotifyNativeMeasurementStop).toHaveBeenCalledWith(startedSessionId));
+    });
+
+    it('確認(「勉強中」ボタン)への応答で addNativeConfirmation を呼ぶ', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt);
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+
+      await act(async () => {
+        jest.advanceTimersByTime(60 * 60 * 1000);
+      });
+      await waitFor(() => screen.getByTestId('study-check-overlay'));
+
+      await fireEvent.press(screen.getByTestId('study-check-confirm-button'));
+
+      await waitFor(() => expect(mockAddNativeConfirmation).toHaveBeenCalled());
+    });
+
+    it('ロック画面で開始された状態を取り込み、続きとして表示する(サーバーには送らない)', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      jest.setSystemTime(startAt + 3 * 60 * 1000);
+      mockReconcileWithLockscreen.mockResolvedValue({
+        sessions: [
+          { sessionId: 'lockscreen-session', startAt, stopAt: null, checkEnabled: true, confirmations: [] },
+        ],
+        changed: true,
+      });
+
+      await renderTimerRouter();
+
+      await waitFor(() =>
+        expect(screen.getByTestId('timer-elapsed-text').props.children).toBe('00:03:00'),
+      );
+      expect(screen.getByTestId('timer-status-text')).toBeTruthy();
+      // 取り込み(アプリ発の開始ではない)なので、アプリからの開始の送信は行わない
+      expect(mockEnqueueAndSendStudyEvent).not.toHaveBeenCalled();
+      expect(mockNotifyNativeMeasurementStart).not.toHaveBeenCalled();
+    });
+
+    it('ロック画面で止められた計測を stopAt で閉じる(お知らせは出さず、サーバーにも送らない)', async () => {
+      const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+      await startLocalSession(startAt, 'session-1', true);
+      const stopAt = startAt + 5 * 60 * 1000;
+      jest.setSystemTime(startAt + 10 * 60 * 1000);
+      mockReconcileWithLockscreen.mockResolvedValue({
+        sessions: [{ sessionId: 'session-1', startAt, stopAt, checkEnabled: true, confirmations: [] }],
+        changed: true,
+      });
+
+      await renderTimerRouter();
+
+      await waitFor(() => expect(screen.queryByTestId('timer-status-text')).toBeNull());
+      expect(screen.getByTestId('timer-elapsed-text').props.children).toBe('00:00:00');
+      expect(screen.getByTestId('timer-today-total-text').props.children).toBe('今日の勉強時間 0時間5分');
+      expect(screen.queryByTestId('timer-auto-stop-notice')).toBeNull();
+      expect(mockEnqueueAndSendStudyEvent).not.toHaveBeenCalled();
+    });
+
+    it('StudySync の呼び出しが失敗(例外)しても、アプリの計測は続く', async () => {
+      mockNotifyNativeMeasurementStart.mockRejectedValue(new Error('native error'));
+      jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+      await renderTimerRouter();
+
+      await waitFor(() => screen.getByTestId('timer-toggle-button'));
+      await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+
+      await waitFor(() => screen.getByTestId('timer-status-text'));
+      expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'start' }),
+      );
     });
   });
 });
