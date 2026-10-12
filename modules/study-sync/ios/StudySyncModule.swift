@@ -5,7 +5,8 @@ import UserNotifications
 /// JS(アプリ内タイマー画面。src/features/timer)から、ライブアクティビティ・ロック画面コントロール・
 /// 計測中の状態(App Group)・デバイストークン(Keychain)を扱う native 処理を呼び出すブリッジ。
 /// 1-4 の技術検証用スキャフォルドから、5-3 で requirements 3-2 の正式な形に合わせてきている
-/// (startMeasurement/stopMeasurement の sessionId・checkEnabled は 5-3c-4 で揃えた)
+/// (startMeasurement/stopMeasurement の sessionId・checkEnabled は 5-3c-4 で揃えた。
+/// nativeSync に送らず計測中の状態(App Group)だけを扱う形には 5-3c-5a で直した)
 public class StudySyncModule: Module {
     public func definition() -> ModuleDefinition {
         Name("StudySync")
@@ -59,42 +60,52 @@ public class StudySyncModule: Module {
             StudySyncSharedState.setCheckEnabledSetting(enabled)
         }
 
-        // 5-3c-4: sessionId はアプリ(JS)側で作って渡す(5-1b-2 の id.ts で作る sessionId と、
-        // 端末内保存(LocalStudySession)・Callable への記録(recordStudyEvent)に使う sessionId を
-        // 1つに揃えるため。checkEnabled も、start のときに nativeSync へ送る値として受け取る
-        AsyncFunction("startMeasurement") { (uid: String, goalId: String, sessionId: String, checkEnabled: Bool) -> Bool in
-            let startedAt = Date()
-            let event = StudySyncEvent(
-                uid: uid,
-                sessionId: sessionId,
-                goalId: goalId,
-                action: .start,
-                clientTimeMs: startedAt.timeIntervalSince1970 * 1000,
-                idempotencyKey: UUID().uuidString,
-                checkEnabled: checkEnabled
-            )
-            let sent = await StudySyncAPI.send(event)
+        // 5-3c-5a: アプリから呼ぶ startMeasurement は nativeSync に送らない(サーバーへの記録は
+        // recordStudyEvent(source=app)。アプリと二重に送って sessions.source が届く順番で
+        // app/lockscreen のどちらになるか決まってしまう不具合(5-3c-5 の調査)を解消するため。
+        // ここでは計測中の状態(App Group。5-3c-3)を書き、ライブアクティビティを出すだけ。
+        // 通知の予約は JS(5-3c-5b)が行う。
+        // sessionId・startAt は呼び出し側(JS)が作って渡す。startAt を Swift で Date() にせず
+        // JS から受け取るのは、JS の端末内の記録(LocalStudySession.startAt)とこの App Group の
+        // 計測中の状態の startAt を完全に一致させるため(ずれると、アプリを開き直したときに
+        // 経過時間の表示が合わなくなる)。
+        // 戻り値: 計測中の状態の書き込みに成功したか(setActiveSession と同じ意味。渡された値の形が
+        // 不正な場合だけ false になる。ライブアクティビティの表示が OS 側の制約で失敗しても
+        // (Live Activities が無効など)戻り値には反映しない=false にしない)
+        AsyncFunction("startMeasurement") { (uid: String, goalId: String, sessionId: String, startAt: Double, checkEnabled: Bool) -> Bool in
+            guard let session = StudySyncActiveSession(
+                dictionary: [
+                    "sessionId": sessionId,
+                    "uid": uid,
+                    "goalId": goalId,
+                    "startAt": startAt,
+                    "checkEnabled": checkEnabled,
+                    "confirmations": [Double](),
+                ]
+            ) else {
+                return false
+            }
+            let written = StudySyncSharedState.setActiveSession(session)
 
             let attributes = StudyActivityAttributes(uid: uid)
-            let state = StudyActivityAttributes.ContentState(startedAt: startedAt, goalId: goalId)
+            let state = StudyActivityAttributes.ContentState(
+                startedAt: Date(timeIntervalSince1970: startAt / 1000),
+                goalId: goalId
+            )
             _ = try? Activity<StudyActivityAttributes>.request(
                 attributes: attributes,
                 content: ActivityContent(state: state, staleDate: nil)
             )
-            return sent
+            return written
         }
 
+        // 5-3c-5a: アプリから呼ぶ stopMeasurement も nativeSync に送らない(理由は startMeasurement と同じ)。
+        // 通知の取り消しは JS(5-3c-5b)が行う。
+        // 戻り値: 消す前に計測中の状態が実際にあったか(true=あった・消した、false=すでに無かった。
+        // 例えばロック画面の停止が先に届いていた場合)
         AsyncFunction("stopMeasurement") { (uid: String, goalId: String, sessionId: String) -> Bool in
-            let event = StudySyncEvent(
-                uid: uid,
-                sessionId: sessionId,
-                goalId: goalId,
-                action: .stop,
-                clientTimeMs: Date().timeIntervalSince1970 * 1000,
-                idempotencyKey: UUID().uuidString,
-                checkEnabled: nil
-            )
-            let sent = await StudySyncAPI.send(event)
+            let hadActiveSession = StudySyncSharedState.activeSession() != nil
+            StudySyncSharedState.clearActiveSession()
 
             for activity in Activity<StudyActivityAttributes>.activities
             where activity.attributes.uid == uid {
@@ -103,7 +114,16 @@ public class StudySyncModule: Module {
                     dismissalPolicy: .immediate
                 )
             }
-            return sent
+            return hadActiveSession
+        }
+
+        /// ロック画面(StopStudyIntent)で止めた最後の計測(sessionId・stopAt)。無ければ nil(5-3c-5a)
+        Function("getLastLockscreenStop") { () -> [String: Any]? in
+            StudySyncSharedState.lastLockscreenStop()?.asDictionary()
+        }
+
+        Function("clearLastLockscreenStop") {
+            StudySyncSharedState.clearLastLockscreenStop()
         }
 
         AsyncFunction("flushQueue") { () -> Int in

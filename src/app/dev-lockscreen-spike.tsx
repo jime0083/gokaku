@@ -25,6 +25,12 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  *
  * 5-3c-3: 計測中の状態(App Group に 1 件だけ置く値)・確認 ON/OFF の設定の読み・書き・消去を
  * 手動で確かめるボタンもこの画面に足す(画面(タイマー)や Intent にはまだつながない)
+ *
+ * 5-3c-5a: 「開始」「停止」ボタン(StudySync.startMeasurement/stopMeasurement)は nativeSync に
+ * 送らなくなった(アプリの記録は recordStudyEvent(source=app)。5-3c-5b で JS からつなぐ)。
+ * そのため、この画面での「送信: true/false」の確認ボタンは削除した(確認すべきことが無くなったため)。
+ * 代わりに、計測中の状態(App Group)が書かれる・消えることをログで確かめられるようにし、
+ * 「最後にロック画面で止めた計測」(5-3c-5a で追加)を読む・消すボタンを足した
  */
 
 export default function DevLockscreenSpikeScreen() {
@@ -102,11 +108,13 @@ export default function DevLockscreenSpikeScreen() {
     appendLog(`通知許可: ${granted}`);
   }
 
+  // 5-3c-5a: startMeasurement/stopMeasurement は nativeSync に送らなくなった。
+  // 戻り値は、計測中の状態(App Group)の書き込み・消去の結果を表す(送信結果ではない)
   async function handleStart() {
     const newSessionId = generateLocalId();
     setSessionId(newSessionId);
-    const sent = await StudySync.startMeasurement(uid, goalId, newSessionId, true);
-    appendLog(`開始(ライブアクティビティ表示)。sessionId=${newSessionId} 送信: ${sent}${failureReasonSuffix(sent)}`);
+    const written = await StudySync.startMeasurement(uid, goalId, newSessionId, Date.now(), true);
+    appendLog(`開始(ライブアクティビティ表示)。sessionId=${newSessionId} 計測中の状態を書いた: ${written}`);
   }
 
   async function handleStop() {
@@ -114,23 +122,18 @@ export default function DevLockscreenSpikeScreen() {
       appendLog('停止: 開始していないため sessionId が無い');
       return;
     }
-    const sent = await StudySync.stopMeasurement(uid, goalId, sessionId);
-    appendLog(`停止。送信: ${sent}${failureReasonSuffix(sent)}`);
+    const hadActiveSession = await StudySync.stopMeasurement(uid, goalId, sessionId);
+    appendLog(`停止。計測中の状態があった: ${hadActiveSession}`);
     setSessionId(null);
   }
 
-  /** 送信に失敗した場合、直前の失敗理由(problem P-012: 401・通信不可等)を併記する */
-  function failureReasonSuffix(sent: boolean): string {
-    if (sent) {
-      return '';
-    }
-    const reason = StudySync.getLastSyncErrorReason();
-    return reason ? `(理由: ${reason})` : '';
-  }
-
+  // 5-3c-5a: nativeSync に実際に送るのは、ロック画面(StartStudyIntent/StopStudyIntent。5-3c-4)が
+  // 送れなかったときにキューへ積んだ分の再送(flushQueue)だけになった。失敗理由(problem P-012:
+  // 401・通信不可等)は直前の送信結果として getLastSyncErrorReason に残る
   async function handleFlushQueue() {
     const count = await StudySync.flushQueue();
-    appendLog(`キューを再送: ${count}件`);
+    const reason = StudySync.getLastSyncErrorReason();
+    appendLog(`キューを再送: ${count}件${reason ? `(直前の失敗理由: ${reason})` : ''}`);
   }
 
   function handleShowQueueCount() {
@@ -182,6 +185,19 @@ export default function DevLockscreenSpikeScreen() {
     appendLog(`確認ON/OFFの設定: ${StudySync.getCheckEnabledSetting()}`);
   }
 
+  // 5-3c-5a: 「最後にロック画面で止めた計測」(StopStudyIntent が残す sessionId・stopAt)を
+  // 読む・消すボタン。実際にロック画面で止める操作は自動化できないため(5-3e で確認)、
+  // ここでは読み・消しの動きだけを確かめる
+  function handleReadLastLockscreenStop() {
+    const stop = StudySync.getLastLockscreenStop();
+    appendLog(`最後にロック画面で止めた計測: ${stop === null ? 'なし' : JSON.stringify(stop)}`);
+  }
+
+  function handleClearLastLockscreenStop() {
+    StudySync.clearLastLockscreenStop();
+    appendLog('最後にロック画面で止めた計測を消した');
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>1-4 技術検証</Text>
@@ -201,6 +217,9 @@ export default function DevLockscreenSpikeScreen() {
       <Button title="確認設定を書く(ON)" onPress={() => handleWriteCheckEnabledSetting(true)} />
       <Button title="確認設定を書く(OFF)" onPress={() => handleWriteCheckEnabledSetting(false)} />
       <Button title="確認設定を読む" onPress={handleReadCheckEnabledSetting} />
+      <Text style={styles.title}>5-3c-5a 最後にロック画面で止めた計測</Text>
+      <Button title="最後にロック画面で止めた計測を読む" onPress={handleReadLastLockscreenStop} />
+      <Button title="最後にロック画面で止めた計測を消す" onPress={handleClearLastLockscreenStop} />
       {log.map((line) => (
         <Text key={line} style={styles.log}>
           {line}

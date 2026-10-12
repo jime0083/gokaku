@@ -376,6 +376,22 @@ enum StudySyncCheckNotification {
     }
 }
 
+/// ロック画面(ライブアクティビティの停止ボタン。StopStudyIntent)で止めた最後の計測
+/// (5-3c-5a。requirements 3-2「ロック画面で止めたあとにアプリを開いたときは…」)。
+/// アプリが次に開かれたとき(5-3c-5b)に、この sessionId・stopAt を使って端末内の記録を
+/// 「止まった計測」として取り込む。1 件だけ(上書き)
+struct StudySyncLastLockscreenStop: Codable, Equatable {
+    let sessionId: String
+    /// ロック画面で止めた時刻(epoch ミリ秒)
+    let stopAt: Double
+}
+
+extension StudySyncLastLockscreenStop {
+    func asDictionary() -> [String: Any] {
+        ["sessionId": sessionId, "stopAt": stopAt]
+    }
+}
+
 extension StudySyncSharedState {
     private static let activeSessionKey = "studySync.activeSession.v1"
     /// 確認 ON/OFF の設定を覚えておく値(計測中の状態とは別に持つ。requirements 3-2:
@@ -383,6 +399,8 @@ extension StudySyncSharedState {
     /// (5-3c-4)に、計測中でなくてもこの設定を読めるようにするため、活動中の状態(activeSessionKey)とは
     /// 別のキーにする
     private static let checkEnabledSettingKey = "studySync.checkEnabledSetting.v1"
+    /// ロック画面で止めた最後の計測(StudySyncLastLockscreenStop)を置くキー(5-3c-5a)
+    private static let lastLockscreenStopKey = "studySync.lastLockscreenStop.v1"
 
     static func activeSession() -> StudySyncActiveSession? {
         guard let data = defaults?.data(forKey: activeSessionKey) else { return nil }
@@ -411,5 +429,23 @@ extension StudySyncSharedState {
 
     static func setCheckEnabledSetting(_ enabled: Bool) {
         defaults?.set(enabled, forKey: checkEnabledSettingKey)
+    }
+
+    /// ロック画面で止めた最後の計測を読む。無ければ nil
+    static func lastLockscreenStop() -> StudySyncLastLockscreenStop? {
+        guard let data = defaults?.data(forKey: lastLockscreenStopKey) else { return nil }
+        return try? JSONDecoder().decode(StudySyncLastLockscreenStop.self, from: data)
+    }
+
+    /// 書き込みに成功したら true。JSON へのエンコードに失敗した場合(通常発生しない)は false
+    @discardableResult
+    static func setLastLockscreenStop(_ stop: StudySyncLastLockscreenStop) -> Bool {
+        guard let data = try? JSONEncoder().encode(stop) else { return false }
+        defaults?.set(data, forKey: lastLockscreenStopKey)
+        return true
+    }
+
+    static func clearLastLockscreenStop() {
+        defaults?.removeObject(forKey: lastLockscreenStopKey)
     }
 }

@@ -610,13 +610,40 @@ Phase 5: タイマー
       - StudySyncModule.startMeasurement(uid, goalId, sessionId, checkEnabled) / stopMeasurement(uid, goalId, sessionId)。sessionId は JS が作って渡す
       - 古い形でキューに溜まっていた操作は、読み込めないので捨てる
 
-[ ] 5-3c-5 アプリのタイマーとロック画面の同期(JS)
+[x] 5-3c-5a アプリから呼ぶ計測の関数の役割を直す(Swift)
+    内容: 5-3c-5 の調査で分かったことへの対応(2026-10-12)。
+          StudySyncModule の startMeasurement / stopMeasurement(アプリから呼ぶ)は、nativeSync に直接送っている。
+          そのため、アプリ(recordStudyEvent。source=app)と二重に送ってしまい、sessions.source が app と lockscreen のどちらになるかが届く順番で決まる。
+          また、計測中の状態(App Group)を書き・消ししていない。
+          これを次のように直す(requirements 5 の source(app/lockscreen)と合わせるため):
+          - startMeasurement(アプリから呼ぶ): nativeSync には送らない。計測中の状態を書き、ライブアクティビティを出す(通知の予約は JS が行う)
+          - stopMeasurement(アプリから呼ぶ): nativeSync には送らない。計測中の状態を消し、ライブアクティビティを閉じる
+          - StopStudyIntent(ロック画面で停止): 計測中の状態を消すときに、「最後にロック画面で止めた計測」(sessionId・stopAt)を App Group に残す。アプリが取り込むときに、止めた時刻を使うため
+            - 読む関数(例: getLastLockscreenStop)と消す関数を足す
+          - dev-lockscreen-spike を新しい役割に合わせる
+    完了条件:
+          - ビルドが通る
+          - アプリの開始・停止で nativeSync に送られないこと(Emulator のログ)
+          - 計測中の状態が書かれ・消されること(確認画面)
+          - ロック画面の停止で、止めた時刻が残ること(コードと確認画面)
+          - JS の型とモックがそろう
+    ※完了(2026-10-12): レビューPASS
+      - 差し戻し1回: P-035。StopStudyIntent で、止めた記録を残してから状態を消す順番に直した
+      - startMeasurement / stopMeasurement は送信しなくなった(状態とライブアクティビティだけを扱う)
+      - getLastLockscreenStop / clearLastLockscreenStop を追加した
+
+[ ] 5-3c-5b アプリのタイマーとロック画面の同期(JS)
     内容:
       - アプリで開始・停止したとき: 5-3c-3 の計測中の状態を書き・消し、ライブアクティビティを出す・閉じる
       - アプリを開いたとき・他のアプリから戻ったとき: 計測中の状態を読み、ロック画面での開始・停止を端末の記録に取り込む(requirements 3-2。2026-10-10 決定の表示)
       - 確認 ON/OFF の設定を、計測中の状態とは別に App Group に覚えさせる
           あわせて検証用の src/app/dev-notification-probe.tsx を消す(problem P-032)
           あわせて dev-lockscreen-spike の「デバイストークンを発行」を2回押すと uid が変わる問題を直す(problem P-034。5-3e の手動の確認で使うため)
+          ※5-3c-5a の後に行う。ロック画面で止めた計測は、5-3c-5a で残す「最後にロック画面で止めた計測」の stopAt で閉じる。アプリでの開始・停止の送信は recordStudyEvent(source=app)だけで行う
+          ※5-3c-5a の申し送り:
+            - startMeasurement(uid, goalId, sessionId, startAt, checkEnabled)。startAt は JS の端末内の記録と同じ値を渡す
+            - stopMeasurement(uid, goalId, sessionId) の戻り値は、計測中の状態があったかどうか
+            - 「最後にロック画面で止めた計測」(getLastLockscreenStop)は、取り込んだら clearLastLockscreenStop で消す
     完了条件: StudySync をモックにした画面テストで、次の4つが緑
       - アプリで開始すると、計測中の状態が書かれる
       - ロック画面で開始された状態を取り込む

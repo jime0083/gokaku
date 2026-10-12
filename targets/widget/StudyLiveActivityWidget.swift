@@ -71,7 +71,8 @@ private struct StopButton: View {
 ///
 /// 5-3c-4(requirements 3-2「アプリとロック画面の計測の共有」): sessionId は計測中の状態
 /// (5-3c-3。App Group に 1 件だけ置く)から読む。uid・goalId パラメータはライブアクティビティの
-/// 属性から渡ってくる値で、どの Activity を終了するかの判定に使う
+/// 属性から渡ってくる値で、どの Activity を終了するかの判定に使う。
+/// 5-3c-5a: 計測中の状態を消すときに「最後にロック画面で止めた計測」(sessionId・stopAt)を残す
 struct StopStudyIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "勉強を停止"
 
@@ -94,18 +95,28 @@ struct StopStudyIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         // 計測中の状態があれば、その sessionId で stop を送り、状態を消し、通知の予約を取り消す
         // (計測中の状態がすでに無い=別の経路でこの計測が止められている場合は、送信せずに
-        // ライブアクティビティの後片付けだけ行う)
+        // ライブアクティビティの後片付けだけ行う)。
+        // 5-3c-5a: 消す前に、この sessionId・止めた時刻(stopAt)を「最後にロック画面で止めた計測」
+        // として App Group に残す(1件だけ。上書き)。アプリを次に開いたとき(5-3c-5b)に、
+        // この sessionId・stopAt を使って端末内の記録を「ロック画面で止まった計測」として取り込むため
         if let session = StudySyncSharedState.activeSession() {
+            let stoppedAt = Date()
             let event = StudySyncEvent(
                 uid: session.uid,
                 sessionId: session.sessionId,
                 goalId: session.goalId,
                 action: .stop,
-                clientTimeMs: Date().timeIntervalSince1970 * 1000,
+                clientTimeMs: stoppedAt.timeIntervalSince1970 * 1000,
                 idempotencyKey: UUID().uuidString,
                 checkEnabled: nil
             )
             await StudySyncAPI.send(event)
+            StudySyncSharedState.setLastLockscreenStop(
+                StudySyncLastLockscreenStop(
+                    sessionId: session.sessionId,
+                    stopAt: stoppedAt.timeIntervalSince1970 * 1000
+                )
+            )
             StudySyncSharedState.clearActiveSession()
             StudySyncCheckNotification.cancel()
         }

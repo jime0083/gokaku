@@ -823,3 +823,14 @@
   2回目は、その新しい uid から dev-lockscreen-spike-${uid}@example.com という別のメールアドレスを作ってサインインする
 - 影響: 開発用の画面だけ(本番の画面遷移には影響しない)。5-3e の手動の確認がわかりにくくなる
 - 切り出したタスク: progress.txt 5-3c-5 の中で直す
+
+## P-035 StopStudyIntent が「止めた計測」を残す前に計測中の状態を消している
+- 状態: 解決済み(2026-10-12 5-3c-5a 再レビューPASSで確認)
+- 発見: 5-3c-5a レビュー
+- 問題内容: targets/widget/StudyLiveActivityWidget.swift の StopStudyIntent.perform() で、clearActiveSession() を呼んだあとに setLastLockscreenStop() を呼んでいる。
+  コメントと実装担当の報告には「消す前に残す」と書いてあり、実装と食い違っている。
+  2つの処理のあいだで止まると、計測中の状態も止めた記録も両方なくなり、アプリが計測を閉じられなくなる
+- 原因: 処理の順番の誤り
+- 対応: setLastLockscreenStop() を clearActiveSession() より前に呼ぶ(5-3c-5a の差し戻し)
+- 解決日: 2026-10-12
+- 解決内容: setLastLockscreenStop を clearActiveSession より前に呼ぶ順番に直した

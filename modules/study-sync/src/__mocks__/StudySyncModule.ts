@@ -1,4 +1,4 @@
-import type { ActiveStudySession } from '../StudySync.types';
+import type { ActiveStudySession, LastLockscreenStop } from '../StudySync.types';
 
 /**
  * modules/study-sync/src/StudySyncModule(ネイティブモジュール)の Jest 用の手動モック(5-3c-3)。
@@ -21,7 +21,7 @@ const studySyncModuleMock = {
   setCurrentGoalId: jest.fn<void, [goalId: string | null]>(),
   startMeasurement: jest.fn<
     Promise<boolean>,
-    [uid: string, goalId: string, sessionId: string, checkEnabled: boolean]
+    [uid: string, goalId: string, sessionId: string, startAt: number, checkEnabled: boolean]
   >(() => Promise.resolve(true)),
   stopMeasurement: jest.fn<Promise<boolean>, [uid: string, goalId: string, sessionId: string]>(() =>
     Promise.resolve(true),
@@ -34,6 +34,8 @@ const studySyncModuleMock = {
   clearActiveSession: jest.fn<void, []>(),
   getCheckEnabledSetting: jest.fn<boolean, []>(() => true),
   setCheckEnabledSetting: jest.fn<void, [enabled: boolean]>(),
+  getLastLockscreenStop: jest.fn<LastLockscreenStop | null, []>(() => null),
+  clearLastLockscreenStop: jest.fn<void, []>(),
 };
 
 export default studySyncModuleMock;
