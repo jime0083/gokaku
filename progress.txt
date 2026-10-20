@@ -785,7 +785,11 @@ Phase 6: ホーム・編集・アカウント管理
 Phase 7: X連携・0:00判定・自動投稿
 =====================================
 
-[ ] 7-1a X連携: 認可とトークンの保存(Cloud Functions)  【セキュリティ確認】
+[x] 7-1a X連携: 認可とトークンの保存(Cloud Functions)  【セキュリティ確認】
+    ※着手(2026-10-20): 6-4完了commit f2ed71a2cb1382ef7129d148cee5377fbb808d2bのGitHub push確認後にのみPhase7を開始。server専用PKCE/S256・state hash・UID/用途拘束AES-256-GCM helperを新規2ファイルへ実装。対象Jest12件・Functions型/lint・独立review/security PASS(helper単位)。OAuth state保存/期限/消費・トークン交換・Firestore保存・Callable接続は未実装で7-1a全体は未完了。実X/秘密設定/本番操作なし。
+    ※内部単位追記(2026-10-20): tokenTransport・stateStore・xTokensアクセス拒否テストを追加。サーバー対象134件PASS、実Firestore同時消費/削除guard2件PASS、ルール42件PASS、全体型/対象lint PASS。独立review/securityは当該内部単位PASS。X実通信・秘密設定なし。stateはUID/redirect/期限拘束・1回消費、既存token/他state保持。P-086型指定/P-087検証cwd/P-088実競合テスト時間上限を記録して解消。トークン保存・Callable・画面接続は引き続き未完了。
+    ※内部単位追記2(2026-10-20): authorizationFlow・tokenStoreと対象テストを追加。認可URL生成→state消費→モック交換→暗号化pendingLink保存を接続。既存有効token/oauthStates/投稿フラグは維持し、確認前に連携を有効化しない。新規94件・全体型/対象lint成功、実demo-gokaku Firestore統合7項目成功(X実通信0)。独立review/securityおよび統合追補PASS。公開Callable/秘密設定/画面接続は未実装のため7-1a全体は未完了。
+    ※完了(2026-10-20): 7-1aモックバックエンド全体が独立review/security双方PASS。xAuthorization Callable(asia-northeast1)を追加し、認証UID・厳密入力・遅延設定・最小応答を検証。既存と並行するstateは同一transactionで最大16件、正常な期限切れのみ整理。最終実EmulatorはX認可315件・rules42件・実handler結合8項目PASS。P-090修正後Callable81件、独立Callable/state142件・全体型/対象lintPASS。秘密宣言3件/非秘密param登録0件/import時値読取0件を隔離確認。W7手順4・5の実設定・デプロイ・実X接続は未実施で手動作業として残す。プロフィール確認/投稿許可UIは7-1b。Phase7全体は未完了、変更は未コミット。
     ※開始前確認: manual-work W7 手順1〜3 完了必須(手順4・5 はこのタスクの中で Claude が設定値を案内して行う)
     内容: OAuth 2.0 PKCE の開始(state・PKCE)→ Functions でトークン交換 → 暗号化して xTokens に保存。xTokens にクライアントから触れないルール
     完了条件: X のモックで、連携成功・state 不一致・交換失敗のテストと、ルールのテストが緑

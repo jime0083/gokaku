@@ -1409,3 +1409,48 @@
 - P-085追記(2026-10-20): SE正常onboarding/devprobeはPASS。既存backフローもuniversity-input表示でFAIL(38秒)。P-016の過去back失敗と同一原因かは未確定。過去問題の状態は変更せず、現E2E全体はFAILとして保持する。
 
 - 最終記録(2026-10-20): 6-4はreview/security双方PASS、旧native unitBも独立source追補PASS(過去244隔離check生ログ再実行とは区別)。Maestro signed再実行ではSE3/5・ProMax3/4 PASS、両機種home/正常onboarding/devprobe PASS。SEerrorと両backはP-085/P-016未解決、P-081も未修正。E2E harnessは終了し自身のMetro停止を報告。全体Jest1311＋追加3、TZ268×2、全体型/lint・signed arm64buildPASS。全E2Egreenの主張なし。
+
+## P-086 Phase7 Xトークン交換部品の型指定不整合
+- 発見日: 2026-10-20(7-1a内部単位の初回型検証)
+- 状態: 解決済み(2026-10-20。対象検証・独立review/security確認)
+- 再現: 新規tokenTransport/stateStore対象Jest122件PASS(Emulator2件は未実行)後、Functions tscで3エラー。tokenTransport.test.tsのunion型からcode参照と引数なしjest.fnの型、tokenTransport.tsのreader.read()が拒否される。
+- 原因: union型fixtureの参照箇所で絞り込みが失われ、mock関数の引数tupleが空で推論される。getReaderのReturnTypeはoverload末尾のBYOB reader型となり、引数なしreadを表現できない。実行テスト成功だけでは検出できない型指定の不整合。
+- 修正計画: 実装担当へ差し戻し、fixtureの型絞り込み・mock引数型・default reader型だけを明示する。通信処理やアサーションを弱めず対象Jest/Functions型/lintと独立review/securityで確認する。元の7-1aタスクは未完了のまま。
+
+## P-087 外部一時ディレクトリからのrules検証でBabel preset解決に失敗
+- 発見日: 2026-10-20(7-1a専用Emulator runner)
+- 状態: 解決済み(2026-10-20。対象検証・独立review/security確認)
+- 再現: 一時ディレクトリをcwdにFirebase emulators:execを起動すると、Jestがbabel-preset-expoを解決できず0件で停止。Emulator自体は起動・終了済み。
+- 原因: rules設定内のpreset名がJest子プロセスの外部cwdを基準に解決される。プロジェクト内ではrequire.resolve成功のため未導入ではない。
+- 修正計画: Firebase CLIの一時cwd/ログ分離を保ち、Jest子コマンドだけプロジェクトcwdへ移動する。アプリ・依存・既存設定は変更せず、同じ42拒否テストとstate実transactionテストを再実行する。
+
+## P-088 state実transaction競合テストが既定5秒で中断する
+- 発見日: 2026-10-20(7-1a Firestore Emulator検証)
+- 状態: 解決済み(2026-10-20。対象検証・独立review/security確認)
+- 再現: isolated demo Emulatorでrules42件PASS後、state並行作成/消費テストが5秒でtimeout。削除marker/missing検証はPASS。timeout後にafterAllがFirestore clientを終了し、未完了処理がclient terminatedとなる。
+- 調査計画: SDK競合再試行の所要時間か実処理の不具合かを区別するため、同じ検証内容を30秒のコマンド上限で再実行する。assertion/同時実行条件/製品sourceは変更せず、結果とログから原因確定する。
+
+- P-086検証追記(2026-10-20): 実装担当の型宣言のみの修正後、全体npm run typecheckと対象lint PASS。cryptoを含む対象Jest134件PASS/Emulator2件は別実行。独立review/security最終判定待ち。
+- P-087検証追記(2026-10-20): 子Jestのみプロジェクトcwdへ移した同じrunnerでrules42件PASS。以降のstate失敗は別P-088。通常sandboxのWatchman状態ファイル拒否は許可環境で同一対象テストを再実行して134件PASS、製品source変更なし。
+
+- P-088原因確定/修正計画(2026-10-20): 同一assertion/同時実行のまま実Emulatorで5728msで成功。Firestoreの競合ロック/再試行が既定5秒を超え、Jestの先行終了が後続client terminatedを誘発した。独立review提案の当該1テスト限定30秒上限を設定し、通常コマンドで再検証する。処理順やassertionを弱めない。
+
+- P-086/P-087/P-088最終確認(2026-10-20): review/security内部単位PASS。型/lint成功、対象134件、rules42件、実transaction2件成功。P088は当該テストのみ30秒上限で通常コマンド6216ms成功、処理/同時実行/assertionは維持。証跡 /tmp/gokaku-xauth-rules-iipjdzw4/verification.log。7-1a全体の完了を意味しない。
+
+## P-089 外部検証スクリプトのFirebase Adminサブパス解決失敗
+- 発見日: 2026-10-20(7-1a実Firestore統合の検証準備)
+- 状態: 解決済み(2026-10-20。検証runner参照修正・統合7項目成功・独立review/security追補PASS)
+- 再現: 外部/tmpのNode検証でfirebase-admin/firestoreをnode_modules内の絶対ディレクトリとしてrequireし、モジュール未解決でテスト開始前に停止。Emulatorは正常に終了、アプリの処理やデータ作成は未実行。
+- 原因: package exportsで公開されるサブパスを物理ディレクトリとして参照した。functions/package.json基準のcreateRequireでパッケージサブパスを解決する必要がある。
+- 修正計画: /tmp内の検証スクリプトのrequireだけを修正し、同じ統合assertionを再実行。プロジェクトのsource/依存/テスト期待値は変更しない。
+
+- P-089最終確認(2026-10-20): /tmp/gokaku-xauth-flow-_e5vh3kt/verify.cjsで同じ7項目PASS、実X通信0・Emulator正常終了。成功証跡はコマンド実行結果で、同ディレクトリverification.logは初回失敗分を保持している点を区別。全体npm run typecheckも成功。製品source/依存/期待値変更なし。
+
+## P-090 未設定XパラメータがFunctions Emulator起動時に手入力を要求する
+- 発見日: 2026-10-20(7-1a Callableの検証前提確認)
+- 状態: 解決済み(2026-10-20。設定runtime読込・隔離manifest検証・独立review/security PASS)
+- 再現: firebase-toolsのresolveParamsをisEmulator=true・設定値なし・合成param2件で隔離実行すると、X_OAUTH_REDIRECT_URIとX_OAUTH_STATE_TTL_SECONDSの入力要求が2件発生。実設定/秘密値読み取り・ネットワークなし。Functions Emulatorも同じresolveBackend/resolveParams経路を使用することをsourceで確認。
+- 原因: config.tsのdefineString/defineIntは.value()が遅延でもimport時にmanifestへparamを登録する。W7設定前の新環境では既存test:functionsの起動にも入力が必要になる。
+- 修正計画: Client ID/Secret/暗号鍵はdefineSecretのまま維持し、非秘密2設定だけをmanifestへ登録しないruntime環境読込へ変更。import時に値を読まず、未設定/不正値は呼出時failed-preconditionを維持。製品TTLやredirectのデフォルトは作らない。対象test/型/lint・独立review/securityとmanifest登録の隔離検証で確認する。
+
+- P-090最終確認(2026-10-20): 修正後Callable81件PASS、独立Callable/state142件PASS、全体npm run typecheck/対象lintPASS。synthetic SDK/processで秘密宣言3件・非秘密manifest登録0件・import時環境/値読取0件。非秘密設定未入力時は呼出時failed-precondition、TTL/redirectの製品既定値は設けていない。実X設定・実秘密値読取・本番接続なし。7-1aモック実装全体もreview/security PASS。
