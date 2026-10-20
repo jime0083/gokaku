@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addDays, jstStartOfDay, MS_PER_DAY } from '@shared/index';
 
+import { parseLocalAccountData } from '../../account/localAccountData';
+
 import {
   addLocalConfirmation,
   adoptRemoteActiveSession,
@@ -14,6 +16,60 @@ import {
 describe('タイマーの端末内保存(requirements 3-2。サーバー保存は 5-1b-1・5-1b-2・5-2a)', () => {
   afterEach(async () => {
     await AsyncStorage.clear();
+  });
+
+  describe.each(['', '  ', '\t\n', null, 42, false, {}, []])('不正UID %p', (uid) => {
+    it.each(['start', 'adopt'] as const)('%sは書込前にrejectし既存legacyを保持する', async (action) => {
+      await startLocalSession(1000, 'legacy', true);
+      await stopLocalSession(2000);
+      const before = await AsyncStorage.getItem(TIMER_SESSIONS_STORAGE_KEY);
+      const writeCount = jest.mocked(AsyncStorage.setItem).mock.calls.length;
+      const operation = action === 'start'
+        ? startLocalSession(3000, 'new', true, uid as string)
+        : adoptRemoteActiveSession(3000, {
+          sessionId: 'remote', startAt: 3000, checkEnabled: true, confirmations: [], uid: uid as string,
+        });
+      await expect(operation).rejects.toThrow();
+      expect(jest.mocked(AsyncStorage.setItem).mock.calls).toHaveLength(writeCount);
+      expect(await AsyncStorage.getItem(TIMER_SESSIONS_STORAGE_KEY)).toBe(before);
+    });
+  });
+
+  it('新規sessionだけにUIDを設定し、停止・応答・再読込でも保持する', async () => {
+    await startLocalSession(1000, 'owned', true, 'user-a');
+    expect((await loadLocalSessions())[0]).toMatchObject({ uid: 'user-a' });
+    await startLocalSession(2000, 'ignored', true, 'user-b');
+    expect((await addLocalConfirmation(3000))[0]).toMatchObject({ uid: 'user-a', confirmations: [3000] });
+    expect((await stopLocalSession(4000))[0]).toMatchObject({ uid: 'user-a', stopAt: 4000 });
+    expect((await loadLocalSessions())[0]).toMatchObject({ uid: 'user-a' });
+  });
+
+  it('既存legacyを新規開始時・停止・応答時にも追認しない', async () => {
+    await startLocalSession(1000, 'legacy', true);
+    await startLocalSession(2000, 'ignored', true, 'user-a');
+    await addLocalConfirmation(3000);
+    await stopLocalSession(4000);
+    await startLocalSession(5000, 'owned', true, 'user-a');
+    const sessions = await loadLocalSessions();
+    expect(sessions[0]).not.toHaveProperty('uid');
+    expect(sessions[1]).toMatchObject({ uid: 'user-a' });
+  });
+
+  it('remoteの所有UIDをそのまま取り込む', async () => {
+    await adoptRemoteActiveSession(5000, {
+      sessionId: 'remote', startAt: 1000, checkEnabled: false, confirmations: [], uid: 'user-b',
+    });
+    expect((await loadLocalSessions())[0]).toMatchObject({ uid: 'user-b' });
+  });
+
+  it('cleanup parserはUIDありをknown、legacy非空をunknownと判定する', async () => {
+    await startLocalSession(1000, 'owned', true, 'user-a');
+    await stopLocalSession(2000);
+    const owned = await AsyncStorage.getItem(TIMER_SESSIONS_STORAGE_KEY);
+    expect(parseLocalAccountData('user-a', [[TIMER_SESSIONS_STORAGE_KEY, owned]]).ownership).toBe('known');
+    await startLocalSession(3000, 'legacy', true);
+    const mixed = await AsyncStorage.getItem(TIMER_SESSIONS_STORAGE_KEY);
+    expect(parseLocalAccountData('user-a', [[TIMER_SESSIONS_STORAGE_KEY, mixed]]).ownership).toBe('unknown');
   });
 
   it('保存がない場合は空配列', async () => {

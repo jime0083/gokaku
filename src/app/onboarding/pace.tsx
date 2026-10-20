@@ -6,8 +6,10 @@ import {
   type PaceTotal,
 } from '@shared/index';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+
+import { submitGoalReplacement, ReplacementMeasuringError, REPLACEMENT_COMMUNICATION_ERROR } from '@/features/goals/goalReplacementFlow';
 
 import { Card } from '@/components/Card';
 import { ErrorText } from '@/components/ErrorText';
@@ -53,7 +55,21 @@ function formatPaceLine(dailyMinutes: number, days: number, total: PaceTotal): s
  */
 export default function PaceScreen() {
   const router = useRouter();
-  const { draft } = useOnboardingDraft();
+  const { draft, replacement } = useOnboardingDraft();
+  const [registering, setRegistering] = useState(false);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
+  const registrationLock = useRef(false);
+  const register = async () => {
+    // 初回登録(3-5c)は未実装。replacement branchだけ処理する。
+    if (!replacement || registrationLock.current) return;
+    registrationLock.current = true; setRegistering(true); setRegistrationError(null);
+    try {
+      await submitGoalReplacement(replacement, Date.now());
+      router.replace('/(tabs)/home');
+    } catch (error) {
+      setRegistrationError(error instanceof ReplacementMeasuringError ? error.message : REPLACEMENT_COMMUNICATION_ERROR);
+    } finally { registrationLock.current = false; setRegistering(false); }
+  };
   const [now] = useState(() => Date.now());
 
   const dailyTimeValid =
@@ -78,11 +94,12 @@ export default function PaceScreen() {
         )
       : null;
 
-  const goBack = () => router.replace(resolveOnboardingBackRoute('/onboarding/pace', draft));
+  const goBack = () => { if (!registrationLock.current && !replacement?.committedGoalId) router.replace(resolveOnboardingBackRoute('/onboarding/pace', draft)); };
 
   // この画面に不完全な入力(前の画面を飛ばした場合)や、画面を開いている間に日付が変わって
   // 試験日が今日以前になった場合(calculatePace の exam_date_not_future)は、入力画面へ戻す
   useEffect(() => {
+    if (replacement?.committedGoalId) return;
     if (!dailyTimeValid) {
       router.replace('/onboarding/daily-time');
       return;
@@ -90,7 +107,14 @@ export default function PaceScreen() {
     if (!targetValid || pace?.status === 'exam_date_not_future') {
       router.replace('/onboarding/target');
     }
-  }, [dailyTimeValid, targetValid, pace, router]);
+  }, [dailyTimeValid, targetValid, pace, router, replacement]);
+
+  if (replacement?.committedGoalId) {
+    return <StepScreen title="目標の変更を反映" onBack={goBack} showNext={false}>
+      <ErrorText message={registrationError} testID="pace-replacement-error" />
+      <PrimaryButton title={registering ? '反映中...' : '反映を続ける'} onPress={register} disabled={registering} testID="pace-replacement-retry" />
+    </StepScreen>;
+  }
 
   if (pace === null || pace.status !== 'ok' || draft.examDate === null) {
     return <View style={styles.root} />;
@@ -136,15 +160,18 @@ export default function PaceScreen() {
           title="修正する"
           onPress={goBack}
           variant="secondary"
+          disabled={registering}
           testID="pace-fix-button"
         />
         <View style={styles.spacer} />
         <PrimaryButton
-          title="OK、登録する"
-          // 登録処理(Sign in with Apple → 目標保存)は 3-5c で実装する。ここでは何もしない
-          onPress={() => {}}
+          title={registering ? '登録中...' : 'OK、登録する'}
+          disabled={registering}
+          onPress={register}
           testID="pace-register-button"
         />
+        <ErrorText message={registrationError} testID="pace-replacement-error" />
+        {registrationError ? <PrimaryButton title="再試行" onPress={register} disabled={registering} testID="pace-replacement-retry" /> : null}
       </View>
     </StepScreen>
   );

@@ -933,3 +933,479 @@
     Activity.request() が失敗する(`try?` で握りつぶしているため、失敗してもエラーにならず気づけない)おそれがある
 - 影響: 確認できていない(ロック画面コントロールからの開始の自動化ができないため。5-3e で手動確認が必要)
 - 対応: 5-3e の手動の確認の前に、StartStudyIntent を LiveActivityIntent にして targets/_shared に移す(progress.txt 5-3d-2)
+
+## P-039 レビュー担当が git checkout で、まだコミットしていない実装担当の変更を消してしまった
+- 状態: 対応済み(2026-10-13。消えた内容はすぐに元に戻した。再発防止のルールを追加した)
+- 発見: 6-1 レビュー担当の自己申告
+- 問題内容:
+  - 6-1 のレビュー担当が、検証のために一時的に足したテストを元に戻そうとした
+  - そのとき src/app/(tabs)/__tests__/home.test.tsx に `git checkout --` を使った
+  - 6-1 の実装はまだコミットしていなかったため、実装担当のテストの変更が消えて、6-1 より前の仮の版に戻ってしまった
+  - レビュー担当は、直前に読んだ全文(205行)から Write で元に戻した。そのうえで npm test 658件の緑と、差分の行数が元と一致することを確かめた
+- 原因:
+  - 作業中の変更がコミットされていないのに、作業ツリーのファイルを git で元に戻す操作をした
+  - 同時に2つのタスクを進めていたため、すぐにはコミットできない状態が続いていた
+- 再発防止:
+  - CLAUDE.md の安全ルールに次を追加した: サブエージェントは、作業ツリーを元に戻す git の操作(checkout -- ・restore・stash・reset など)を使わない。一時的な変更は、自分でバックアップを取ってから戻す
+  - メインエージェントは、タスクが PASS したらすぐにコミットする
+
+
+## P-040 ホームがタイマーから戻った時・前面復帰・日付変更で古い数値のままになる
+- 状態: 解決済み(2026-10-14。6-1再レビューPASS)
+- 発見: 6-1 レビュー FAIL
+- 問題内容・再現手順:
+  - ホーム表示後にタイマータブで計測し、ホームに戻っても積み上げ時間・達成率・残り必要時間が更新されない。
+  - アプリをバックグラウンドに置いて戻る、または日本時間の0:00をまたいでも、試験日までの日数や達成日数が古いままになる。
+  - Firestore に記録済みの計測中セッションも、ホームを表示したままでは時間が進んでも積み上げに反映されない。
+- 調査・原因(修正着手前に記録):
+  - src/app/(tabs)/home.tsx の取得・calculateHomeSummary 呼び出しは useEffect([reloadToken]) のみ。reloadToken はエラー再試行時にだけ変化する。
+  - src/app/(tabs)/_layout.tsx は Tabs を使い、ホームはタブ変更でアンマウントされない。フォーカス・AppState・時刻経過を取得・再計算の契機にしていない。
+  - homeDataRepository は現在の goalId の sessions と dailyResults を取得済み。shared/homeSummary.ts は now を受け取り、判定済みの日は dailyResults を優先するため、計算式・保存層の変更は不要。
+- 修正計画(既存6-1の範囲。新規タスク・過去問題の変更なし):
+  - ホームのフォーカス・前面復帰・日本時間の日付変更で取得し直す。非表示・バックグラウンド時は更新を止め、古い取得結果の上書きを防ぐ。
+  - 取得済みデータを保持し、表示中の時刻経過で共有計算を再実行する。毎秒の通信・ローカル保存への置き換え・独自の目標計算は行わない。
+  - renderRouter の実際の Home→Timer→Home、前面復帰、計測中の時間経過、0:00の回帰テストを追加。型チェック・lint・対象テストで検証してレビューへ渡す。
+- 修正前検証: 追加テストで時間経過・前面復帰・0:00の古い表示を再現。遷移テストの toHavePathname は現在の screen に getPathname がなく使えないため、実タブ操作と遷移先の表示・Homeインスタンス維持で確認する(テストAPIのみの修正)。
+- 修正前の実画面遷移テストも「0時間1分」を期待して「0時間0分」となりFAIL。追加4ケースすべてで原因を再現後、Home内のフォーカス取得・前面取得・取得済みデータ再計算の修正に着手した。
+- 追加検証中のテスト問題・原因と修正: AppStateのJestモックはremove済み購読もmock.callsに残るため、テストヘルパーがタブ移動前の削除済みHome購読にもactiveを配り、余分な取得を数えた。ネイティブの実際の購読に合わせ、removeが呼ばれていない購読だけを配信対象にした(通信回数の期待値は変更しない)。
+- 既存送信APIの制約(2026-10-14): useTimerSessionの開始・停止はenqueueAndSendStudyEventをvoidで呼び、flushStudyEventQueueは送信中なら即returnする。Home取得前にflushをawaitしても保存完了は保証できない。今回の回帰テストはサーバー記録済みの結果を取得する検証であり、未送信・送信中の開始/停止の即時反映を保証しない。送信完了の待機APIや購読を追加するには指定ファイル外の変更が必要なため、範囲を拡張せずメインへ報告する。
+
+- 解決確認(2026-10-14): レビュー担当がHome19件を再実行してPASS。最終全体669件・タイムゾーン検証268件×2・typecheck・lintが全てPASS。タブ復帰・前面復帰・計測中の再計算・日本時間の日付変更・古い取得結果の抑止を確認。停止イベントがまだサーバーに保存されていない場合の即時反映は既存送信処理の制約として残る。
+
+
+## P-041 計測記録の監査時刻と停止理由に要件との差異がある
+- 記録日: 2026-10-14
+- 状態: 記録のみ(移行時の調査で発見。対応未着手)
+- 発生箇所: functions/src/studySession/recordStudySessionEvent.ts
+- 問題内容:
+  - requirements.md 3-2 は端末時刻とサーバー受信時刻の両方を記録するとしている。現実装は補正後のstartAt/stopAtとsessionEvents.processedAtを保存し、補正前のclientTimeMsを保持していない。
+  - requirements.md 5 のsessions.endReasonにはmanual/check_timeoutがあるが、現保存処理は未設定なら常にmanualを保存する。無応答停止の共有計算は別途存在するため、停止時刻の計算自体の不具合と同一視しない。
+- 調査・確認した根拠:
+  - recordStudySessionEvent.ts の118〜128行で端末時刻を補正し、136行でendReason='manual'、sessionEventsにはsessionId・action・processedAtを保存する。
+  - 当該ファイル冒頭コメントではcheck_timeoutを5-2bで扱うとしているが、現在の保存経路に停止理由を区別する処理はない。
+- 対応: 今回は調査結果の記録のみ。仕様の解釈と対応範囲を確認してから修正計画を確定する。既存タスク・過去問題・実装は変更しない。
+
+
+## P-042 数値編集後に既存タイマータブの最低・努力目標の表示が更新されない
+- 記録日: 2026-10-14
+- 状態: 解決済み(2026-10-14。6-2aレビューPASS・セキュリティPASS)
+- 発生箇所: src/app/(tabs)/timer.tsx
+- 問題内容・再現条件: タイマータブを一度表示し、ホームの編集で最低/努力目標を変更してタイマーへ戻ると、保持された旧目標で進捗バーが表示される。
+- 原因調査: TimerScreenはfetchActiveGoalDailyTargetsをuseEffect([])の初回だけで取得する。Tabsで画面が保持されるため、数値編集後のフォーカスで再取得しない。
+- 修正計画: 既存6-2aの編集反映として、タイマーの目標値をタブフォーカス時に取得し直す最小変更を行い、実際のタブ往復の回帰テストを追加する。計測状態・記録・送信・通知の仕様は変更しない。
+
+- 解決確認: タイマーの目標取得をフォーカス時に実行する最小変更。実際のタブ往復の画面テストで編集後の最低・努力目標の反映を確認。計測・送信・通知処理の変更なし。
+
+
+## P-043 完了済みサブエージェントが残り、新規レビュー担当を起動できない
+- 記録日: 2026-10-14
+- 状態: 解決済み(2026-10-14。終了済み4担当をcloseし、新規レビュー担当の起動に成功)
+- 発生内容: 6-2aレビュー担当のspawnがagent thread limit reachedで拒否された。
+- 原因調査: close_agentのAPI説明では、完了済み担当もcloseするまで同時実行枠に数えられる。前回調査・実装・レビューの終了済み4担当が残っていた。
+- 修正計画: 完了結果を受領済みの4担当だけをcloseし、レビュー担当を起動し直す。6-2a実装担当とセキュリティ担当は保持する。タスク一覧・既存問題・コードは変更しない。
+
+
+## P-044 設定保存待機中の認証切替後に旧設定をApp Groupへ反映し得る
+- 記録日: 2026-10-14
+- 状態: 解決済み(2026-10-14。6-2bレビューPASS・セキュリティPASS)
+- 発見: 6-2bセキュリティ事前レビュー
+- 発生箇所: src/features/settings/settings.ts・settingsRepository.ts
+- 再現条件: 設定保存を開始し、updateのPromise解決前に現在UIDを別ユーザーまたはnullに変更する。update解決後にrememberが旧ユーザーの設定で呼ばれる。
+- 原因調査: 保存前のcurrentUidは引数の固定値で確認しているが、await port.updateの後に現在UIDを取得し直さずport.rememberを実行する。App Groupの次回開始設定は端末で共有される。
+- 修正計画: App Group反映直前にも現在UIDを再確認し、保存開始時のUIDと不一致なら旧設定を反映しない。遅延Promiseで保存待機中のUID変更・ログアウトを再現するテストを追加する。ログアウト機能・既存ネイティブの例外処理・過去問題には手を加えない。
+
+- 解決確認: 現在UIDを取得する関数を保存処理へ渡し、保存前とawait後に照合する。保存待機中のUID変更／nullでは旧設定をApp Groupへ反映しない回帰テストを独立レビューで確認。サーバーで受理済みの更新を巻き戻す処理は追加していない。
+
+
+## P-045 旧目標のJS送信待ちが目標切替後の目標へ送られ得る
+- 記録日: 2026-10-14
+- 状態: 解決済み(2026-10-16。6-3aの独立review/securityで確認)
+- 発生箇所: src/features/timer/studyEventQueue.ts・studyEventSender.ts
+- 再現条件: 旧目標で開始/停止/確認の送信が失敗してキューに残り、activeGoalIdを切り替えてから再送する。
+- 原因調査: PendingStudyEventはsessionId等を保持するがgoalIdを保持しない。sendPendingEventは再送時のfetchActiveGoalIdを使い、flushは既に実行中なら待機せず戻る。そのまま切り替えると旧記録が新目標へ結び付く。
+- 修正計画: 6-3aの登録前に旧目標のJSキュー同期と空であることを確認し、未同期なら旧目標・入力を保持して切替を拒否する。計測中の切替も拒否する。送信基盤の一本化・過去問題の修正は行わない。
+
+
+## P-046 目標置換ルールのテスト用Firestore instance不一致
+- 発見日: 2026-10-14(6-3a前半の初回検証)
+- 状態: 解決済み(2026-10-14。独立review/securityで確認)
+- 内容・再現: tests/rules/replaceGoal.test.tsのreplacementBatchで、batchとdocument参照が異なるauthenticatedContext由来になり、SDKがProvided document reference is from a different Firestore instanceで拒否。ルールまで到達しないため、不正書込の拒否確認にも使えない。
+- 原因: dbFor(auth)が呼出しごとにFirestore instanceを生成していた。
+- 対応: テスト内で認証UID(未認証null)ごとに同じinstanceを共有。アプリのdomain/adapterを変更せず、実Emulatorの全194件がPASSしたと実装担当から報告。
+- 進行記録: 初回に29件FAIL(instance不一致28件と競合エラーの期待不一致1件)。実装担当の修正後報告で判明したため、本記録を追記し、以後は新しい問題を修正前に報告するよう担当へ再指示。独立review/securityで結果を再確認する。
+
+
+## P-047 目標変更フローの新規JestテストでStudySync実体を読込
+- 発見日: 2026-10-14(6-3aクライアント部分)
+- 状態: 解決済み(2026-10-16。6-3aの独立review/securityで確認)
+- 内容・再現: src/features/goals/__tests__/goalReplacementFlow.test.tsを実行するとCannot find native module 'StudySync'になり、0件実行で停止。
+- 原因: native module非搭載のJestでStudySync実体をimportし、既存nativeモックを明示していない。アプリの実行時不具合ではない。
+- 修正計画: 当該テストに既存StudySyncモックを明示し、6-3aのクライアント部分のfastテストで再検証。実装担当から修正前報告を受けて記録した。
+
+
+## P-048 目標作成時のFirestoreルールに偏差値0.1刻み検査がない
+- 発見日: 2026-10-14(6-3a前半の独立レビュー)
+- 状態: 解決済み(2026-10-14。作成両偏差値に刻み検査追加、独立review/security PASS、実Emulator206件PASS)
+- 内容・再現案: 正常な初回作成または目標置換batchの新受験目標にtargetDeviation/currentDeviation=60.05を指定。仕様上は拒否すべきだがisValidExamGoalは25〜80の範囲のみを調べる。
+- 原因: 作成検査に0.1刻みの検査がなく、数値更新側のisValidEditDeviationにのみ刻み・浮動小数許容差の検査がある。UI/buildGoalDocumentの正常入力だけでは直接クライアント書込を防げない。
+- 修正計画: 6-3aの作成ルールに数値編集と同じ刻み・許容差の検査を適用。新規/置換で両偏差値の不正な刻みを拒否するルール回帰テストを追加し、既存正常値を含むdemo-gokaku Emulator検証と独立review/securityを行う。仕様・タスク順序は変更しない。
+
+- P-048再現確認(2026-10-14): security担当がdemo-gokaku実Emulatorの正常置換batchからtargetDeviation/currentDeviationを各単独60.05へ変更し、両方で新目標保存・旧replaced・参照切替を確認。正常60/50も保存成功。ソース変更前に再現を確認し、担当へ計画どおりの修正を依頼した。
+
+
+## P-049 目標置換commit後の端末処理が新しい記録を消し得る
+- 発見日: 2026-10-14(6-3aクライアント実装中の統合確認)
+- 状態: 解決済み(2026-10-16。6-3aの独立review/securityで確認)
+- 内容・再現: 新goal commit後の端末処理を中断し、新goalで開始・停止してから再開すると、現行cleanupはtimer:sessions:v1を丸ごと削除する。登録後の停止・有効goal再確認も不足し、新goal計測中の記録を消し得る。
+- 原因: 旧ローカル記録にgoalIdがなく、commit後cleanupが新旧記録を区別していない。Auth切替を挟むglobal cache操作の待機中も未検証。
+- 修正計画: commit前の旧記録の識別子を途中保存記録に保持し、成功後は当該旧記録のみ消す。cleanup前に同UID・新pointer・停止状態を再確認し、再試行でも新しい記録を保護する。最新draft保存の遅延順序とAuth切替のテストを追加する。キュー基盤全体・過去問題は変更しない。
+
+
+## P-050 サブエージェントの昇格承認待ちで作業が進まない
+- 発見日: 2026-10-14(6-3aの再レビュー・端末処理修正)
+- 状態: 対応済み・今後の運用に反映
+- 内容・原因: 読み取り専用環境のため、サブエージェントの書込やEmulator起動が承認待機。running表示だけでは実行待ちと区別できず、状況照会の中断で承認要求が取消になった。
+- 対応: 実行状況を担当に確認し、実装担当のexact patchをmainの昇格要求で反映。security担当の専用Emulatorコマンドもmainから実行し、206件PASS・停止ログをsecurityへ渡して独立判定を受けた。担当が実装・判定する責任分担は維持。
+- 再発防止: 新しい昇格要求が滞った場合は待機を続けず、承認対象の具体的コマンド・準備済みpatchをmainへ報告する。承認済み実行prefixを使用し、権限の回避は行わない。アプリ仕様・既存タスク順序は変更しない。
+
+
+## P-051 目標置換画面テストでcommit後のポインタmockが旧値のまま
+- 発見日: 2026-10-14(6-3a UI回帰テスト)
+- 状態: 解決済み(2026-10-16。6-3aの独立review/securityで確認)
+- 内容: 17 suite155件中1件FAIL。置換APIの成功mock後もfetchActiveGoalIdがoldを返し、新ptr確認でHome遷移を拒否。
+- 原因: P049の正しい新ptr確認に対し、テストのAPI成功mockがサーバーの参照切替を再現していない。
+- 修正計画: API成功時にptrmockをnewへ更新。アプリguardを緩めず、失敗時old保持・成功時new・再試行の画面回帰テストを実施する。
+
+
+## P-052 二重登録防止の画面テスト内でAPI待機を循環させた
+- 発見日: 2026-10-14(6-3a UI回帰テスト)
+- 状態: 解決済み(2026-10-16。6-3aの独立review/securityで確認)
+- 内容: 17 suite160件中1件が重複pressテストでタイムアウト。159件はPASS。
+- 原因: await fireEvent.pressがasync登録handlerのPromise完了を待つ一方、API mockのreleaseをそのawait後に置いたため、テスト自身に循環待機が生じた。RNTL実装と当該テストを確認済み。
+- 修正計画: press Promiseを保持し、待機中の操作検証後にAPIを解放し、最後にpressをawait。非同期actを適切に完了させる。アプリguardを緩めずタイムアウト増加で回避しない。
+
+- 6-3a最終確認(2026-10-16): 全体787件、実Emulatorルール206件、typecheck/lint PASS。独立画面レビュー160件・最終security画面9件PASS。P045の追加懸念(旧stop残存)はサーバーが既存goalIdを保持するため、そのケースだけでは混在せずレビューFAILを撤回。登録前flush/空確認・停止guardによる既知の未送信対策を確認した。過去の他問題・タスク順序は変更していない。
+
+
+## P-053 Expo CLIがSimulatorウィンドウ確認で終了する
+- 発見日: 2026-10-16(6-4事前spike AのSEネイティブ検証)
+- 状態: 原因箇所特定済み・環境側の切り分け中
+- 内容: expo run:iosはBuild Succeeded/0 errorsとSEへのインストールまで成功。その後osascriptのSystem EventsによるSimulator/DeviceHubプロセス確認がexit1となり、CLI全体は失敗終了。
+- 原因箇所: Expo CLI AppleDeviceManager.activateWindowAsync→ensureSimulatorAppRunningAsync→isSimulatorAppRunningAsync。ビルドエラーではない。osascriptが失敗したOS側の詳細理由は未確認のため権限原因とは断定しない。
+- 対応計画: アプリやCLIソースを変更せず、2機種のビルド/インストールと、simctlによるアプリ起動を分けて検証する。GUIウィンドウの前面化は後回しとし、SDK関数の実行検証は専用開発プローブを使う。今回のコンパイル成功をネイティブ関数実行の成功とは扱わない。
+
+
+## P-054 nonceのテストがNode型を参照してアプリの型チェックを阻害
+- 発見日: 2026-10-16(6-4spike A security)
+- 状態: 解決済み(2026-10-16。Node import除去、nonce/adapterの独立review・security PASS)
+- 内容: appleNonce.test.tsのnode:crypto importでTS2591となりnpm run typecheckが失敗。Jest5件は成功していた。
+- 原因: アプリ側tsconfigの型環境にNode型が含まれない一方、追加テストが独立ハッシュ計算のためNode APIを参照した。
+- 修正計画: nonceの既知入力と独立計算したSHA256のテストベクターを使い、アプリ側の型設定や実装を緩めず、テストからNode importを除く。Jest・型・lintと独立securityで再確認する。
+- 確認追記(2026-10-16): nonce既知ベクターとアプリ型設定を維持。独立29件・typecheck/lint PASS。
+
+
+## P-055 アカウント削除と並行するサーバー処理がデータを再作成し得る
+- 発見日: 2026-10-16(6-4 backend独立security)
+- 状態: 解決済み(2026-10-16。backend限定の独立review・security PASS)
+- 内容・再現条件: Apple通知が持ち主を取得してAPI待機した間に削除を完了し、通知が再開するとusersへのmergeが親を再作成する。トークン発行も削除による失効後にsetを完了すればdeviceTokensが残る。
+- 原因: accountActionは順次削除のみで、既存Apple契約状態書込・デバイストークン発行・計測書込と削除開始を協調させていない。所有情報を先に消すだけでは、処理中に取得済みの情報を無効化できない。
+- 対応計画: users本人docに一時的な削除中状態を置き、各書込が同docの存在と削除中でないことをトランザクション内で確認する。削除開始後および親削除後の再作成を拒否し、状態そのものも最終的に削除する。永続的なユーザー識別情報の保持は追加しない。client rulesも削除中の書込を拒否する。共有ガード・デバイストークン・計測・Apple契約・削除本体の順に小さく検証し、並行処理のEmulator回帰と独立review/securityを行う。過去の別問題やタスク順序は変更しない。
+- 確認追記(2026-10-16): 全現行writerの同一transactionガードとclient rulesを確認。demo-gokaku Functions196件・rules269件PASS。端末側6-4は引き続き未完了。
+- 最終検証証跡: /tmp/gokaku-review-p055.TPDt5P/ (functions.log・rules.log・emulators.log・processes-after.txt)
+
+
+## P-056 アカウント削除対象から本人のdevProbeが漏れている
+- 発見日: 2026-10-16(6-4 backend securityによる実コレクション確認)
+- 状態: 解決済み(2026-10-16。backend独立review・security PASS)
+- 内容: 現Firestore rulesで許可されるdevProbe/{uid}が削除対象に含まれず、開発確認で作った本人データが残る。
+- 原因: 現スキーマの公開機能コレクションだけを対象にし、開発用のUIDに紐付くrootコレクションを取りこぼした。
+- 修正計画: 6-4の本人関連データ削除にdevProbe/{uid}を追加。本人分が消え他UIDが保持されるEmulatorテストを追加し、独立review/security確認。P055の再作成防止ガードもdevProbeに適用する。
+- 確認追記(2026-10-16): 本人devProbe削除・他UID保持と削除中write拒否を含むFunctions196件・rules269件PASS。
+- 最終検証証跡: /tmp/gokaku-review-p055.TPDt5P/ (functions.log・rules.log・emulators.log・processes-after.txt)
+
+
+## P-057 localhostのIPv6待受とiOSのIPv4接続が一致しない
+- 発見日: 2026-10-16(6-4 nonce native probe)
+- 状態: 解決済み(2026-10-16。検証設定修正で接続成功)
+- 内容: Maestroが開発プローブのボタンを発見できず失敗。スクリーンショットはCould not connect to development server、URLは127.0.0.1:8081。
+- 原因: 検証用Metroを--localhostで起動すると、この環境ではnodeが[::1]:8081だけで待受。lsofと127.0.0.1/statusへの接続失敗で確認した。アプリのnonce処理に到達していない。
+- 修正計画: 自分が起動したMetro PID15822だけを終了し、Nodeの--dns-result-order=ipv4firstを付けてlocalhostのIPv4待受に揃える。status応答を確認後、同じnative-probeを再実行。アプリや既存テストの待ち時間は変更しない。
+- 確認追記(2026-10-16): IPv4 localhost設定でSE/ProMaxのnonce probe成功。今回Apple availability probeも両機種成功。アプリ側の待ち時間変更なし。
+
+
+## P-058 ルール回帰テスト案の管理者コールバックが値を返す
+- 発見日: 2026-10-16(6-4/P055 rulesの適用前確認)
+- 状態: 解決済み(2026-10-16。型修正と実Emulator確認)
+- 内容: rulesテスト案のsnapshot helperでTS2345/TS2488。実ファイルへの適用前に型診断で発見。
+- 原因: withSecurityRulesDisabledのcallbackはPromise<void>契約だが、取得配列をその戻り値にしていた。
+- 修正計画: callback内で取得結果を外側の型付き変数へ代入し、callbackはvoidで完了。snapshot helperから取得結果を返す。APIの型設定やセキュリティ検査を緩めず、rulesの型・Emulator回帰で確認する。
+- 確認追記(2026-10-16): callback内で外側変数へ代入する修正後、ルール型チェック・269件PASS。
+- 最終検証証跡: /tmp/gokaku-review-p055.TPDt5P/ (functions.log・rules.log・emulators.log・processes-after.txt)
+
+
+## P-059 未認証トークンテストの後片付けがAdmin未初期化で失敗し得る
+- 発見日: 2026-10-16(6-4/P055 token consumer適用後確認)
+- 状態: 解決済み(2026-10-16。独立backend review PASS)
+- 内容: issueDeviceToken.test.tsの未認証ケースだけを単独実行すると、新しいafterEachがAdmin未初期化のgetFirestoreを呼ぶ。
+- 原因: このケースは副作用前に拒否されテストUIDも生成しないが、cleanupが対象ゼロでもAdmin SDKを呼ぶ。SDK内部getApp参照とテスト構造で確認。
+- 修正計画: cleanup対象UIDが空ならgetFirestoreの前にreturnし、未認証ケース単独と全対象テストを確認。実装の認証・書込guardを緩めない。
+- 確認追記(2026-10-16): cleanup対象ゼロのreturn適用後、issueDeviceTokenと全Functions196件PASS。
+- 最終検証証跡: /tmp/gokaku-review-p055.TPDt5P/ (functions.log・rules.log・emulators.log・processes-after.txt)
+
+
+## P-061 購入の回数制限テスト3ケースで正常users親のseedが欠落
+- 発見日: 2026-10-16(6-4/P055 Functions回帰)
+- 状態: 解決済み(2026-10-16。独立backend review PASS)
+- 内容・再現: main報告のFunctions全体192件PASS・4件FAILのうち、verifyApplePurchase.test.tsの回数制限3ケースが期待するunavailable/resource-exhaustedではなくinternalとなる。
+- 原因・根拠: seedRateLimitCountはpurchase-verifyカウンタだけを作りusers/{uid}を作成しない。P055対応後のenforceRateLimitは同一transactionのカウンタ読取前にgetWritableAccountを呼ぶため、親欠落でAccountWriteBlockedError('missing')となり、handleVerifyApplePurchaseRequestがinternalへ変換する。3ケースとも当該helperを使い、正常users親のseedがない。
+- 修正計画: 6-4内の限定修正として、当該helperのensureAdminApp後にawait seedUser(uid)を1行追加する。既存assertionsとdeleting/missing拒否ケース、サーバーsourceは保持する。生成UIDは既存uniqueIdでcleanup対象に登録され、失敗時も既存afterEachで親とカウンタを削除する。購入テストをdemo環境のEmulatorで再検証し、型・lintと独立reviewを確認する。実行結果確認までは解決済みにしない。過去タスク、P060・P062・P063は変更しない。
+
+
+- 再検証証跡(2026-10-16): /tmp/gokaku-review-p055.TPDt5P/functions.logでverifyApplePurchase.test.tsのPASSとFunctions全196/196件PASSを確認。正常users親を追加した回数制限3ケースも既存assertionsのままPASS。独立review判定待ちであり、解決済みへの変更は行わない。
+- 確認追記(2026-10-16): 正常親fixture追加後の既存3ケースを含む全Functions196件PASS。欠落・削除中の拒否は保持。
+- 最終検証証跡: /tmp/gokaku-review-p055.TPDt5P/ (functions.log・rules.log・emulators.log・processes-after.txt)
+
+
+## P-062 nativeSync共有bucketテストが429期待に対して200となる
+- 発見日: 2026-10-16(6-4/P055 Functions回帰)
+- 状態: 調査中・原因未確定
+- 内容・再現: main報告のFunctions回帰で、nativeSync.test.tsの「recordStudyEvent(Callable)と nativeSync は同じ枠を共有する」が429期待に対して200となる。
+- コード確認: テストはCallableを60回逐次実行し、各呼出しのdeps.nowは実時刻Date.nowを返す。nativeSyncも別プロセスの実時刻を使用する。rateLimitsはuid・study-event・分番号ごとの文書であり、分跨ぎによる分散は候補だが未証明。
+- 調査計画: 対象テストだけに一時診断を追加する。Callable各回のdeps.now実値を保持し、最初の読取を上限判定時刻として記録する。nativeSync HTTP前後のテスト時刻を保持し、失敗assertion直前にAdmin SDKのdocumentId範囲queryで対象UIDのstudy-event全counterを取得する。文書パス・bucket suffix・生データ・count型・expireAt・snapshot時刻を出力し、分散の有無を確認する。
+- 観測限界: nativeSyncの正確な上限判定時刻はHTTP応答に公開されていない。HTTP前後のテスト時刻やFirestore snapshot時刻を判定時刻と呼ばない。counter文書のbucketが実際のサーバー判定bucketの証拠となる。
+- 制約: demoプロジェクトのEmulator限定。診断はテスト内の時刻記録と読取のみで、期待値・上限・待ち時間・リトライ・サーバーsourceを変更しない。証拠確認後に原因と修正計画を追記し、一時診断を除去する。過去タスクとP060・P061・P063は変更しない。
+
+
+- 再検証実測(2026-10-16): /tmp/gokaku-review-p055.TPDt5P/functions.logの[P062 shared-bucket]でstatus=429、Callable60回、対象UIDのstudy-event counterはbucket 29868581の1件のみ、count=60(number)を確認。Callable上限判定時刻は1792114891787〜1792114892826ms、nativeSync HTTP前後は1792114892842〜1792114892852ms。全Functions196/196件PASS。
+- 調査の結論: 今回は正常結果を観測した。前回失敗時のbucketデータは失われており、前回の原因は未確定。今回のPASSを根拠に分跨ぎを原因と断定せず、解決済みにしない。実時刻で60回逐次実行する既存テストの分境界リスクは残存する。nativeSyncの正確な判定時刻は未取得。
+- 一時診断の終了: backupとの差分5か所を確認して診断のみ除去。既存assertions・時刻依存の仕様・サーバーsourceは変更しない。上記PASS証跡は診断付き実行の結果であり、診断除去後の再検証結果ではない。
+
+## P-060 端末cleanup後にnative処理が古い状態を書き戻し得る
+- checkpoint adapter限定追記(2026-10-17): flowのacquireOperationBlock型と呼出しがUIDのみで、native beginに必要なactionを受け渡せないことをaccountActionFlow.tsで確認。先に型・呼出しへAccountActionを追加し正常順序テストでUID/actionを検証する。その後、新規account:action:v1保存adapterで厳密3fields・破損時throw・UID/action競合とphase後退拒否・Promise chain直列化・await境界guardを検証する。normal writer/native/UI/gateは別担当。完了条件は(1)signature整合(2)厳密保存読込(3)競合/後退/一致削除(4)直列化/guard(5)対象テスト・型・lint。独立review/securityまでは未完了。
+- 発見日: 2026-10-16（6-4調査）
+- 状態: 解決済み(2026-10-20。6-4実装・review/security PASS。本番deployはPhase8)
+- 原因: sendはHTTP後enqueue、flushはsnapshot→HTTP→replaceAll。停止・世代確認がなくcleanup後に復活し得る。Pod/App/Widget別コンパイルのためstatic actorだけでは排他できない。
+- 所有unknown: JS session/eventとnative currentGoal/check/lastStopはUIDなし。既存非空・出所未証明データは停止・保持し、現在UIDで追認しない。
+- 最小spike計画: 操作全体のnonblocking flock lease＋別ファイルblockedUID＋専用UID drainの案と、短時間ロック＋世代照合の案を比較する。全native入口・Intent後処理・queue conservation・busy時の操作保持・中断復旧を確認し、移行と世代再設計の回避可否を評価する。採用は未決定。
+- 検証実績: /tmpのSwift実行体2プロセスで並行追加400件保持・非blocking busy・プロセス終了解除・世代応答拒否10回と別UID保持を確認。全操作lease案およびiOS固有部分は未検証。一時ファイル削除・子プロセス回収済み。
+- 範囲: production変更なし。6-3a/10-2・過去タスク・他問題のstatusは変更しない。6-4本体は未完了。
+
+- unitB実施計画(2026-10-17): 所有はtargets/_shared/StudySyncCore.swift・StudyLiveActivityIntent.swiftの2ファイル。コードで確認したHTTP後enqueue・snapshot書戻し・Intent状態更新からActivity/通知完了までをunitAのnormal leaseで囲む。Intent内は明示Unlocked経路を使い再取得しない。外向send/flushはgate取得失敗時にqueue無変更・false/0・generic reason、Intentは状態変更前throw。queueは既存形式・200件上限・encode/破損値/HTTP分類を保ちCFPreferencesAppSynchronize前後のfresh readとwrite確認を追加する。module bridge・専用cleanup・JS方針は変更しない。
+- unitB完了条件: (1) send/flushのHTTP後処理までlease保持 (2) 両Intentの状態・HTTP・queue・Activity・通知を単一lease内で完了しdetached workなし (3) busy/blockedで無変更・失敗を返す (4) queue形式/上限/分類を維持し同期と書戻しを確認 (5) iOS17 Swift型検証・isolated tests・既存テストを実施し結果を報告。画面0・Functions0・library追加0、原因既知、1時間以内の限定実装。review/security判定はメイン担当へ引き継ぐ。
+
+- unitB検証途中(2026-10-17): 実gateソースへ合わせiOS17 Simulator向けswiftc typecheck PASS。非本番Swift隔離実行では実core/API/Intent bodyと実gateを使用し、App Groupを一意test suite・Keychain/HTTP/Activity/通知をmockに差替。busy/blockedの全3API+両Intentのqueue/state無変更、9 HTTP分類、flush順序/中断/他UID保持、HTTP待機中beginAccount busy→enqueue完了後cleanup→復活なし、Intent通知/Activity完了までlease保持、既存[Data]/200件上限をPASS(lease確認244回)。iOS OS統合の代替ではない。
+- unitB全体検証途中: lint PASS。typecheckは既知P065のmock引数不一致でFAIL(担当外未変更)。npm test -- --runInBandは既知P067のscript構造により先頭Jestが並列実行され7suite失敗。直接Jest --runInBandでは71suite/1047件PASS・P066のUID期待値1件のみFAIL。既知P065〜067へ紐付け、新規問題番号は採番しない。
+
+- unitB返却(2026-10-17): 担当2Swiftの実装完了・独立review/security待ち。追加経路はStudySyncAPI.sendUnlocked(_:)・flushUnlocked(matching:)とqueue.peekAllSynchronizedUnlocked()で、全て呼出し側の操作lease保持が前提。enqueue/replaceAllは@discardableResult Boolへ変更し同期・保存確認結果を返す。gate/module/JS/専用cleanupは未変更。iOS17 swiftc(Release/DEBUG)・isolated tests・lint・差分check PASS。直列Jest 1047 PASS/1 FAIL(P066)、typecheckは2回とも既知P065でFAIL。test:tzはLA/UTC各268件PASS。全体の再実行は行わない。
+- unitB iOS build: 初回はStudySync Pod生成ソース一覧に新gateが未登録のためcannot find StudySyncAccountGate。symlink実体・Pods projectを確認し、EXPO_NO_DOTENV=1 pod install --project-directory=ios --no-repo-updateで既存Podを再生成(追跡ソース差分なし)。2回目expo run:ios --device 6DAC94C9-7151-48AB-A6B5-FF712A1D61FF --no-bundlerはBuild Succeeded/0 errors・SEへinstall成功。コマンド全体はビルド後のSimulator前面化osascript(System Eventsのprocess数照会)でexit1。原因詳細は未調査、OS操作の回避・再試行はしない。ビルド成功と起動手順完了を区別する。追加ライブラリ/Swift sourceの範囲外修正なし。
+
+- C2実施計画(2026-10-17): 所有StudySyncModule.swift・TS型/mocks(必要時のみCore owner setter入口)。全userdata normal writerを同期/非同期normal leaseで囲み、start/stopはActivity完了まで保持。setAuthContext保存はsync lease、後段flush Taskは自身の外向APIで独立gate取得。getAccountOperationBlockはreadFreshBlock、isAccountOperationBlockedはlease不要isPersistentlyBlockedへ接続する。C1担当とreceipt/helper署名を直接確認。Keychain strictread/OS inspectionがC3へ分離され未実装のため、begin/inspectの不足検証を推測実装しない。drain/erase/finish bridgeは次unitへ残す。
+- C2完了条件(5件): (1)全normal writer leaseとActivity await保持 (2)block詳細/statusの契約 (3)確定helper範囲で新owner setter+receipt/legacy追認禁止 (4)Swift型+対象mockテスト (5)不足adapter・最終署名をmainへ返却。画面0・Functions0・新library0、既知原因への限定接続で1時間以内。root full tests/iOS full buildはmain最終統合まで実施しない。
+
+- Keychain限定計画(2026-10-19): StudySyncKeychain.readはnot-foundとOSエラーを同じnilへ変換し、clearはUID→token順のためtoken削除失敗時に所有証明が失われることを現コードで確認。6-4専用strict inspectionではnot-foundだけをabsenceとし、それ以外は停止する。UIDなしtoken有は所有不明、UID有token無は既知の部分削除状態として扱う。対象UIDの専用clearをtoken→UID順に追加し、他UIDは保持する。既存normal APIは変更しない。隔離SecItemモックで失敗・再試行を検証してから独立review/securityへ回す。
+
+- unitA独立検証追記(2026-10-19): review/security両PASS。隔離2プロセスのbusy/await保持、throw・協調cancel後のlease解放、block不正形式/IO停止、resume ID保持、finish/cancel検証失敗時block保持、inode不変を確認。iOS17 Simulator向けtypecheck PASS。JS singleton runtimeも独立review/security PASS(対象33件)。P-060全体はC1/Keychain/producer・cleanup接続の完了まで未解決。
+
+- JS token writer接続計画(2026-10-19): ensureDeviceTokenは発行HTTP後にKeychain/metaを書き、途中のUID再確認やaccount gate待機がないことを確認。account処理が既存発行を待てずcleanup後に再保存し得るため、共通singletonのrunNormalで発行全体を追跡し、各await後・Keychain/meta保存直前のUID一致を検査する。対象はensureDeviceTokenと対応testだけ。拒否時は従来どおり次回再試行し、cleanup専用処理に通常leaseを流用しない。
+
+- JS sender接続計画(2026-10-19): studyEventSenderのenqueue/flushはaccount gateで追跡されず、HTTP応答後のqueue書込がcleanupと競合し得る。通常入口を共通leaseで囲み、account専用同期は専用permitの下で対象UIDの項目のみ送り、別UIDとlegacyを保持する。重複keyが別UIDにもある場合の保全のため、queue除去に対象UID照合を追加する。親leaseは明示受渡し・awaitし、専用permitをnormalへ流用しない。対象sender/queueと対応testsに限定する。
+
+## P-063 検証用Firebase runnerのlogger初期化不足で起動・停止ログが欠落
+- 発見日: 2026-10-16(6-4/P055実Emulatorレビュー)
+- 状態: 解決済み(2026-10-16。独立backend review PASS)
+- 内容: emulators.logにはテスト終了コード1を伝えるFirebaseErrorだけが出力され、通常の起動・停止ログが欠落した。
+- 原因: レビュー担当が提示したprogrammatic API runnerは通常CLIのlogger初期化を通らない。firebase-toolsの初期Console transportはsilent。
+- 修正計画: 一時runnerにIS_FIREBASE_CLI、useConsoleLoggers、useFileLoggerを追加する。既存CLI/npmスクリプト、config・ビルド・テスト・cleanup手順は変更しない。
+- 検証計画: P062診断返却後、main所有のEmulatorで全Functionsと全rulesを再実行。emulators.log/firebase-debug.logの起動・停止記録と所有PIDの終了を確認する。確認前は解決済みにしない。
+- 証跡: /tmp/gokaku-review-p055.lLoaKW/emulators.log
+- 確認追記(2026-10-16): logger初期化後の起動・正常終了code0・全Emulator停止を確認。processes-after.txtに対象残存なし。
+- 最終検証証跡: /tmp/gokaku-review-p055.TPDt5P/ (functions.log・rules.log・emulators.log・processes-after.txt)
+
+- 記録書式の確認(2026-10-16): 検証結果の追記処理で末尾空行が残りgit diff --checkが失敗。原因確認後、末尾を1改行に正規化して再確認する。
+
+## P-064 JS writer先行テストが既存AsyncStorageモックの実装を消去
+- 発見日: 2026-10-17(6-4 JS writer単位)
+- 状態: 解決済み(2026-10-17。対象3スイート55件PASS)
+- 内容: 不正UIDの先行テスト後、既存queueテストも空配列になった。
+- 原因・根拠: jest.setup.tsは公式のjest.fnモックを提供している。追加テストのspyOn/setItemに対するmockRestoreが元のモック実装を消し、その後の保存がno-opとなった。最初の先行実行で既存順序・削除テストの空配列を観測。
+- 修正計画: spyOn/mockRestoreを除去し、jest.mocked(setItem)の呼出数の前後比較で書込拒否を検証する。対象3スイートを再実行する。本番データ・既存assertionは変更しない。
+
+## P-065 accountActionFlowテストのoperation blockモック引数が契約不一致
+- flow所有担当の原因・修正計画追記(2026-10-17): 現物でAccountActionFlowDepsのacquireOperationBlockと実呼出しはUID/actionの2引数、テストのjest.fn callbackだけuidの1引数であることを確認。main報告のTS2322はsignature変更時のmock型追従漏れによるtuple長不一致。flowテストにAccountAction型importと未使用第2引数_action: AccountActionを追加する。既存のUID/action正常順序assertとcheckpoint実装は保持し、flow54件＋checkpoint73件、npm run typecheck、関連4ファイルlintを確認する。P-060の既存計画と問題状態は変更しない。
+- 発見日: 2026-10-17(6-4 JS writer単位の全体typecheck)
+- 状態: 原因箇所確認済み・所有担当へ申し送り
+- 内容・根拠: npm run typecheckがsrc/features/account/__tests__/accountActionFlow.test.ts:32でTS2322。acquireOperationBlockのMock<Promise<true>, [uid: string]>が要求する[expectedUid: string, action: AccountAction]と不一致。
+- 原因: AccountActionFlowDeps側の2引数契約に対しテストのjest.fnは1引数。JS writerの変更箇所ではない。
+- 対応計画: accountActionFlowの所有担当が契約に合わせてモック引数を修正し、typecheckと同flowテストを確認する。今回のwriter担当は所有範囲外のため変更しない。
+
+## P-066 remote sessionのUID保持にlockscreenSyncテストの期待値が未追従
+- 発見日: 2026-10-17(6-4 JS writer検証)
+- 状態: 原因特定・接続unit担当へ申し送り
+- 内容・根拠: lockscreenSync.test.ts:185の取り込みテストが、実際のsessionにuid: uid-1が追加されて失敗する。
+- 原因: 承認済みadoptRemoteActiveSessionのremote.uid保持を実装したが、既存reconcileテストはUIDを含めないsession完全一致を期待している。
+- 対応計画: 次の呼出接続unitで既存remote fixtureのUIDと保存結果の一致を検証するよう期待値を更新する。今回の所有3tests外のため変更しない。
+- 対応追記(2026-10-17): ユーザーの所有scope拡張に基づき、既存fixtureのuid-1を保存期待へ含める1行のみ修正。guardやfixtureは変更せず、lockscreenSyncを含む対象159件PASS。独立review待ち。
+
+## P-067 複合npm testへの対象引数が先頭Jestに渡らず全体実行を開始
+- 発見日: 2026-10-17(6-4 JS writer検証)
+- 状態: 実行終了済み・全体結果は未確定
+- 原因・根拠: package.jsonのtestはjest && npm run test:tz。npm test --に対象パスを渡すと末尾のtest:tzへ引数が付くため、先頭jestは引数なしで全体を実行した。自分のPID6853とworker6888〜6896の親子関係をpsで確認。
+- 対応計画・実施: package.jsonは変更せず、対象は直接Jest --runInBandで実行する。意図しない全体JestとそのworkerだけをPID指定で終了(code143)。他担当のプロセスは変更しない。
+- 結果: 直接指定4スイート116件PASS。全体実行中にdaily-time/SettingsPopup等の5000msタイムアウトとact警告も観測したが原因未確定。全体PASSとは扱わず、画面側を推測で変更しない。
+
+## P-068 JS所有情報writerの3入口が不正UIDを保存し得る
+- 発見日: 2026-10-17(main sourceレビュー)
+- 状態: 修正・対象検証済み、独立review待ち(2026-10-17)
+- 内容: startLocalSessionUnserialized/adoptRemoteActiveSessionUnserialized/writeAutoStopNoticeが空文字・空白・型違いの指定UIDを保存前に拒否しない。
+- 原因・根拠: 3入口はoptional UIDをそのままrecord/envelopeに展開している。appendStudyEventにあるtypeof string・trim非空検査がなく、承認済み内部契約に不一致。
+- 修正計画: 各入口の読込・保存前にundefined以外のUIDを検証し、不正ならrejectする。UID省略の旧形式と既存UID保持は維持し、現UIDへの追認は行わない。空・空白・型違いの先行テストでsetItem未呼出とraw不変を確認する。P-066は承認済みscope拡張によりfixtureのuid-1を保存期待へ1行追加する。対象テスト・型・lintのみ実行する。
+- 検証追記(2026-10-17): 不正UIDの先行24件がrejectせず失敗することを実測。3入口の読込/保存前検査追加後、writer3tests・lockscreenSync・localAccountDataの5スイート159件PASS。UID省略legacy維持とsetItem未呼出・raw不変を確認。全体typecheckは修正中のP-065で停止。全体テストは再実行していない。
+
+
+## P-069 AccountActionPopup先行テストがRNTL 14非対応APIを使用
+- 発見日: 2026-10-17(6-4 presentational popup)
+- 状態: 原因特定・修正計画確定
+- 内容・根拠: 対象24件中3件FAIL。screen.UNSAFE_queryByType/getByType/getAllByTypeはRNTL 14のScreen/RenderResultに存在せずTS2339、構造走査のnode型はimplicit any。ホストPressable.props.onPressの直接取得も実行時にundefined。toHaveTextContentへ部分文字列を渡したassertは完全一致で失敗した。
+- 原因: インストール済RNTL 14.0.1のdist/screen.d.ts、同梱migration-v14.md/fire-event.mdを未確認のまま旧renderer依存のAPIを使用した。
+- 修正計画: 構造/実装形テストと旧API importを削除し、連打はawait fireEvent.pressで操作、原因別文言は正規表現で検証する。型緩和・ライブラリ追加・sourceの回避変更は行わない。Modal未使用はsourceレビュー、SE収まりはPhase末visualで確認する。対象Jest・typecheck・lintのみ実行し、全体suiteを繰り返さない。
+
+## P-070 AccountActionPopupがrender中に完了refを参照しlint違反
+- 発見日: 2026-10-17(6-4 presentational popup)
+- 状態: 原因特定・修正計画確定
+- 原因・根拠: npm run lintでAccountActionPopup.tsx:50のunavailable = busy || completed.currentがreact-hooks/refs違反。描画に必要な完了状態をイベント排他用refと兼用したことが原因。対象Jest23件とtypecheckはPASSしていた。
+- 修正計画: 描画用finished stateを追加し、complete結果受信時のみ更新する。completed refはイベントの二重実行防止に限定しrenderから参照しない。lint抑制・型緩和はしない。対象Jest・typecheck・lintで再検証する。
+
+- P-069検証追記(2026-10-17): 非対応API・構造テストを除去後、対象23件PASS、typecheck PASS。P-070対応後の最終typecheck/lintもPASS。独立review待ち。
+- P-070検証追記(2026-10-17): 表示用finished stateへ分離し、対象23件・typecheck・lint全PASS。Modal importなし、全操作をScrollView内に配置してmaxHeight/flexShrinkで制約することをsourceで確認。SE実機相当の見た目はPhase末visualへ引き継ぐ。独立review待ち。
+
+## P-071 タイマー呼出側の所有UID欠落とowned queueの別UID送信
+- 発見日: 2026-10-17(6-4 ownership呼出接続unit)
+- 状態: 解決済み(2026-10-19。指定接続範囲のreview/security PASS)
+- 内容・根拠: 先行2スイート28件中11件FAIL。owned event(uid=user-a)をcurrentUID=user-b/nullでもCallableへ送り、HTTP中UID変更後にもqueueから除去した。hookの開始・停止・確認・自動停止はUIDを渡していなかった。
+- 原因: useTimerSessionのwriter/sender呼出しにowner UID接続がなく、studyEventSenderはfetchActiveGoalIdとCallableのawait前後でevent.uidとcurrentUIDを確認していない。
+- 修正計画: 開始で取得した既知UIDをawait後に再確認し新session/start eventへ同一UIDを渡す。停止・確認・自動停止notice/eventは元session.uidのみ継承。EnqueueParamsにoptional uidを追加しqueueへ保持。owned eventの送信・除去前およびawait後にUID一致を確認し、不一致なら列保持。legacy送信・UID省略は維持。正常系の既存assertionを保持し、対象テスト・型・lintのみ検証。gate/singleton・旧writer3filesは変更しない。
+
+- 独立検証(2026-10-19): hook11・sender20の計31件をreview/security各担当が直接Jestで確認しPASS。開始UIDのawait後照合、停止/確認/自動停止の元UID継承、別UID/null送信拒否、HTTP後UID変更時のqueue保持を確認。所有担当のtypecheck/lintもPASS。通知予約await中のUID変更等の一部境界はsource確認のみ。runtime/native/UI統合は別単位であり6-4全体は未完了。
+
+## P-072 Cloud削除成功後のAuth nullでAPIが成功応答を失う
+- 発見日: 2026-10-19(main API接続レビュー)
+- 状態: 解決済み(2026-10-19。対象review/security PASS)
+- 内容・原因: accountActionApi.tsはCallable応答後、応答内容の検証前にboundUserを要求する。サーバー削除成功応答(action=delete, success=true)と同時にAuthがnullになった場合もthrowし、既存accountActionFlowが持つ確認済み成功後のnull許容・local cleanupへ進めない。現API testはこの成功ケースのrejectを期待しており、flow契約と不一致。
+- 修正計画: 独立reviewで再現確認後、Firebase SDKが受信したCallable応答のaction一致/success=trueを検証し、送信時expectedUidはサーバーでauth.uid一致を検査済みという前提で、成功後は同UID又はnullだけ許可する。別UIDは停止し、Auth消失のみ・不正応答・通信失敗を成功証拠にしない。成功応答をruntimeへ記憶する接続順序も統合時に確認する。対象client/testだけ修正しreview/securityへ戻す。6-4内の修正であり過去タスクは変更しない。
+
+- 独立再現(2026-10-19): reviewは既存client37/handler16件PASSとは別に成功後nullの不整合を再現しFAIL判定。同UID成功、別UID/不正応答/通信失敗の拒否も確認。原因は応答内容を読む前のboundUser呼出し。
+
+- 修正検証(2026-10-19): 応答内容を先に検証し、確認済み成功後は同UID/nullを許可、別UIDを拒否。先行2件RED→client42件GREEN。reviewはhandler16件と独立12条件もPASS、securityも計58件PASS。実装担当typecheck/lint PASS。serviceでの成功証拠記憶は後続単位。
+
+## P-073 sender leaseテストの型推論が実leaseと不一致
+- 発見日: 2026-10-19(中断sender単位の回収)
+- 状態: 解決済み(2026-10-19。対象review/security PASS)
+- 内容・原因: studyEventSender.test.tsのexpiredが初期値のjest.Mock型に推論され、実AccountOperationLease代入時にTS2322。実装担当は該当型注釈1行を明示し、対象47件/typecheck/lint PASSを報告。製品sourceの変更なし。
+- 記録時点: 担当から修正後の報告で受領したため後追い記録。事前記録を行ったとは扱わない。独立reviewで対象検証と変更範囲を確認する。
+
+- 独立検証: sender/queue計47件をreview/security双方が確認しPASS、型注釈と既存gate/所有保全契約を確認。P-075の専用同期の別問題は別途修正中で、本テスト型エラーの解決と混同しない。
+
+## P-074 Keychain専用処理が空白のみの所有UIDを許容
+- 発見日: 2026-10-19(6-4 native Keychain回収検証)
+- 状態: 解決済み(2026-10-19。対象review/security PASS)
+- 内容・原因: StudySyncKeychain.inspectForAccountOperationとclear(expectedUid:)のisEmpty判定では、空白/タブ改行/全角空白のUIDを既知と扱う。隔離mockSecで同じ壊れUIDを指定すると削除される3ケースを再現。
+- 修正計画: 専用2メソッドの非空判定のみtrimmingCharacters(in: .whitespacesAndNewlines).isEmptyへ変更し、所有比較には元文字列を使う。通常APIは変更しない。既存42チェックと不正3ケースの拒否・無削除、iOS17型チェックを確認後、独立review/securityへ回す。
+
+- 独立判定: mainが担当提供verifierを実行し42+3+元UID比較回帰/iOS17 Release/DEBUGすべてPASS。review/security双方が現sourceと実行証跡を照合してPASS。実Keychainへのアクセス無し。
+
+## P-075 account専用同期が未成功の記録を通常discardで失い得る
+- 発見日: 2026-10-19(main接続レビュー)
+- 状態: 解決済み(2026-10-20。限定修正のreview/security PASS)
+- 内容・原因: native account drainは既存flushUnlockedのdiscard削除後にsent件数不一致を検出するが、次回はqueue空として完了し得る。JS account専用drainも通常senderのdroppedを除去する。通常再送の既存permanent-error方針を、そのまま未同期時停止が必要なaccount処理に流用したことが原因候補。
+- 修正計画: 隔離再現後、通常送信のdiscard方針を維持し、account専用では送信成功していない対象項目を保持して未完了を返す最小分岐を追加する。別UID/legacy保全とHTTP成功の冪等再送を確認する。新しいretry回数・待ち時間・UI仕様は追加しない。
+
+- native再現(2026-10-19): 実flush本体を使った隔離テストで、Aの未成功eventが初回discard後に消え、次回drainが成功0件で正常終了することを確認。Bは保全。CoreのflushUnlockedにaccount専用保持オプションを追加し、account facadeからだけ有効にする限定修正を行う。
+
+## P-076 native finishの同期検査口が非同期OS検査と接続できない
+- 発見日: 2026-10-19(6-4 native消去接続)
+- 状態: 解決済み(2026-10-20。async finishのreview/security PASS)
+- 内容・原因: Gate.finishAccountのvalidateは同期closure。通知/LiveActivityの非同期検査をlease内に渡す口が無く、外側withAccountOperationで囲むとnested gateになる。先に検査してleaseを解放する方式では、その後のcancelによる状態変更を保護できない。
+- 修正計画: 既存同期APIを変えず、既存async leaseパターンと同じasync finish overloadを追加し、検査awaitからblock再照合・解除まで同leaseを保持する。cleanup/cancelは既存部品で並行して接続。新library/業務仕様/待ち時間やretry回数は追加しない。隔離競合/throw/cancel/binding試験後に独立review/securityを行う。
+
+- 独立確認(2026-10-20): P-075のJS対象30件とnative隔離検証の証跡、account専用保持分岐を確認。native cleanup/finish/cancelの候補一致・Release/DEBUG fake・iOS17型両mode・mock6件/型/lintを根拠にreview/security PASS。P-076は検査await中のlease保持、解除直前のUID/action/operationId・snapshot照合を確認。実OS・service/UI・6-4全体の完了は含まない。
+
+## P-077 timer gate接続で別UIDのsessionを保存後にsenderが拒否する
+- 発見日: 2026-10-20(6-4公開timer独立review)
+- 状態: 解決済み(2026-10-20。公開・backgroundのreview/security PASS)
+- 再現: UID Aのactive sessionを読込後、AuthをBへ変更して公開stop又は確認待ちconfirmを呼ぶ。AのstopAt/confirmationsが保存され、その後Bのparent leaseとAのevent UID不一致で実senderがinvalid-leaseを返しeventが保存されない。独立追加2件で再現、既存53件はPASS。
+- 原因: gateは呼出時Auth Bを拘束するが、保存対象session Aとの一致をローカル保存前に検査していない。今回fixtureをAへ揃えたことで既存の異UID境界が狭まった。
+- 修正計画: 6-4/P-060内の公開timer接続で、既知の対象session UIDがcaptured Authと違えば保存/通知/native/sender前に停止する。legacy undefinedは現在UIDで所有補完せず保持。別UID実sender結合の回帰テストを追加し、既存assertionを弱めずreview/securityへ戻す。background経路にも同じ所有検査を適用する。
+
+## P-078 replacement gate回帰テストのAsyncStorage spyが再帰する
+- 発見日: 2026-10-20(6-4/P060目標producer接続の対象検証)
+- 状態: 解決済み(2026-10-20。対象テスト/全体lint・独立review PASS)
+- 再現: 新規goalReplacementFlow回帰テストを実行するとRangeError: Maximum call stack size exceeded。
+- 原因: 公式AsyncStorage mockのsetItem/getItem/removeItemは既存jest.fnであり、その参照をoriginalとして保持してspyOn.mockImplementationで本体を上書きすると、保存した参照も同じmockなので自己再帰する。restoreAllMocksだけでは元のjest.fn実装へ戻らない。公式mock sourceと新testを照合して特定。
+- 修正計画: originalにはgetMockImplementation()の関数を保存し、beforeEachで公式base実装へ戻すか独立fakeへ限定する。アプリsourceや既存期待値を変えず、対象テスト/型/lintを再実行して独立reviewへ戻す。
+
+## P-079 account境界画面テストのrouter screen参照が非互換
+- 発見日: 2026-10-20(6-4 UI接続の対象テスト)
+- 状態: 解決済み(2026-10-20。原因限定修正・review/security PASS)
+- 再現: AccountActionBoundary/Popup対象39件中11件失敗。主にscreen.getPathname is not a function、操作遮断下のaccount-action-contentを通常queryで参照して見つからない。
+- 調査: 新testはexpo-router/testing-libraryのscreenを使用しtoHavePathnameを呼ぶ。RNTL14の非同期renderと拡張screenの互換・既存passingテストの遷移確認方法を比較中。hiddenコンテンツ参照はincludeHiddenElementsが必要。アプリsourceの動作不具合と混同せず原因確定後test限定修正を行う。
+
+- P-078追記(2026-10-20): mock実装退避/復元の限定修正後、自己再帰とOOMは消えて対象37件が完走(36PASS)。残り1件は新規UID切替テストがAPI前の正当なoldSessionIds保存も不変と期待していた。UID切替直前を基準として以降の本人/別UID/legacy保全を確認するtest限定修正を行う。アプリsource変更は不要。
+- P-079原因確定追記(2026-10-20): RN0.86のStyleSheetにはabsoluteFillObject型がなく新cover指定が型エラー。既存方式の明示absolute座標へ限定修正する。router screenのtoHavePathnameも実行/型双方非互換なのでusePathnameの実probeで遷移を確認し、hidden参照は明示queryへ修正する。
+
+- P-079追記(2026-10-20): 実renderRouter返却値のgetPathnameと明示absolute座標へ修正後、対象画面39件・全体typecheck PASS。対象lintは先頭追加mockによりimport/first、effect終了時のgeneration.current参照によりexhaustive-depsで停止。mockをimports後へ移し、世代無効化callbackの責務を整理する限定修正で警告0を確認する。
+
+- P-079統合fixture追記(2026-10-20): 他の画面6スイートでは3FAIL/3PASS、28FAIL/68PASS。timer画面の従来fixtureはAuth nullかつ新gateのnative状態APIがなく、ログイン後の通常計測という前提と不整合。single初回画面mockは毎renderで新isReady関数を返し、indexのeffect依存を変化させ再renderが続く。実装でguardを弱めず、正常系fixtureの明示Auth/block状態・stable mock identity/await cleanupで修正する。home側残件は別途対象結果を確認する。
+
+## P-080 background回帰テストがclearAllMocks後にlistenerを参照する
+- 発見日: 2026-10-20(6-4/P060 background接続)
+- 状態: 解決済み(2026-10-20。対象回帰とreview/security PASS)
+- 再現: timer/lockscreen/sender対象102件中101PASS。listener所有拒否テストだけaddStudyCheckConfirmListener.mock.calls[0][0]がundefinedとなる。
+- 原因: hookがlistenerを登録後、新testがjest.clearAllMocksで呼出履歴を消してからrespond helperで登録callbackを履歴から取り直している。アプリのlistener登録が消えた問題ではない。
+- 修正計画: callbackを履歴消去前に保持するか、listenerモックの登録実装で専用変数へ保持し、case間でリセットする。アプリsourceや期待値は変えず対象再実行・型/lintと独立review/security確認。
+
+## P-081 既存の目標変更cleanupが他UIDとlegacyの停止済み記録も削除する
+- 発見日: 2026-10-20(6-4 goal producer限定securityで範囲外として発見)
+- 状態: 独立再現済み・未修正(既存6-3aの問題)
+- 再現: Aの目標変更時、停止済みA/B/legacy sessionを同じ端末に置く。oldSessions全件のsessionIdがoldSessionIdsへ保存され、removeReplacedLocalSessionsがIDだけで消去しB/legacyも削除される。独立securityが実storage helperを隔離メモリで再現。
+- 原因: goalReplacementFlowの旧ID収集とstorage cleanupに所有UID条件がない。今回のgate追加は待機・認証拘束のみでこの既存削除条件を変更していない。6-4本人cleanup helperは別処理でUID検査あり。
+- 対応境界: ユーザーの既存タスク/過去problemを勝手に修正しない指示に従い、6-3a task状態/既存history/source削除条件は変更していない。対象UIDの既知記録だけを扱う修正と、所有不明記録があるときの目標変更仕様の確認が必要。Phase6終了報告で未修正を明示する。
+
+## P-082 generic iOS Simulatorビルドのx86_64依存module不一致
+- 発見日: 2026-10-20(6-4統合native build)
+- 状態: 解決済み(2026-10-20。arm64検証コマンド修正・独立review PASS)
+- 再現: generic/platform=iOS SimulatorでDebug全体buildを実行し、FirebaseSharedSwiftがx86_64向けに見つからずexit65。
+- 原因: generic指定でarm64/x86_64両方を要求したが、既存DerivedDataのFirebaseSharedSwift.swiftmoduleはarm64向けのみ。moduleフォルダの実ファイルとbuild errorを照合済み。変更Swift sourceのコンパイルエラーではない。
+- 対応計画: 現Apple Silicon上の使用シミュレータと同じarm64/ONLY_ACTIVE_ARCH=YESを明示して検証する。dependency/source/プロジェクト設定は変更しない。実Expo Module全体buildの成功まで完了扱いにしない。
+
+- P-079再開時追記(2026-10-20): sender等の引数期待とlint修正後、timer画面はPASS、対象lint/root型もPASS。Home5件はsingletonがfixtureのspy置換前getCurrentUid参照を保持する可能性を追跡中。Boundary14件では設定したservice mockがUIのinspect/performへ届かない挙動があり、参照identity/route contextを調査中。guardを弱めて回避しない。
+- P-082検証結果(2026-10-20): ARCHS=arm64/ONLY_ACTIVE_ARCH=YESで実Expo/iOS全体build exit0、BUILD SUCCEEDED。sourceとプロジェクト設定は変更せず、使用端末と同じ対象で確認した。
+
+- P-079原因確定(2026-10-20): Homeの後付けspyはruntime singletonが構築時に保持した元getCurrentUid参照と別になる。hoisted factoryで同じjest.fnを渡す限定test修正とする。Jest実requireMockのresolver隔離検証でvirtual:true使用時にrelative/alias/componentのmodule ID不一致を確認。service実ファイル作成後はvirtual指定不要なので、通常mockへ正規化して同じ参照を検証する。実guard/APIは弱めない。
+
+- P-077/P-080独立検証追記(2026-10-20): service/background対象80件・root型/対象lintがreview/security双方PASS。公開P077の実sender結合2条件も独立GREEN。P-080の一時限定型configはtypeRoots不足でTS2688となったが、root tsc実行で実source型PASSを確認。P-082は使用arm64向けbuild成功ログを独立reviewが確認。x86_64対応の修復を意味しない。P-079/6-4全体は未完了。
+
+## P-083 初回画面のaccount guard接続がeffect内setStateのlintに違反
+- 発見日: 2026-10-20(6-4全体lint)
+- 状態: 解決済み(2026-10-20。追加3回帰・全体型/lint・review/security PASS)
+- 再現: 全体Jest1311件・root型・時差各268件はPASSだがnpm run lintがsrc/app/index.tsx:24 setCheckingReplacement(true)をreact-hooks/set-state-in-effectで拒否。
+- 原因: account ready後のreplacement確認再開に同期effect内setStateを追加した。関連target lintはindexを含めていなかったため全体確認で判明。
+- 修正計画: 初回の読込完了まで開始不可・guard未完了優先・UID切替拒否を維持したまま、同期effect内setStateへの依存を除く小修正とする。待ち時間追加やlintdisableで回避せず、対象画面テストと全体型/lintを確認しreviewへ戻す。
+
+## P-084 実シミュレータ起動でaccount guardが初回画面を遮断する
+- 発見日: 2026-10-20(6-4 Phase末Maestro)
+- 状態: 解決済み(2026-10-20。署名付き実行で両機種startup PASS・review/security確認)
+- 再現: SEでhome_screenの合格ウォッチ表示とonboarding開始が失敗。Maestro保存スクリーンショットにはaccount-action-inspect-errorの通信失敗/再試行guard、expo-notificationsの永続化エラーが表示される。
+- 調査方針: root strict inspectPendingのJS checkpoint読込とnative block読込のどちらが失敗したか、実ビルドの署名/entitlements/App Group可用性を読み取り確認する。直前の統合buildはCODE_SIGNING_ALLOWED=NOだったため、unsigned artifactによる実行時機能不足の可能性をまず確認。guardを解除するfallbackやデータ削除で回避しない。原因確定後に対象だけ修正・再検証する。6-4未完了/push未実行を維持。
+
+- P-084原因調査追記(2026-10-20): 実行artifactのcodesign表示はlinker-signed adhoc/TeamIdentifierなし/entitlements出力なし。一方、プロジェクトの既存gokaku.entitlementsにはApp GroupとKeychain access group設定がある。署名無効の検証buildはコンパイル成功のみで、App Groupを必要とする実行確認用には不適切な可能性が高い。source変更せず既存entitlementsを付けるSimulator ad-hoc署名buildで再検証し、改善を確認するまで原因確定・解決とはしない。
+
+## P-085 Phase末E2Eの既存onboarding errorフローが入力エラー消去で失敗
+- 発見日: 2026-10-20(署名付きbuildで6-4起動を再確認中)
+- 状態: 再現済み・原因未確定(既存Phase3フロー)
+- 再現: SEのhome_screenは署名付きbuildでPASSしaccount起動guardは解除された。一方onboarding_exam_route_errorsは49秒でtarget-hours-errorが消えるassertionに失敗。
+- 対応境界: 元のPhase3画面/フローを勝手に修正しない指示に従い記録のみ。6-4のアカウント削除・logoutとは異なる入力フロー。スクリーンショット/コマンド結果を保持し、他機種と他flowの結果も確認する。入力値/キーボード/selectorどの層か原因を未確認のままテスト道具だけの問題と断定しない。
+
+- P-084実行確認(2026-10-20): 既存entitlementsをSimulator用__TEXTへ反映する署名付きarm64 artifactで、SE home_screen(10秒)・Pro Max home_screen(11秒)双方PASS。SE正常onboarding/devprobeもPASS。アプリsource/guardや保存済みデータの消去で回避していない。codesign XMLだけではSimulator権限が空に見えるため、生成gokaku.app-Simulated.xcentのAppGroup/keychain groupsとlinker entitlements指定を併せて確認した。
+- P-085追記(2026-10-20): SE正常onboarding/devprobeはPASS。既存backフローもuniversity-input表示でFAIL(38秒)。P-016の過去back失敗と同一原因かは未確定。過去問題の状態は変更せず、現E2E全体はFAILとして保持する。
+
+- 最終記録(2026-10-20): 6-4はreview/security双方PASS、旧native unitBも独立source追補PASS(過去244隔離check生ログ再実行とは区別)。Maestro signed再実行ではSE3/5・ProMax3/4 PASS、両機種home/正常onboarding/devprobe PASS。SEerrorと両backはP-085/P-016未解決、P-081も未修正。E2E harnessは終了し自身のMetro停止を報告。全体Jest1311＋追加3、TZ268×2、全体型/lint・signed arm64buildPASS。全E2Egreenの主張なし。

@@ -24,3 +24,18 @@ export type LastLockscreenStop = {
   sessionId: string;
   stopAt: number;
 };
+
+/** 永続native block。operationIdは同じ処理の再開時も保持するUUID。 */
+export type AccountOperationBlock = {
+  version: 1;
+  uid: string;
+  action: 'logout' | 'delete';
+  operationId: string;
+};
+
+/** 専用lease内で検査したnative状態。pendingRecordsは対象UIDだけ。 */
+export type AccountOperationInspection = {
+  measuring: boolean;
+  ownership: 'known' | 'unknown';
+  pendingRecords: boolean;
+};

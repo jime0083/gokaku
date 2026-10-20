@@ -5,6 +5,16 @@ import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-rou
 import { saveOnboardingDraft } from '@/features/onboarding/storage';
 import { INITIAL_ONBOARDING_DRAFT, OTHER_CERTIFICATION_ID } from '@/features/onboarding/types';
 
+jest.mock('@/features/account/accountActionService', () => ({
+  accountActionService: {
+    inspectPending: jest.fn(async () => ({
+      checkpoint: null, nativeBlock: null, retryOnly: false,
+    })),
+    perform: jest.fn(),
+    resume: jest.fn(),
+  },
+}), { virtual: true });
+
 const todayKey = toJstDateKey(Date.now());
 
 /** daily-time 画面で最低・努力目標勉強時間を確定する(ドラムロールを開いて「完了」を押すだけ。既定値のまま確定) */

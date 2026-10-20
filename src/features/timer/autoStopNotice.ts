@@ -7,7 +7,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  */
 export const AUTO_STOP_NOTICE_STORAGE_KEY = 'timer:autoStopNotice:v1';
 
+// localAccountData.tsの単件envelope契約。循環importを避け、このwriter内に保持する。
+const AUTO_STOP_NOTICE_ENVELOPE_VERSION = 2;
+
 export type AutoStopNotice = {
+  uid?: string;
   /** 無応答による自動停止が確定した確認の時刻(t_k。epoch ミリ秒) */
   stoppedAt: number;
 };
@@ -26,6 +30,12 @@ export async function loadAutoStopNotice(): Promise<AutoStopNotice | null> {
   }
   try {
     const parsed = JSON.parse(raw);
+    if (typeof parsed === 'object' && parsed !== null && 'version' in parsed) {
+      if (parsed.version !== AUTO_STOP_NOTICE_ENVELOPE_VERSION ||
+          typeof parsed.uid !== 'string' || parsed.uid.trim().length === 0 ||
+          !isValidNotice(parsed.value)) return null;
+      return { stoppedAt: parsed.value.stoppedAt, uid: parsed.uid };
+    }
     return isValidNotice(parsed) ? parsed : null;
   } catch {
     return null;
@@ -33,8 +43,15 @@ export async function loadAutoStopNotice(): Promise<AutoStopNotice | null> {
 }
 
 /** 無応答による自動停止が確定したときに呼ぶ(次にタイマー画面を開いたときに表示するため保存する) */
-export async function writeAutoStopNotice(stoppedAt: number): Promise<void> {
-  await AsyncStorage.setItem(AUTO_STOP_NOTICE_STORAGE_KEY, JSON.stringify({ stoppedAt }));
+export async function writeAutoStopNotice(stoppedAt: number, ownerUid?: string): Promise<void> {
+  if (ownerUid !== undefined && (typeof ownerUid !== 'string' || ownerUid.trim().length === 0)) {
+    throw new Error('auto-stop-notice-invalid-uid');
+  }
+  const value = { stoppedAt };
+  const notice = ownerUid === undefined ? value : {
+    version: AUTO_STOP_NOTICE_ENVELOPE_VERSION, uid: ownerUid, value,
+  };
+  await AsyncStorage.setItem(AUTO_STOP_NOTICE_STORAGE_KEY, JSON.stringify(notice));
 }
 
 /** 「閉じる」が押されたときに呼ぶ(以後、同じお知らせは表示しない) */

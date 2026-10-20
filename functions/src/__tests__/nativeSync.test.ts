@@ -1,4 +1,4 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 import { issueDeviceTokenForUid } from '../deviceToken/issueDeviceToken';
 import { revokeDeviceToken } from '../deviceToken/revokeDeviceToken';
@@ -25,9 +25,40 @@ function uniqueId(label: string): string {
   return `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+
+const accountFixtureUids = new Set<string>();
+
+/** 正常な親を明示する。既存の親や削除中markerは上書きしない。 */
+async function createAccount(uid: string): Promise<void> {
+  ensureAdminApp();
+  const db = getFirestore();
+  const ref = db.doc(`users/${uid}`);
+  accountFixtureUids.add(uid);
+  if (!(await ref.get()).exists) {
+    await ref.set({
+      createdAt: FieldValue.serverTimestamp(),
+      checkEnabled: true,
+      xPostEnabled: false,
+      xLinked: false,
+    });
+  }
+}
+
+afterEach(async () => {
+  if (accountFixtureUids.size === 0) return;
+  const db = getFirestore();
+  await Promise.all(
+    [...accountFixtureUids].map(async (uid) => {
+      await db.recursiveDelete(db.doc(`users/${uid}`));
+      await db.doc(`deviceTokens/${uid}`).delete();
+    }),
+  );
+  accountFixtureUids.clear();
+});
+
 /** テスト対象の uid 配下に有効な目標(goals/{goalId})を作る */
 async function createGoal(uid: string, goalId: string): Promise<void> {
-  ensureAdminApp();
+  await createAccount(uid);
   await getFirestore().doc(`users/${uid}/goals/${goalId}`).set({ type: 'cert' });
 }
 
@@ -35,6 +66,7 @@ describe('nativeSync (Functions Emulator)', () => {
   const nativeSyncUrl = functionUrl('nativeSync');
 
   async function issueToken(uid: string): Promise<string> {
+    await createAccount(uid);
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
     return deviceToken;
   }
@@ -295,6 +327,7 @@ describe('nativeSync の呼び出し回数の制限(5-3b-2)', () => {
   const nativeSyncUrl = functionUrl('nativeSync');
 
   async function issueToken(uid: string): Promise<string> {
+    await createAccount(uid);
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
     return deviceToken;
   }
@@ -410,6 +443,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
 
   it('期限切れのデバイストークンは 401', async () => {
     const uid = uniqueUid('expired');
+    await createAccount(uid);
     // 31日前に発行した体にする(有効期限30日 → 現在は期限切れ)
     const issuedAtMs = Date.now() - 31 * 24 * 60 * 60 * 1000;
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => issuedAtMs });
@@ -421,6 +455,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
 
   it('期限内のデバイストークンは成功する', async () => {
     const uid = uniqueUid('not-expired');
+    await createAccount(uid);
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
 
     const res = await sendWithToken(await buildBodyWithGoal(uid, 'evt-not-expired'), deviceToken);
@@ -430,6 +465,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
 
   it('作り直し(再発行)すると、古いトークンは 401 になり、新しいトークンは成功する', async () => {
     const uid = uniqueUid('reissue');
+    await createAccount(uid);
     const oldToken = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
     const newToken = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
 
@@ -442,6 +478,7 @@ describe('nativeSync のデバイストークンの期限・失効(5-3a)', () =>
 
   it('失効(revokeDeviceToken)したあとは 401', async () => {
     const uid = uniqueUid('revoked');
+    await createAccount(uid);
     const { deviceToken } = await issueDeviceTokenForUid(uid, { now: () => Date.now() });
 
     await revokeDeviceToken(uid);

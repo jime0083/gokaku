@@ -3,6 +3,7 @@ import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/
 
 import { APIError, APIException, type JWSTransactionDecodedPayload } from '@apple/app-store-server-library';
 
+import { getWritableAccount } from '../account/accountWriteGuard';
 import { FUNCTIONS_REGION } from '../config';
 import { deriveAppAccountToken, isKnownAppleIapProductId } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
@@ -80,7 +81,9 @@ async function claimOrVerifyOwnership(originalTransactionId: string, uid: string
   const db = getFirestore();
   const ref = db.doc(`appleSubscriptions/${originalTransactionId}`);
 
+  const userRef = db.doc(`users/${uid}`);
   await db.runTransaction(async (tx) => {
+    await getWritableAccount(tx, userRef);
     const snap = await tx.get(ref);
     if (!snap.exists) {
       tx.set(ref, { uid, productId, environment, createdAt: FieldValue.serverTimestamp() });
@@ -186,9 +189,12 @@ export async function fetchAndApplyLatestSubscriptionStatus(params: {
   const status: 'active' | 'expired' = now() < expiresAt ? 'active' : 'expired';
 
   ensureAdminApp();
-  await getFirestore()
-    .doc(`users/${uid}`)
-    .set({ subscription: { status, productId, expiresAt, originalTransactionId, environment } }, { merge: true });
+  const db = getFirestore();
+  const userRef = db.doc(`users/${uid}`);
+  await db.runTransaction(async (tx) => {
+    await getWritableAccount(tx, userRef);
+    tx.update(userRef, { subscription: { status, productId, expiresAt, originalTransactionId, environment } });
+  });
 
   return { status, expiresAt };
 }

@@ -1,5 +1,6 @@
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
+import { getWritableAccount } from '../account/accountWriteGuard';
 import { toJstDateKey } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
 
@@ -105,6 +106,8 @@ export async function recordStudySessionEvent(
   }
 
   return db.runTransaction(async (tx) => {
+    await getWritableAccount(tx, db.doc(`users/${uid}`));
+
     const eventRef = db.doc(`users/${uid}/sessionEvents/${input.idempotencyKey}`);
     const eventSnap = await tx.get(eventRef);
     if (eventSnap.exists) {

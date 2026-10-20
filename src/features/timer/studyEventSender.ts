@@ -10,7 +10,9 @@ import type * as RNFBApp from '@react-native-firebase/app';
 import type * as RNFBFunctions from '@react-native-firebase/functions';
 import { FUNCTIONS_REGION } from '@shared/index';
 
-import { connectFirebaseEmulatorsIfNeeded } from '@/config/firebase';
+import { connectFirebaseEmulatorsIfNeeded, getCurrentUid } from '@/config/firebase';
+import type { AccountOperationLease } from '@/features/account/accountOperationGate';
+import { accountOperationGate } from '@/features/account/accountOperationRuntime';
 import { fetchActiveGoalId } from '@/features/goals/activeGoalRepository';
 
 import { generateLocalId } from './id';
@@ -81,16 +83,32 @@ async function callRecordStudyEvent(event: PendingStudyEvent, goalId: string): P
 
 type SendOutcome = 'sent' | 'dropped' | 'kept';
 
-async function sendPendingEvent(event: PendingStudyEvent): Promise<SendOutcome> {
+function matchesEventOwner(event: PendingStudyEvent, expectedUid: string): boolean {
+  return getCurrentUid() === expectedUid && (event.uid === undefined || event.uid === expectedUid);
+}
+
+async function sendPendingEvent(
+  event: PendingStudyEvent,
+  expectedUid: string,
+  lease: AccountOperationLease,
+): Promise<SendOutcome> {
+  if (!matchesEventOwner(event, expectedUid)) return 'kept';
+  lease.assertCurrentUid();
   const goalId = await fetchActiveGoalId();
+  if (!matchesEventOwner(event, expectedUid)) return 'kept';
+  lease.assertCurrentUid();
   if (!goalId) {
     // 未ログイン・有効な目標がない(実際のユーザーには起きない)。送らずに列に残し、次の機会にやり直す
     return 'kept';
   }
   try {
     await callRecordStudyEvent(event, goalId);
+    if (!matchesEventOwner(event, expectedUid)) return 'kept';
+    lease.assertCurrentUid();
     return 'sent';
   } catch (error) {
+    if (!matchesEventOwner(event, expectedUid)) return 'kept';
+    lease.assertCurrentUid();
     return isPermanentFailure(error) ? 'dropped' : 'kept';
   }
 }
@@ -103,24 +121,55 @@ let flushing = false;
  * すでに実行中の場合は何もしない(同時に2回走らないようにする。その回で送れなかった分は、
  * 次にこの関数が呼ばれる機会に改めて送られる)
  */
-export async function flushStudyEventQueue(): Promise<void> {
-  if (flushing) {
-    return;
-  }
+export async function flushStudyEventQueue(parentLease?: AccountOperationLease): Promise<void> {
+  const expectedUid = getCurrentUid();
+  if (!expectedUid) return;
+  await accountOperationGate.runNormal(expectedUid, async (lease) => {
+    await drainStudyEventQueue(expectedUid, lease, false);
+  }, parentLease);
+}
+
+/**
+ * account側はraw strict inspectionを先に完了し、有効なaccount permitを渡す。
+ * 対象UIDの残件なしを確認できた場合だけtrue。競合・再送待ちはfalse。
+ * 通常writerのleaseとしてpermitを流用しない。
+ */
+export async function flushStudyEventQueueForAccount(
+  expectedUid: string,
+  accountPermit: AccountOperationLease,
+): Promise<boolean> {
+  accountPermit.assertCurrentUid();
+  if (!expectedUid || getCurrentUid() !== expectedUid) throw new Error('uid-changed');
+  const complete = await drainStudyEventQueue(expectedUid, accountPermit, true);
+  accountPermit.assertCurrentUid();
+  if (getCurrentUid() !== expectedUid) throw new Error('uid-changed');
+  return complete;
+}
+
+async function drainStudyEventQueue(
+  expectedUid: string,
+  lease: AccountOperationLease,
+  accountOnly: boolean,
+): Promise<boolean> {
+  lease.assertCurrentUid();
+  if (flushing) return false;
   flushing = true;
   try {
     for (;;) {
+      lease.assertCurrentUid();
       const queue = await loadStudyEventQueue();
-      const [event] = queue;
-      if (!event) {
-        return;
-      }
-      const outcome = await sendPendingEvent(event);
-      if (outcome === 'kept') {
-        return;
-      }
-      // 'sent'(送信できた) または 'dropped'(送り直しても成功しない) → 列から外して次へ
-      await removeStudyEvent(event.idempotencyKey);
+      if (getCurrentUid() !== expectedUid) return false;
+      lease.assertCurrentUid();
+      const event = accountOnly ? queue.find((item) => item.uid === expectedUid) : queue[0];
+      if (!event) return true;
+      if (!matchesEventOwner(event, expectedUid)) return false;
+      const outcome = await sendPendingEvent(event, expectedUid, lease);
+      if (outcome === 'kept' || (accountOnly && outcome === 'dropped') || !matchesEventOwner(event, expectedUid)) return false;
+      lease.assertCurrentUid();
+      // 所有付きeventの同key別UID/legacyは削除しない。
+      await removeStudyEvent(event.idempotencyKey, event.uid, lease.assertCurrentUid);
+      if (getCurrentUid() !== expectedUid) return false;
+      lease.assertCurrentUid();
     }
   } finally {
     flushing = false;
@@ -128,18 +177,33 @@ export async function flushStudyEventQueue(): Promise<void> {
 }
 
 /** enqueueAndSendStudyEvent に渡す値。'start' だけ checkEnabled を必須で持つ(studyEventQueue と同じ理由) */
-export type EnqueueStudyEventParams =
+export type EnqueueStudyEventParams = { uid?: string } & (
   | { sessionId: string; action: 'start'; clientTimeMs: number; checkEnabled: boolean }
-  | { sessionId: string; action: 'stop' | 'confirm'; clientTimeMs: number };
+  | { sessionId: string; action: 'stop' | 'confirm'; clientTimeMs: number }
+);
 
 /**
  * 開始・停止・確認への応答を送信待ちの列に入れてから送る(requirements 3-2)。
  * sessionId は呼び出し側(useTimerSession)が計測開始時に作ったものを渡す。
  * idempotencyKey は操作ごとにここで作り、送信に失敗して列に残っている間・再送時も同じ値を使う
  */
-export async function enqueueAndSendStudyEvent(params: EnqueueStudyEventParams): Promise<void> {
-  const idempotencyKey = generateLocalId();
-  const event: PendingStudyEvent = { ...params, idempotencyKey };
-  await appendStudyEvent(event);
-  await flushStudyEventQueue();
+export async function enqueueAndSendStudyEvent(
+  params: EnqueueStudyEventParams,
+  parentLease?: AccountOperationLease,
+): Promise<void> {
+  const currentUid = getCurrentUid();
+  if (!currentUid) return;
+  const expectedUid = params.uid ?? currentUid;
+  await accountOperationGate.runNormal(expectedUid, async (lease) => {
+    lease.assertCurrentUid();
+    const idempotencyKey = generateLocalId();
+    // UID省略の旧呼出しにownerを追認しない。
+    const event: PendingStudyEvent = { ...params, idempotencyKey };
+    await appendStudyEvent(event, undefined, lease.assertCurrentUid);
+    if (getCurrentUid() !== expectedUid) return;
+    lease.assertCurrentUid();
+    await flushStudyEventQueue(lease);
+    if (getCurrentUid() !== expectedUid) return;
+    lease.assertCurrentUid();
+  }, parentLease);
 }

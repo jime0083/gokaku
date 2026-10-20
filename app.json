@@ -25,7 +25,8 @@
         "keychain-access-groups": [
           "$(AppIdentifierPrefix)group.com.jime0083.gokakuwatch"
         ]
-      }
+      },
+      "usesAppleSignIn": true
     },
     "plugins": [
       "expo-router",
@@ -44,7 +45,8 @@
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       "expo-iap",
-      "./plugins/withStoreKitConfig"
+      "./plugins/withStoreKitConfig",
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true,

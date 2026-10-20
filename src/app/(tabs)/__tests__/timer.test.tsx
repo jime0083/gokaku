@@ -4,6 +4,17 @@ import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-rou
 import { AppState } from 'react-native';
 
 import { startLocalSession } from '@/features/timer/storage';
+import { getCurrentUid } from '@/config/firebase';
+
+jest.mock('@/features/account/accountActionService', () => ({
+  accountActionService: {
+    inspectPending: jest.fn(async () => ({
+      checkpoint: null, nativeBlock: null, retryOnly: false,
+    })),
+    perform: jest.fn(),
+    resume: jest.fn(),
+  },
+}), { virtual: true });
 
 /**
  * タイマー画面(5-1a・5-1b-2・5-2b)の画面テスト。有効な目標の読み込み(activeGoalRepository)・
@@ -22,6 +33,22 @@ import { startLocalSession } from '@/features/timer/storage';
  * storage.ts(端末内保存)は実物を使う(AsyncStorage)。seedActiveSession で画面を開く前に
  * 計測中のセッションを AsyncStorage に仕込み、「開き直したとき」の挙動を確認する
  */
+// 5-3e-2: ネイティブの設定読み取りだけをモックにし、短縮設定から通知予約までの計算は実物を使う。
+jest.mock('@/config/firebase', () => ({
+  ...jest.requireActual<typeof import('@/config/firebase')>('@/config/firebase'),
+  getCurrentUid: jest.fn(() => null),
+}));
+
+const mockIsAccountOperationBlocked = jest.fn<boolean, []>(() => false);
+const mockGetStudyCheckDevOverride = jest.fn();
+jest.mock('../../../../modules/study-sync/src/StudySyncModule', () => ({
+  __esModule: true,
+  default: {
+    getStudyCheckDevOverride: mockGetStudyCheckDevOverride,
+    isAccountOperationBlocked: mockIsAccountOperationBlocked,
+  },
+}));
+
 const mockFetchActiveGoalDailyTargets = jest.fn();
 jest.mock('@/features/goals/activeGoalRepository', () => ({
   fetchActiveGoalDailyTargets: mockFetchActiveGoalDailyTargets,
@@ -63,9 +90,10 @@ jest.mock('@/features/timer/lockscreenSync', () => ({
  * checkEnabledRepository のモックファクトリが呼ばれ、fetchCheckEnabled が undefined になる
  * (この行より上の const mockX = jest.fn() が全て済んでから require する)
  */
-const { STUDY_CHECK_ACTION_IDENTIFIER, STUDY_CHECK_NOTIFICATION_IDENTIFIER } =
+const studyCheckNotifications =
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('@/features/timer/studyCheckNotifications') as typeof import('@/features/timer/studyCheckNotifications');
+const { STUDY_CHECK_ACTION_IDENTIFIER, STUDY_CHECK_NOTIFICATION_IDENTIFIER } = studyCheckNotifications;
 
 /**
  * renderRouter の初期レンダリングを await act で包む(renderRouter 自体は同期的に返すが、
@@ -125,9 +153,17 @@ function makeStudyCheckResponse(respondedAtMs: number): Notifications.Notificati
   } as unknown as Notifications.NotificationResponse;
 }
 
+const TIMER_TEST_UID = 'timer-ui-user';
+
+beforeEach(() => {
+  jest.mocked(getCurrentUid).mockReturnValue(TIMER_TEST_UID);
+  mockIsAccountOperationBlocked.mockReset().mockReturnValue(false);
+});
+
 describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    mockGetStudyCheckDevOverride.mockReset().mockReturnValue(null);
     mockFetchActiveGoalDailyTargets.mockResolvedValue({
       minDailyMinutes: 60,
       goalDailyMinutes: 120,
@@ -268,6 +304,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
     await waitFor(() => expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledTimes(1));
     expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'start', checkEnabled: false }),
+      expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
     );
   });
 
@@ -293,6 +330,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       expect(screen.getByTestId('timer-status-text')).toBeTruthy();
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'confirm' }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
     });
 
@@ -319,6 +357,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       );
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'stop', clientTimeMs: checkAt(startAt, 1) }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
 
       await fireEvent.press(screen.getByTestId('timer-auto-stop-notice-close-button'));
@@ -365,7 +404,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       await waitFor(() => screen.getByTestId('study-check-overlay'));
 
       await fireEvent.press(screen.getByText('ホーム'));
-      await waitFor(() => screen.getByTestId('home-placeholder-text'));
+      await waitFor(() => screen.getByTestId('home-screen'));
       expect(screen.getByTestId('study-check-overlay')).toBeTruthy();
     });
 
@@ -415,6 +454,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       await waitFor(() => screen.getByTestId('timer-auto-stop-notice'));
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'stop', clientTimeMs: checkAt(startAt, 1) }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
     });
   });
@@ -448,6 +488,78 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
           }),
         ),
       );
+    });
+
+    describe('開発用の短縮設定(5-3e-2)', () => {
+      let scheduleSpy: jest.SpyInstance;
+
+      beforeEach(() => {
+        mockGetStudyCheckDevOverride.mockReturnValue({ intervalMs: 120_000, responseWindowMs: 60_000 });
+        // 呼び出し時刻を検証しつつ、実物の scheduleStudyCheckNotification を通して Expo の予約も確認する。
+        scheduleSpy = jest.spyOn(studyCheckNotifications, 'scheduleStudyCheckNotification');
+      });
+
+      afterEach(() => {
+        scheduleSpy.mockRestore();
+      });
+
+      it('開始すると実物の短縮設定・計算で開始から120秒後の通知を予約する', async () => {
+        const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+        jest.setSystemTime(startAt);
+        await renderTimerRouter();
+
+        await waitFor(() => screen.getByTestId('timer-toggle-button'));
+        await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+
+        await waitFor(() => expect(scheduleSpy).toHaveBeenCalledWith(startAt + 120_000, TIMER_TEST_UID));
+        expect(mockGetStudyCheckDevOverride).toHaveBeenCalled();
+        expect(Notifications.scheduleNotificationAsync).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            identifier: STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+            trigger: { type: 'timeInterval', seconds: 120 },
+          }),
+        );
+      });
+
+      it('短縮設定の通知に150秒時点で応答すると、開始から240秒後の通知を残り90秒で予約する', async () => {
+        const startAt = new Date('2026-10-10T10:00:00+09:00').getTime();
+        jest.setSystemTime(startAt);
+        await renderTimerRouter();
+
+        await waitFor(() => screen.getByTestId('timer-toggle-button'));
+        await fireEvent.press(screen.getByTestId('timer-toggle-button'));
+        await waitFor(() => expect(scheduleSpy).toHaveBeenCalledWith(startAt + 120_000, TIMER_TEST_UID));
+
+        await act(async () => {
+          jest.advanceTimersByTime(150_000); // 確認(120秒)から応答期限(180秒)までの間
+        });
+        await waitFor(() => screen.getByTestId('study-check-overlay'));
+        const handleResponse = getLatestNotificationResponseHandler();
+        scheduleSpy.mockClear();
+        (Notifications.scheduleNotificationAsync as jest.Mock).mockClear();
+        (Notifications.cancelScheduledNotificationAsync as jest.Mock).mockClear();
+
+        await act(async () => {
+          handleResponse(makeStudyCheckResponse(Date.now()));
+        });
+
+        await waitFor(() => expect(scheduleSpy).toHaveBeenCalledWith(startAt + 240_000, TIMER_TEST_UID));
+        expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ action: 'confirm', clientTimeMs: startAt + 150_000 }),
+          expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
+        );
+        expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith(
+          STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+        );
+        expect(Notifications.scheduleNotificationAsync).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            identifier: STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+            trigger: { type: 'timeInterval', seconds: 90 },
+          }),
+        );
+        await waitFor(() => expect(screen.queryByTestId('study-check-overlay')).toBeNull());
+        expect(screen.getByTestId('timer-status-text')).toBeTruthy();
+      });
     });
 
     it('確認OFFのときは通知を予約しない', async () => {
@@ -554,6 +666,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       expect(screen.getByTestId('timer-status-text')).toBeTruthy();
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'confirm' }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
       await waitFor(() =>
         expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(
@@ -576,6 +689,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       await waitFor(() =>
         expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
           expect.objectContaining({ sessionId: 'seeded-session', action: 'confirm', clientTimeMs: respondedAt }),
+          expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
         ),
       );
       expect(screen.queryByTestId('study-check-overlay')).toBeNull();
@@ -597,9 +711,11 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       await waitFor(() => screen.getByTestId('timer-auto-stop-notice'));
       expect(mockEnqueueAndSendStudyEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ action: 'confirm' }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'stop', clientTimeMs: checkAt(startAt, 1) }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
     });
 
@@ -652,7 +768,7 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       expect(sessionId.length).toBeGreaterThan(0);
       expect(startAtArg).toBe(startAt);
       expect(checkEnabledArg).toBe(true);
-      expect(mockRememberCheckEnabledSetting).toHaveBeenCalledWith(true);
+      expect(mockRememberCheckEnabledSetting).toHaveBeenCalledWith(true, TIMER_TEST_UID);
     });
 
     it('停止すると StudySync に開始と同じ sessionId で停止を伝える', async () => {
@@ -739,7 +855,41 @@ describe('タイマー画面(5-1a・5-2b。requirements 3-2, 4-6)', () => {
       await waitFor(() => screen.getByTestId('timer-status-text'));
       expect(mockEnqueueAndSendStudyEvent).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'start' }),
+        expect.objectContaining({ assertCurrentUid: expect.any(Function) }),
       );
     });
+  });
+});
+
+
+describe('P-042 daily targets after real tab return', () => {
+  it('refreshes both target bars without remounting or changing measurement', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-14T10:00:00+09:00'));
+    mockFetchActiveGoalDailyTargets.mockResolvedValue({ minDailyMinutes: 60, goalDailyMinutes: 120 });
+    mockFetchCheckEnabled.mockResolvedValue(false);
+    mockReconcileWithLockscreen.mockImplementation(async (sessions: unknown) => ({ sessions, changed: false }));
+    try {
+      await AsyncStorage.clear();
+      await startLocalSession(Date.now() - 30 * 60000, 'p042-session', false);
+      await renderTimerRouter();
+      await waitFor(() => expect(screen.getByTestId('timer-today-total-text').props.children).toBe('今日の勉強時間 0時間30分'));
+      const timer = screen.getByTestId('timer-elapsed-text');
+      await fireEvent.press(screen.getByText('ホーム'));
+      mockFetchActiveGoalDailyTargets.mockResolvedValue({ minDailyMinutes: 120, goalDailyMinutes: 240 });
+      await fireEvent.press(screen.getByText('タイマー'));
+      await waitFor(() => {
+        const fill = screen.getByTestId('timer-min-progress-bar-fill');
+        expect(Object.assign({}, ...fill.props.style).width).toBe('25%');
+      });
+      expect(Object.assign({}, ...screen.getByTestId('timer-goal-progress-bar-fill').props.style).width).toBe('12.5%');
+      expect(screen.getByTestId('timer-elapsed-text')).toBe(timer);
+      expect(screen.getByTestId('timer-today-total-text').props.children).toBe('今日の勉強時間 0時間30分');
+    } finally {
+      await cleanup();
+      await AsyncStorage.clear();
+      jest.useRealTimers();
+      jest.clearAllMocks();
+    }
   });
 });

@@ -1,4 +1,4 @@
-import type { ActiveStudySession, LastLockscreenStop } from '../StudySync.types';
+import type { AccountOperationBlock, AccountOperationInspection, ActiveStudySession, LastLockscreenStop } from '../StudySync.types';
 
 /**
  * modules/study-sync/src/StudySyncModule(ネイティブモジュール)の Jest 用の手動モック(5-3c-3)。
@@ -15,10 +15,34 @@ import type { ActiveStudySession, LastLockscreenStop } from '../StudySync.types'
  * 動きに影響しない値にしている
  */
 const studySyncModuleMock = {
+  isAccountOperationBlocked: jest.fn<boolean, []>(() => false),
+  getAccountOperationBlock: jest.fn<AccountOperationBlock | null, []>(() => null),
+  // 専用操作の既定値で成功を捏造しない。使用するテストが根拠ある結果を設定する。
+  beginAccountOperation: jest.fn<AccountOperationBlock, [uid: string, action: 'logout' | 'delete']>(() => {
+    throw new Error('beginAccountOperation mock is not configured');
+  }),
+  inspectAccountOperation: jest.fn<
+    Promise<AccountOperationInspection>,
+    [uid: string, action: 'logout' | 'delete', operationId: string]
+  >(() => Promise.reject(new Error('inspectAccountOperation mock is not configured'))),
+  drainAccountOperation: jest.fn<
+    Promise<number>, [uid: string, action: 'logout' | 'delete', operationId: string]
+  >(() => Promise.reject(new Error('drainAccountOperation mock is not configured'))),
+  cleanupAccountOperation: jest.fn<
+    Promise<void>, [uid: string, action: 'logout' | 'delete', operationId: string]
+  >(() => Promise.reject(new Error('cleanupAccountOperation mock is not configured'))),
+  finishAccountOperation: jest.fn<
+    Promise<void>, [uid: string, action: 'logout' | 'delete', operationId: string]
+  >(() => Promise.reject(new Error('finishAccountOperation mock is not configured'))),
+  cancelAccountOperation: jest.fn<
+    void, [uid: string, action: 'logout' | 'delete', operationId: string]
+  >(() => { throw new Error('cancelAccountOperation mock is not configured'); }),
   setAuthContext: jest.fn<void, [uid: string, deviceToken: string]>(),
   clearAuthContext: jest.fn<void, []>(),
   getLastSyncErrorReason: jest.fn<string | null, []>(() => null),
   setCurrentGoalId: jest.fn<void, [goalId: string | null]>(),
+  setCurrentGoalIdForAccount: jest.fn<void, [uid: string, goalId: string]>(),
+  setCheckEnabledSettingForAccount: jest.fn<void, [uid: string, enabled: boolean]>(),
   startMeasurement: jest.fn<
     Promise<boolean>,
     [uid: string, goalId: string, sessionId: string, startAt: number, checkEnabled: boolean]
@@ -49,6 +73,8 @@ const studySyncModuleMock = {
   setCheckEnabledSetting: jest.fn<void, [enabled: boolean]>(),
   getLastLockscreenStop: jest.fn<LastLockscreenStop | null, []>(() => null),
   clearLastLockscreenStop: jest.fn<void, []>(),
+  setStudyCheckDevOverride: jest.fn<void, [intervalMs: number | null, responseWindowMs: number | null]>(),
+  getStudyCheckDevOverride: jest.fn<{ intervalMs: number; responseWindowMs: number } | null, []>(() => null),
 };
 
 export default studySyncModuleMock;

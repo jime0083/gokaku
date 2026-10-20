@@ -1,6 +1,6 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-import type { ActiveStudySession, LastLockscreenStop } from './StudySync.types';
+import type { AccountOperationBlock, AccountOperationInspection, ActiveStudySession, LastLockscreenStop } from './StudySync.types';
 
 /**
  * Phase 1-4 技術検証用の native ブリッジ。
@@ -8,10 +8,40 @@ import type { ActiveStudySession, LastLockscreenStop } from './StudySync.types';
  * Phase 5-3 で本実装に置き換える(タイマー画面からの呼び出し方・認証方式は 5-3 で確定する)
  */
 declare class StudySyncModule extends NativeModule<Record<string, never>> {
+  /** lease不要の永続block snapshot。認可には使わず、不明状態はtrue。 */
+  isAccountOperationBlocked(): boolean;
+  /** 詳細はlease内fresh read。busy/破損時はthrowする。 */
+  getAccountOperationBlock(): AccountOperationBlock | null;
+  /** block確立/同UID・action再開だけを行う。所属検査・消去はしない。 */
+  beginAccountOperation(uid: string, action: 'logout' | 'delete'): AccountOperationBlock;
+  /** 専用lease内のstrict検査。IO失敗・操作不一致はthrow。 */
+  inspectAccountOperation(
+    uid: string, action: 'logout' | 'delete', operationId: string,
+  ): Promise<AccountOperationInspection>;
+  /** 対象UIDのみ同期。検査不成立・未送信残留はthrow。返値は送信件数。 */
+  drainAccountOperation(
+    uid: string, action: 'logout' | 'delete', operationId: string,
+  ): Promise<number>;
+  /** 専用lease内で対象UIDだけ消去。IO/unknown/未同期ではrejectしblockを保持。 */
+  cleanupAccountOperation(
+    uid: string, action: 'logout' | 'delete', operationId: string,
+  ): Promise<void>;
+  /** 消去済みをasync native lease内で検査してblock解除。失敗時はreject。 */
+  finishAccountOperation(
+    uid: string, action: 'logout' | 'delete', operationId: string,
+  ): Promise<void>;
+  /** cloud開始前かつJS checkpoint無しを保証したcaller専用。metadataだけ解除。 */
+  cancelAccountOperation(
+    uid: string, action: 'logout' | 'delete', operationId: string,
+  ): void;
   /** 検証用のデバイストークンを Keychain(App Group 共有)に保存する */
   setAuthContext(uid: string, deviceToken: string): void;
   clearAuthContext(): void;
+  /** legacy入口。owner receiptを無効化し、現在UIDへ追認しない。 */
   setCurrentGoalId(goalId: string | null): void;
+  /** 新値と明示UIDのowner receiptを同じnative lease内に保存。失敗時throw。 */
+  setCurrentGoalIdForAccount(uid: string, goalId: string): void;
+  setCheckEnabledSettingForAccount(uid: string, enabled: boolean): void;
   /**
    * 計測の開始(5-3c-5a)。nativeSync には送らない(アプリの記録は recordStudyEvent。source=app)。
    * 計測中の状態(App Group。5-3c-3)を書き、ライブアクティビティを出す。通知の予約は呼び出し側(JS)が行う。
@@ -20,7 +50,7 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
    * src/features/timer/id.ts の generateLocalId で作る想定)。startAt(epoch ミリ秒)も呼び出し側が渡す
    * (JS の端末内の記録の startAt と、この計測中の状態の startAt を一致させるため)。
    *
-   * 戻り値: 計測中の状態の書き込みに成功したか(渡した値の形が不正な場合だけ false。
+   * 戻り値: 計測中の状態の書き込みに成功したか(渡した値の形が不正・native gate取得失敗の場合は false。
    * ライブアクティビティの表示が OS 側の制約で失敗しても false にはならない)
    */
   startMeasurement(
@@ -67,7 +97,7 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
   getActiveSession(): ActiveStudySession | null;
   /**
    * 計測中の状態を書く。形が不正(必須項目が無い・型が違う)な場合は書き込みを断り false を返す
-   * (例外は投げない)。書き込めたら true
+   * native gate取得失敗もfalse。書き込めたら true
    */
   setActiveSession(session: ActiveStudySession): boolean;
   clearActiveSession(): void;
@@ -81,6 +111,19 @@ declare class StudySyncModule extends NativeModule<Record<string, never>> {
    */
   getLastLockscreenStop(): LastLockscreenStop | null;
   clearLastLockscreenStop(): void;
+
+  /**
+   * 開発ビルド専用(5-3e-2。problem P-011 (3)): 「勉強中？」確認の間隔・応答期限を開発用の短い値に
+   * 切り替える(App Group に保存)。両方 null を渡すと本番の値に戻す(設定を消す)。
+   * Swift 側はこの関数自体を #if DEBUG でくくっているため、本番ビルド(Release)には存在しない。
+   * 呼び出し側は __DEV__ のときだけ呼ぶこと(src/features/timer/studyCheckDevOverride.ts)
+   */
+  setStudyCheckDevOverride(intervalMs: number | null, responseWindowMs: number | null): void;
+  /**
+   * 開発ビルド専用(5-3e-2): 上書き設定を読む。無ければ null。
+   * Swift 側の実体が #if DEBUG でくくられているため、本番ビルドには存在しない
+   */
+  getStudyCheckDevOverride(): { intervalMs: number; responseWindowMs: number } | null;
 }
 
 export default requireNativeModule<StudySyncModule>('StudySync');

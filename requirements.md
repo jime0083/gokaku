@@ -294,6 +294,36 @@
 - サブスクリプションの管理(Apple のサブスクリプション管理画面を開く)
 - ログアウト、アカウント削除(確認ダイアログ。全データとXのトークンを削除。Apple 審査ガイドライン 5.1.1(v) の要件)
 - 利用規約・プライバシーポリシー・お問い合わせ
+- 数値編集の操作(2026-10-14 ユーザー決定。6-2a):
+  - 現在の値を初期表示する、スクロール可能なポップアップ。既存の入力部品(数字入力・科目数の＋－・カレンダー・時間のドラムロール)を使う。同一画面のViewに重ね、React NativeのModalは使わない。
+  - 「保存」で数値を一括保存し、成功したら閉じてホームを再計算する。「キャンセル」で未保存の変更を破棄する。
+  - 入力範囲・単位・刻みはオンボーディングと同じ。不正入力時は保存できない。通信失敗時は入力を保持し、4-8の文言と再試行を表示する。
+  - 偏差値・科目数を変更しても、目標勉強時間は自動変更しない。登録時の概算スナップショット(estimatedHours)も保持する。
+
+- 設定とリンクの操作(2026-10-14 ユーザー決定。6-2b):
+  - 編集ボタンから「目標の数値」「設定とリンク」を選ぶ。同一画面のViewによるポップアップを使う。
+  - 設定は現在値を初期表示し、「保存」でcheckEnabled・xPostEnabledをまとめて反映して閉じる。「キャンセル」で未保存値を破棄する。通信失敗時は入力を保持し、4-8の文言と再試行を表示する。
+  - checkEnabledが未設定ならON、xPostEnabledが未設定ならOFFとして表示する。3-2の開始時設定保存に従い、確認設定の変更は次回開始の計測から反映し、計測中セッションの設定を変更しない。
+  - サブスクリプションの管理はAppleの管理画面を開く。画面の戻り値でクライアントからsubscriptionを変更しない。
+  - 利用規約・プライバシーポリシーは既存のURL定数を使って開く(本番URLは8-1で設定)。問い合わせ先が未設定の間は「お問い合わせ（準備中）」を押せない状態で表示し、Work9／8-1で設定する。
+  - このタスクではXの認可・再連携、目標そのものの変更、ログアウト・アカウント削除を追加しない。
+
+- 目標そのものの変更(2026-10-14 ユーザー決定。6-3a):
+  - 「積み上げ時間は0からになります」の確認後、空欄から目標入力をやり直す。登録成功時に旧目標をreplaced、新目標をactive、activeGoalIdを新目標へ、同一トランザクションで切り替える。
+  - 登録前は旧目標を保持する。最初の入力画面から戻ると未登録の変更を破棄してホームへ。途中入力はアプリを閉じても同じユーザーで再開できる。
+  - 通信失敗時は旧目標と入力を保持して再試行する。ログイン・課金・X連携・設定を引き継ぎ、再購入・再連携を要求しない。
+  - 計測中は変更を始められず、先にタイマー停止を案内する。登録前も計測中でないことを確認する。
+  - 記録を混在させないため、旧目標のJS送信待ちを同期できてから切り替える。未同期なら旧目標と入力を保持して再試行する。旧目標・過去のサーバー記録は削除しない。
+
+- ログアウト・アカウント削除(2026-10-14 ユーザー決定。6-4):
+  - 計測中は先に停止を案内し、未送信記録を同期できない間は処理を完了しない。
+  - 端末データの所属アカウントを確認できない場合は処理を停止し、再試行を案内する。当該データは消去せず、現在UIDの所有物として追認しない(2026-10-16 ユーザー決定)。
+  - 端末データの消去は対象UIDの所有を確認できたものに限り、別UIDのデータは保持する(2026-10-16 ユーザー決定)。
+  - ログアウトではクラウドの目標・履歴を残し、サーバーの端末トークンを失効し、端末の記録・入力・トークン・送信待ちを消して初回画面へ戻る。
+  - アカウント削除は確認後にAppleで本人確認を行い、Apple認証の失効、Firebase Authアカウントと関連Firestoreデータの削除、端末の消去を行う。
+  - 削除確認に「アカウント削除だけではAppleの定期課金は停止しません」の説明とサブスク管理ボタンを置く。解約を強制せず、削除を選べるようにする。
+  - 失敗時は完了扱いにせず再試行する。Appleの本人確認・失効の実接続確認はAppleログイン設定後に行い、開発中はモックとEmulatorを使用する。
+  - Appleの削除ガイドを参照(2026-10-14確認): https://developer.apple.com/help/app-review/guideline-reference/5-1-1-account-deletion
 
 ### 4-8. エラー時の表示
 - 通信失敗: 「通信できませんでした。電波の良い場所で再度お試しください」と再試行ボタン
@@ -303,7 +333,7 @@
 
 | コレクション | 主な項目 | 説明 |
 |------------|---------|------|
-| `users/{uid}` | createdAt, activeGoalId, checkEnabled(bool), xPostEnabled(bool), xLinked(bool), xUsername, xNotice(連携切れ/投稿失敗のお知らせ), subscription{status, productId, expiresAt, originalTransactionId, environment(PRODUCTION/SANDBOX)} | ユーザー設定と課金状態(subscription はサーバーのみ書き込み) |
+| `users/{uid}` | createdAt, activeGoalId, checkEnabled(bool), xPostEnabled(bool), xLinked(bool), xUsername, xNotice(連携切れ/投稿失敗のお知らせ), subscription{status, productId, expiresAt, originalTransactionId, environment(PRODUCTION/SANDBOX)}, deletionInProgress(削除中のみtrue) | ユーザー設定と課金状態(subscription・deletionInProgress はサーバーのみ書き込み。削除中の全書込を拒否し、削除完了時は親ごと消去) |
 | `appleSubscriptions/{originalTransactionId}` | uid, productId, environment, createdAt | 購入の持ち主(最初に確認したアカウント)。サーバーのみ読み書き可(2026-10-09 決定) |
 | `users/{uid}/goals/{goalId}` | type(exam/cert), university, targetDeviation, currentDeviation, subjectCount, certId, certOtherName, estimatedHours, targetHours, examDate(YYYY-MM-DD), minDailyMinutes, goalDailyMinutes, startDate, status(active/finished/replaced), createdAt | 目標。数値変更時は上書き、目標変更時は新規作成し旧目標を replaced にする |
 | `users/{uid}/sessions/{sessionId}` | goalId, startAt, stopAt, source(app/lockscreen), checkEnabled, confirmations[], endReason(manual/check_timeout) | 計測セッション(サーバーのみ書き込み。startAt・stopAt は epoch ミリ秒。2026-10-10 追記) |

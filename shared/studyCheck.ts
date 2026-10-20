@@ -22,6 +22,12 @@
  * 0:00 時点では計測中として扱い、前日分は 0:00 まで加算する(requirements 3-3「0:00 時点で計測中の
  * セッションは 0:00 までの分を前日分として判定に含める」)。後で無応答が確定した場合、再計算すると停止時刻は
  * 確認時刻(23:55)になるが、0:00 判定の結果は確定済みとして変えない。
+ *
+ * 間隔・応答期限の引数(5-3e-2): resolveSessionEnd・findPendingCheckAt・nextUnansweredCheckAt は
+ * 間隔(intervalMs)・応答期限(responseWindowMs)を引数で受け取れる(既定値は STUDY_CHECK_INTERVAL_MS・
+ * STUDY_CHECK_RESPONSE_WINDOW_MS=本番の60分・10分)。開発ビルドだけ短い値に切り替える仕組みは
+ * shared の外(src/features/timer/studyCheckDevOverride.ts)にあり、shared はその値を受け取るだけの
+ * 純粋な関数のままにする(0:00 判定(dailyJudgement.ts・homeSummary.ts)は常に既定値=本番の値で呼ぶ)
  */
 
 import {
@@ -79,8 +85,16 @@ function assertSession(session: CheckedStudySession, now: number): void {
  * - 停止済みで、停止時刻より前に無応答が確定した確認があれば、最初のその確認時刻で check_timeout
  * - それ以外の停止済みは停止時刻で manual
  * - 計測中で無応答が確定した確認がなければ now で running
+ *
+ * intervalMs・responseWindowMs(5-3e-2): 既定値は本番の値(60分・10分)。開発ビルドで短い値を使うときは
+ * 呼び出し側(src/features/timer/useTimerSession.ts)が渡す
  */
-export function resolveSessionEnd(session: CheckedStudySession, now: number): SessionEnd {
+export function resolveSessionEnd(
+  session: CheckedStudySession,
+  now: number,
+  intervalMs: number = STUDY_CHECK_INTERVAL_MS,
+  responseWindowMs: number = STUDY_CHECK_RESPONSE_WINDOW_MS,
+): SessionEnd {
   assertSession(session, now);
   const { startAt, stopAt, checkEnabled, confirmations } = session;
   const fallback: SessionEnd =
@@ -91,11 +105,11 @@ export function resolveSessionEnd(session: CheckedStudySession, now: number): Se
   // 無応答が確定する境界: 停止済みは停止時刻、計測中は now。この時刻より前に期限を過ぎた確認だけを判定する
   const decidedUntil = stopAt ?? now;
   for (
-    let checkAt = startAt + STUDY_CHECK_INTERVAL_MS;
+    let checkAt = startAt + intervalMs;
     checkAt < decidedUntil;
-    checkAt += STUDY_CHECK_INTERVAL_MS
+    checkAt += intervalMs
   ) {
-    const deadline = checkAt + STUDY_CHECK_RESPONSE_WINDOW_MS;
+    const deadline = checkAt + responseWindowMs;
     const answered = confirmations.some((at) => at >= checkAt && at <= deadline);
     if (answered) {
       continue;
@@ -114,19 +128,26 @@ export function resolveSessionEnd(session: CheckedStudySession, now: number): Se
  * 「応答待ち」= 確認時刻 t_k ≤ now ≤ t_k + 応答期限(両端を含む。resolveSessionEnd の応答判定と同じ境界)
  * かつ、まだその確認に応答していない。確認OFF、または応答待ちの確認がなければ null
  * (5-2b: どのタブでも画面の上に重ねて「勉強中？」を表示するための判定に使う)
+ *
+ * intervalMs・responseWindowMs(5-3e-2): 既定値は本番の値(60分・10分)
  */
-export function findPendingCheckAt(session: CheckedStudySession, now: number): number | null {
+export function findPendingCheckAt(
+  session: CheckedStudySession,
+  now: number,
+  intervalMs: number = STUDY_CHECK_INTERVAL_MS,
+  responseWindowMs: number = STUDY_CHECK_RESPONSE_WINDOW_MS,
+): number | null {
   assertSession(session, now);
   const { startAt, checkEnabled, confirmations } = session;
   if (!checkEnabled) {
     return null;
   }
   for (
-    let checkAt = startAt + STUDY_CHECK_INTERVAL_MS;
+    let checkAt = startAt + intervalMs;
     checkAt <= now;
-    checkAt += STUDY_CHECK_INTERVAL_MS
+    checkAt += intervalMs
   ) {
-    const deadline = checkAt + STUDY_CHECK_RESPONSE_WINDOW_MS;
+    const deadline = checkAt + responseWindowMs;
     if (now > deadline) {
       // この確認はすでに無応答が確定している(resolveSessionEnd が計測を止める対象)。次の確認を見る
       continue;
@@ -142,19 +163,25 @@ export function findPendingCheckAt(session: CheckedStudySession, now: number): n
  * 計測中(stopAt が null)のセッションに使う。まだ先(now より後)の確認でも返す(前もって予約できるようにする)。
  * 確認OFFなら null。confirmations に記録済みの確認は順に飛ばす(k=1,2,… と順番に見て、
  * 応答期限内に応答が1件もない最初の確認を返す)
+ *
+ * intervalMs・responseWindowMs(5-3e-2): 既定値は本番の値(60分・10分)
  */
-export function nextUnansweredCheckAt(session: CheckedStudySession): number | null {
+export function nextUnansweredCheckAt(
+  session: CheckedStudySession,
+  intervalMs: number = STUDY_CHECK_INTERVAL_MS,
+  responseWindowMs: number = STUDY_CHECK_RESPONSE_WINDOW_MS,
+): number | null {
   assertFiniteTime(session.startAt, 'startAt');
   const { startAt, checkEnabled, confirmations } = session;
   if (!checkEnabled) {
     return null;
   }
   for (
-    let checkAt = startAt + STUDY_CHECK_INTERVAL_MS;
+    let checkAt = startAt + intervalMs;
     ;
-    checkAt += STUDY_CHECK_INTERVAL_MS
+    checkAt += intervalMs
   ) {
-    const deadline = checkAt + STUDY_CHECK_RESPONSE_WINDOW_MS;
+    const deadline = checkAt + responseWindowMs;
     const answered = confirmations.some((at) => at >= checkAt && at <= deadline);
     if (!answered) {
       return checkAt;

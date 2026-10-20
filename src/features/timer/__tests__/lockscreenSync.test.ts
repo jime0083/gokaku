@@ -14,6 +14,7 @@ const mockStopMeasurement = jest.fn();
 const mockGetActiveSession = jest.fn();
 const mockSetActiveSession = jest.fn();
 const mockSetCheckEnabledSetting = jest.fn();
+const mockSetCheckEnabledSettingForAccount = jest.fn();
 const mockGetLastLockscreenStop = jest.fn();
 const mockClearLastLockscreenStop = jest.fn();
 
@@ -31,6 +32,7 @@ jest.mock('../../../../modules/study-sync/src/StudySyncModule', () => ({
     getActiveSession: mockGetActiveSession,
     setActiveSession: mockSetActiveSession,
     setCheckEnabledSetting: mockSetCheckEnabledSetting,
+    setCheckEnabledSettingForAccount: mockSetCheckEnabledSettingForAccount,
     getLastLockscreenStop: mockGetLastLockscreenStop,
     clearLastLockscreenStop: mockClearLastLockscreenStop,
   },
@@ -64,6 +66,7 @@ describe('lockscreenSync(5-3c-5b)', () => {
     mockSetActiveSession.mockReset();
     mockSetActiveSession.mockReturnValue(true);
     mockSetCheckEnabledSetting.mockReset();
+    mockSetCheckEnabledSettingForAccount.mockReset();
     mockGetLastLockscreenStop.mockReset();
     mockGetLastLockscreenStop.mockReturnValue(null);
     mockClearLastLockscreenStop.mockReset();
@@ -168,6 +171,63 @@ describe('lockscreenSync(5-3c-5b)', () => {
     });
   });
 
+  describe('explicit producer ownership', () => {
+    it('fresh setting writes an explicit owner receipt without raw fallback', () => {
+      rememberCheckEnabledSetting(false, 'uid-1');
+      expect(mockSetCheckEnabledSettingForAccount).toHaveBeenCalledWith('uid-1', false);
+      expect(mockSetCheckEnabledSetting).not.toHaveBeenCalled();
+    });
+    it('legacy raw setting is not attributed to current UID', () => {
+      rememberCheckEnabledSetting(false);
+      expect(mockSetCheckEnabledSetting).toHaveBeenCalledWith(false);
+      expect(mockSetCheckEnabledSettingForAccount).not.toHaveBeenCalled();
+    });
+    it('receipt setter failure preserves helper catch and has no raw fallback', () => {
+      mockSetCheckEnabledSettingForAccount.mockImplementation(() => {
+        throw new Error('native blocked');
+      });
+      expect(() => rememberCheckEnabledSetting(true, 'uid-1')).not.toThrow();
+      expect(mockSetCheckEnabledSetting).not.toHaveBeenCalled();
+    });
+    it('a changed auth owner does not write the fresh setting', () => {
+      mockGetCurrentUid.mockReturnValue('uid-2');
+      rememberCheckEnabledSetting(true, 'uid-1');
+      expect(mockSetCheckEnabledSettingForAccount).not.toHaveBeenCalled();
+      expect(mockSetCheckEnabledSetting).not.toHaveBeenCalled();
+    });
+    it('confirmation does not update another native owner or session', () => {
+      mockGetActiveSession.mockReturnValue({
+        sessionId: 'remote', uid: 'uid-2', goalId: 'goal-1',
+        startAt: 1000, checkEnabled: true, confirmations: [],
+      });
+      addNativeConfirmation(3000, 'uid-1', 'remote');
+      expect(mockSetActiveSession).not.toHaveBeenCalled();
+      addNativeConfirmation(3000, 'uid-2', 'different-session');
+      expect(mockSetActiveSession).not.toHaveBeenCalled();
+    });
+    it('remote owner mismatch is rejected before adoption', async () => {
+      mockGetActiveSession.mockReturnValue({
+        sessionId: 'remote', uid: 'uid-2', goalId: 'goal-1',
+        startAt: 1000, checkEnabled: true, confirmations: [],
+      });
+      await expect(reconcileWithLockscreen([], 2000, 'uid-1')).rejects.toThrow(
+        'timer-session-owner-mismatch',
+      );
+      expect(await loadLocalSessions()).toEqual([]);
+      expect(mockClearLastLockscreenStop).not.toHaveBeenCalled();
+    });
+    it('local owner mismatch is rejected before native inspection or stop', async () => {
+      await startLocalSession(1000, 'owned', true, 'uid-1');
+      const before = await loadLocalSessions();
+      await expect(reconcileWithLockscreen(before, 2000, 'uid-2')).rejects.toThrow(
+        'timer-session-owner-mismatch',
+      );
+      expect(await loadLocalSessions()).toEqual(before);
+      expect(mockGetActiveSession).not.toHaveBeenCalled();
+      expect(mockClearLastLockscreenStop).not.toHaveBeenCalled();
+    });
+  });
+
   describe('reconcileWithLockscreen', () => {
     it('App Group にあって端末にない計測は、端末に取り込む(続きとして表示)', async () => {
       mockGetActiveSession.mockReturnValue({
@@ -183,7 +243,7 @@ describe('lockscreenSync(5-3c-5b)', () => {
 
       expect(result.changed).toBe(true);
       expect(result.sessions).toEqual([
-        { sessionId: 'lockscreen-session', startAt: 1_000, stopAt: null, checkEnabled: true, confirmations: [1_500] },
+        { sessionId: 'lockscreen-session', uid: 'uid-1', startAt: 1_000, stopAt: null, checkEnabled: true, confirmations: [1_500] },
       ]);
       // サーバーには送らない(reconcileWithLockscreen 自体は送信層を一切呼ばない)
       const stored = await loadLocalSessions();

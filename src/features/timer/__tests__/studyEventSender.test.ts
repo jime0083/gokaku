@@ -11,6 +11,12 @@ const mockHttpsCallable = jest.fn();
 const mockCallable = jest.fn();
 const mockConnectFirebaseEmulatorsIfNeeded = jest.fn();
 const mockFetchActiveGoalId = jest.fn();
+const mockGetCurrentUid = jest.fn<string | null, []>();
+const mockNativeBlocked = jest.fn(() => false);
+
+jest.mock('../../../../modules/study-sync/src/StudySyncModule', () => ({
+  __esModule: true, default: { isAccountOperationBlocked: mockNativeBlocked },
+}));
 
 jest.mock('@react-native-firebase/app', () => ({
   getApp: mockGetApp,
@@ -21,17 +27,27 @@ jest.mock('@react-native-firebase/functions', () => ({
 }));
 jest.mock('@/config/firebase', () => ({
   connectFirebaseEmulatorsIfNeeded: mockConnectFirebaseEmulatorsIfNeeded,
+  getCurrentUid: mockGetCurrentUid,
 }));
 jest.mock('@/features/goals/activeGoalRepository', () => ({
   fetchActiveGoalId: mockFetchActiveGoalId,
 }));
 
-const { enqueueAndSendStudyEvent, flushStudyEventQueue } =
+const { enqueueAndSendStudyEvent, flushStudyEventQueue, flushStudyEventQueueForAccount } =
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('@/features/timer/studyEventSender') as typeof import('@/features/timer/studyEventSender');
 const { appendStudyEvent, loadStudyEventQueue } =
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('@/features/timer/studyEventQueue') as typeof import('@/features/timer/studyEventQueue');
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { accountOperationGate } = require('../../account/accountOperationRuntime') as typeof import('../../account/accountOperationRuntime');
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 const BASE_EVENT = {
   sessionId: 'session-1',
@@ -42,6 +58,8 @@ const BASE_EVENT = {
 
 describe('studyEventSender(5-1b-2)', () => {
   beforeEach(() => {
+    mockGetCurrentUid.mockReset().mockReturnValue('user-a');
+    mockNativeBlocked.mockReset().mockReturnValue(false);
     mockGetApp.mockClear();
     mockGetFunctions.mockClear();
     mockConnectFirebaseEmulatorsIfNeeded.mockClear();
@@ -54,6 +72,91 @@ describe('studyEventSender(5-1b-2)', () => {
 
   afterEach(async () => {
     await AsyncStorage.clear();
+  });
+
+  it.each(['user-b', null])('owned eventは別UID %pへ送らず保持する', async (currentUid) => {
+    mockGetCurrentUid.mockReturnValue(currentUid);
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'owned' });
+    await flushStudyEventQueue();
+    expect(mockCallable).not.toHaveBeenCalled();
+    expect(await loadStudyEventQueue()).toEqual([
+      expect.objectContaining({ ...BASE_EVENT, uid: 'user-a' }),
+    ]);
+  });
+
+  it('同じUIDならowned eventを送り、成功分だけ除去する', async () => {
+    mockGetCurrentUid.mockReturnValue('user-a');
+    mockCallable.mockResolvedValue({ data: { status: 'recorded' } });
+    await enqueueAndSendStudyEvent({ ...BASE_EVENT, uid: 'user-a' });
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+    expect(await loadStudyEventQueue()).toEqual([]);
+  });
+
+  it('目標取得のawait中にUIDが変われば送信せず保持する', async () => {
+    mockGetCurrentUid.mockReturnValue('user-a');
+    mockFetchActiveGoalId.mockImplementationOnce(async () => {
+      mockGetCurrentUid.mockReturnValue('user-b');
+      return 'goal-1';
+    });
+    await enqueueAndSendStudyEvent({ ...BASE_EVENT, uid: 'user-a' });
+    expect(mockCallable).not.toHaveBeenCalled();
+    expect(await loadStudyEventQueue()).toHaveLength(1);
+    expect((await loadStudyEventQueue())[0]?.uid).toBe('user-a');
+  });
+
+  it.each(['success', 'permanent-error'])('HTTP await中のUID変更後は%sでも除去せず、元UIDで同じkeyを再送する', async (outcome) => {
+    mockGetCurrentUid.mockReturnValue('user-a');
+    mockCallable.mockImplementationOnce(async () => {
+      mockGetCurrentUid.mockReturnValue('user-b');
+      if (outcome === 'permanent-error') throw { code: 'invalid-argument' };
+      return { data: { status: 'recorded' } };
+    });
+    await enqueueAndSendStudyEvent({ ...BASE_EVENT, uid: 'user-a' });
+    const kept = await loadStudyEventQueue();
+    expect(kept).toHaveLength(1);
+    expect(kept[0]?.uid).toBe('user-a');
+    await flushStudyEventQueue();
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+    mockGetCurrentUid.mockReturnValue('user-a');
+    mockCallable.mockResolvedValue({ data: { status: 'recorded' } });
+    await flushStudyEventQueue();
+    expect(mockCallable).toHaveBeenLastCalledWith(expect.objectContaining({ idempotencyKey: kept[0]?.idempotencyKey }));
+    expect(await loadStudyEventQueue()).toEqual([]);
+  });
+
+  it('queue読込await中にUID変更なら送信・除去せず保持する', async () => {
+    mockGetCurrentUid.mockReturnValue('user-a');
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'owned-key' });
+    const originalGetItem = AsyncStorage.getItem;
+    // 公式jest.fnの実装をバックアップし、mockRestoreで消さず元実装へ戻す。
+    const read = jest.mocked(AsyncStorage.getItem);
+    const originalImplementation = read.getMockImplementation()!;
+    read.mockImplementation(async (...args) => {
+      const raw = await originalImplementation(...args);
+      if (args[0] === 'timer:studyEventQueue:v1') mockGetCurrentUid.mockReturnValue('user-b');
+      return raw;
+    });
+    try {
+      await flushStudyEventQueue();
+      read.mockImplementation(originalImplementation);
+      expect(mockCallable).not.toHaveBeenCalled();
+      expect(await loadStudyEventQueue()).toEqual([
+        { ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'owned-key' },
+      ]);
+    } finally {
+      read.mockImplementation(originalImplementation);
+    }
+    expect(AsyncStorage.getItem).toBe(originalGetItem);
+  });
+
+  it('本人分の次にある別UID eventを送信・除去しない', async () => {
+    mockGetCurrentUid.mockReturnValue('user-a');
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'a' });
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-b', idempotencyKey: 'b' });
+    mockCallable.mockResolvedValue({ data: { status: 'recorded' } });
+    await flushStudyEventQueue();
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+    expect(await loadStudyEventQueue()).toEqual([{ ...BASE_EVENT, uid: 'user-b', idempotencyKey: 'b' }]);
   });
 
   it('送信に成功すると列から消える', async () => {
@@ -221,4 +324,161 @@ describe('studyEventSender(5-1b-2)', () => {
     expect(mockCallable).toHaveBeenCalledTimes(1);
     expect(await loadStudyEventQueue()).toEqual([]);
   });
+
+  it('未ログインはlegacyを含む既存列を保持し、新規書込も送信も開始しない', async () => {
+    await appendStudyEvent({ ...BASE_EVENT, idempotencyKey: 'legacy' });
+    const before = await loadStudyEventQueue();
+    mockGetCurrentUid.mockReturnValue(null);
+    const writes = jest.mocked(AsyncStorage.setItem).mock.calls.length;
+    await enqueueAndSendStudyEvent(BASE_EVENT);
+    await enqueueAndSendStudyEvent({ ...BASE_EVENT, uid: 'user-a' });
+    await flushStudyEventQueue();
+    expect(jest.mocked(AsyncStorage.setItem).mock.calls).toHaveLength(writes);
+    expect(await loadStudyEventQueue()).toEqual(before);
+    expect(mockFetchActiveGoalId).not.toHaveBeenCalled();
+    expect(mockCallable).not.toHaveBeenCalled();
+  });
+
+  it('durable blockedはenqueue/flushの新規書込・HTTPを拒否する', async () => {
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'a' });
+    const before = await loadStudyEventQueue();
+    mockNativeBlocked.mockReturnValue(true);
+    const writes = jest.mocked(AsyncStorage.setItem).mock.calls.length;
+    await expect(enqueueAndSendStudyEvent(BASE_EVENT)).rejects.toThrow('normal-blocked');
+    await expect(flushStudyEventQueue()).rejects.toThrow('normal-blocked');
+    expect(jest.mocked(AsyncStorage.setItem).mock.calls).toHaveLength(writes);
+    expect(await loadStudyEventQueue()).toEqual(before);
+    expect(mockCallable).not.toHaveBeenCalled();
+  });
+
+  it('HTTPから削除保存完了までnormal rootを待機し、親leaseを明示してawaitする', async () => {
+    const http = deferred<void>();
+    const started = deferred<void>();
+    mockCallable.mockImplementationOnce(() => { started.resolve(); return http.promise; });
+    const sending = accountOperationGate.runNormal('user-a', async (lease) => {
+      await enqueueAndSendStudyEvent({ ...BASE_EVENT, uid: 'user-a' }, lease);
+    });
+    await started.promise;
+    let acquired = false;
+    const acquiring = accountOperationGate.acquireAccount('user-a').then((permit) => {
+      acquired = true; return permit;
+    });
+    try {
+      await Promise.resolve();
+      expect(acquired).toBe(false);
+      http.resolve();
+      await sending;
+      const permit = await acquiring;
+      permit.assertCurrentUid();
+      expect(await loadStudyEventQueue()).toEqual([]);
+    } finally {
+      http.resolve();
+      await sending;
+      await acquiring;
+      await accountOperationGate.releaseAccount('user-a');
+    }
+  });
+
+  it('forged/expired/account permitをnormal parentとして受け付けない', async () => {
+    const forged = { assertCurrentUid: jest.fn() };
+    let expired: import("../../account/accountOperationGate").AccountOperationLease = forged;
+    await accountOperationGate.runNormal('user-a', async (lease) => { expired = lease; });
+    const account = await accountOperationGate.acquireAccount('user-a');
+    try {
+      for (const lease of [forged, expired, account]) {
+        await expect(enqueueAndSendStudyEvent(BASE_EVENT, lease)).rejects.toThrow('invalid-lease');
+        await expect(flushStudyEventQueue(lease)).rejects.toThrow('invalid-lease');
+      }
+      expect(await loadStudyEventQueue()).toEqual([]);
+      expect(mockCallable).not.toHaveBeenCalled();
+    } finally {
+      await accountOperationGate.releaseAccount('user-a');
+    }
+  });
+
+  it('専用drainは他UIDが先頭でも対象だけ送り、同key別UIDとlegacyの順序・内容を保全する', async () => {
+    const other = { ...BASE_EVENT, uid: 'user-b', idempotencyKey: 'same' };
+    const legacy = { ...BASE_EVENT, idempotencyKey: 'same' };
+    await appendStudyEvent(other);
+    await appendStudyEvent(legacy);
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'same' });
+    mockCallable.mockResolvedValue({});
+    const permit = await accountOperationGate.acquireAccount('user-a');
+    try {
+      await expect(flushStudyEventQueueForAccount('user-a', permit)).resolves.toBe(true);
+      expect(mockCallable).toHaveBeenCalledTimes(1);
+      expect(await loadStudyEventQueue()).toEqual([other, legacy]);
+    } finally {
+      await accountOperationGate.releaseAccount('user-a');
+    }
+    await expect(flushStudyEventQueueForAccount('user-a', permit)).rejects.toThrow('expired-lease');
+  });
+
+  it.each([
+    { code: 'invalid-argument' },
+    { code: 'resource-exhausted', details: { reason: 'confirmation-limit-exceeded' } },
+  ])('P075: account専用は恒久エラーでも保持する %p', async (error) => {
+    const other = { ...BASE_EVENT, uid: 'user-b', idempotencyKey: 'same' };
+    const legacy = { ...BASE_EVENT, idempotencyKey: 'same' };
+    const owned = { ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'same' };
+    const before = [other, legacy, owned];
+    for (const event of before) await appendStudyEvent(event);
+    mockCallable.mockRejectedValue(error);
+    const permit = await accountOperationGate.acquireAccount('user-a');
+    try {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await expect(flushStudyEventQueueForAccount('user-a', permit)).resolves.toBe(false);
+        expect(await loadStudyEventQueue()).toEqual(before);
+        expect(mockCallable).toHaveBeenCalledTimes(attempt);
+        expect(mockCallable).toHaveBeenLastCalledWith(expect.objectContaining({
+          idempotencyKey: owned.idempotencyKey,
+        }));
+      }
+      mockCallable.mockResolvedValue({ data: { status: 'recorded' } });
+      await expect(flushStudyEventQueueForAccount('user-a', permit)).resolves.toBe(true);
+      expect(mockCallable).toHaveBeenCalledTimes(3);
+      expect(mockCallable).toHaveBeenLastCalledWith(expect.objectContaining({
+        idempotencyKey: owned.idempotencyKey,
+      }));
+      expect(await loadStudyEventQueue()).toEqual([other, legacy]);
+    } finally {
+      await accountOperationGate.releaseAccount('user-a');
+    }
+  });
+
+  it.each([
+    { code: 'invalid-argument' },
+    { code: 'resource-exhausted', details: { reason: 'confirmation-limit-exceeded' } },
+  ])('P075: 通常drainのowned恒久エラーdiscardを維持する %p', async (error) => {
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'owned-permanent' });
+    mockCallable.mockRejectedValue(error);
+    await flushStudyEventQueue();
+    expect(await loadStudyEventQueue()).toEqual([]);
+    await flushStudyEventQueue();
+    expect(mockCallable).toHaveBeenCalledTimes(1);
+  });
+
+  it('専用drainは再送待ちとflushing競合を完了扱いにしない', async () => {
+    await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'a' });
+    const started = deferred<void>();
+    const http = deferred<void>();
+    mockCallable.mockImplementationOnce(() => { started.resolve(); return http.promise; });
+    const permit = await accountOperationGate.acquireAccount('user-a');
+    const draining = flushStudyEventQueueForAccount('user-a', permit);
+    try {
+      await started.promise;
+      await expect(flushStudyEventQueueForAccount('user-a', permit)).resolves.toBe(false);
+      http.resolve();
+      await expect(draining).resolves.toBe(true);
+      await appendStudyEvent({ ...BASE_EVENT, uid: 'user-a', idempotencyKey: 'b' });
+      mockCallable.mockRejectedValueOnce({ code: 'unavailable' });
+      await expect(flushStudyEventQueueForAccount('user-a', permit)).resolves.toBe(false);
+      expect(await loadStudyEventQueue()).toHaveLength(1);
+    } finally {
+      http.resolve();
+      await draining;
+      await accountOperationGate.releaseAccount('user-a');
+    }
+  });
+
 });

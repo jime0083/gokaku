@@ -14,9 +14,10 @@
  * modules/study-sync/src/StudySyncModule は import すると requireNativeModule が即座に実行されるため
  * (studySyncAuthContext.ts と同じ理由)、実際に呼ぶ関数の中でだけ require する。
  * StudySync の呼び出しが失敗(例外)しても、アプリの計測(端末内の記録)は止めない(呼び出し側の指示)。
- * このファイルが export する関数はすべて例外を外に出さない(呼び出し側で catch しなくても安全)
+ * native通知・設定helperは例外を外に出さない。reconcileの所有/lease違反は呼出側へ返す
  */
 import { getCurrentUid } from '@/config/firebase';
+import type { AccountOperationLease } from '@/features/account/accountOperationGate';
 import { fetchActiveGoalId } from '@/features/goals/activeGoalRepository';
 
 import { adoptRemoteActiveSession, findActiveSession, stopLocalSession, type LocalStudySession } from './storage';
@@ -36,6 +37,7 @@ type StudySyncNativeBridge = {
   getActiveSession(): ActiveStudySession | null;
   setActiveSession(session: ActiveStudySession): boolean;
   setCheckEnabledSetting(enabled: boolean): void;
+  setCheckEnabledSettingForAccount(uid: string, enabled: boolean): void;
   getLastLockscreenStop(): LastLockscreenStop | null;
   clearLastLockscreenStop(): void;
 };
@@ -94,12 +96,18 @@ export async function notifyNativeMeasurementStop(sessionId: string): Promise<vo
  * (getActiveSession → confirmations に足す → setActiveSession)。
  * 計測中の状態が無い・読み書きに失敗した場合は何もしない
  */
-export function addNativeConfirmation(now: number): void {
+export function addNativeConfirmation(
+  now: number,
+  expectedUid?: string,
+  sessionId?: string,
+): void {
   try {
     const studySync = getStudySync();
     if (!studySync) return;
     const active = studySync.getActiveSession();
     if (!active) return;
+    if (expectedUid !== undefined && active.uid !== expectedUid) return;
+    if (sessionId !== undefined && active.sessionId !== sessionId) return;
     studySync.setActiveSession({ ...active, confirmations: [...active.confirmations, now] });
   } catch {
     // 無視する
@@ -107,9 +115,14 @@ export function addNativeConfirmation(now: number): void {
 }
 
 /** 確認 ON/OFF の設定を App Group に覚えさせる(計測中の状態とは別の値。5-3c-3) */
-export function rememberCheckEnabledSetting(checkEnabled: boolean): void {
+export function rememberCheckEnabledSetting(checkEnabled: boolean, ownerUid?: string): void {
   try {
-    getStudySync()?.setCheckEnabledSetting(checkEnabled);
+    if (ownerUid === undefined) {
+      getStudySync()?.setCheckEnabledSetting(checkEnabled);
+    } else {
+      if (getCurrentUid() !== ownerUid) return;
+      getStudySync()?.setCheckEnabledSettingForAccount(ownerUid, checkEnabled);
+    }
   } catch {
     // 無視する
   }
@@ -136,7 +149,16 @@ export type LockscreenReconcileResult = {
 export async function reconcileWithLockscreen(
   sessions: LocalStudySession[],
   now: number,
+  expectedUid?: string,
+  lease?: AccountOperationLease,
 ): Promise<LockscreenReconcileResult> {
+  const assertOwner = (value: { uid?: string } | null) => {
+    lease?.assertCurrentUid();
+    if (expectedUid !== undefined && value?.uid !== undefined && value.uid !== expectedUid) {
+      throw new Error('timer-session-owner-mismatch');
+    }
+  };
+  assertOwner(findActiveSession(sessions));
   const studySync = getStudySync();
   if (!studySync) {
     return { sessions, changed: false };
@@ -156,10 +178,12 @@ export async function reconcileWithLockscreen(
   }
 
   const localActive = findActiveSession(sessions);
+  assertOwner(remoteActive);
 
   if (!localActive && remoteActive) {
     // ロック画面で開始された計測を端末に取り込む
     const updated = await adoptRemoteActiveSession(now, remoteActive);
+    lease?.assertCurrentUid();
     return { sessions: updated, changed: true };
   }
 
@@ -167,6 +191,7 @@ export async function reconcileWithLockscreen(
     // ロック画面で止められたかもしれない。sessionId が一致するときだけ取り込む
     if (lastLockscreenStop && lastLockscreenStop.sessionId === localActive.sessionId) {
       const updated = await stopLocalSession(now, lastLockscreenStop.stopAt);
+      lease?.assertCurrentUid();
       try {
         studySync.clearLastLockscreenStop();
       } catch {

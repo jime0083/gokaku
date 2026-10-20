@@ -33,6 +33,49 @@ describe('確認の数値(requirements 3-2)', () => {
   });
 });
 
+describe('間隔・応答期限を引数で渡す場合(5-3e-2: 開発ビルドの短い値への切り替え)', () => {
+  const SHORT_INTERVAL = 2 * MIN;
+  const SHORT_WINDOW = 1 * MIN;
+  const shortCheckAt = (k: number, startAt = START): number => startAt + k * SHORT_INTERVAL;
+
+  it('resolveSessionEnd: 短い間隔・応答期限を渡すと、その値で無応答が確定し停止する', () => {
+    const now = shortCheckAt(1) + SHORT_WINDOW + 1;
+    expect(resolveSessionEnd(session(), now, SHORT_INTERVAL, SHORT_WINDOW)).toEqual({
+      endAt: shortCheckAt(1),
+      endReason: 'check_timeout',
+    });
+    // 引数を省略すると本番の値(60分)のままなので、この now ではまだ最初の確認にも達していない
+    expect(resolveSessionEnd(session(), now)).toEqual({ endAt: now, endReason: 'running' });
+  });
+
+  it('findPendingCheckAt: 短い間隔での確認時刻〜応答期限(両端を含む)が応答待ちになる', () => {
+    expect(findPendingCheckAt(session(), shortCheckAt(1), SHORT_INTERVAL, SHORT_WINDOW)).toBe(
+      shortCheckAt(1),
+    );
+    expect(
+      findPendingCheckAt(session(), shortCheckAt(1) + SHORT_WINDOW, SHORT_INTERVAL, SHORT_WINDOW),
+    ).toBe(shortCheckAt(1));
+    expect(
+      findPendingCheckAt(session(), shortCheckAt(1) + SHORT_WINDOW + 1, SHORT_INTERVAL, SHORT_WINDOW),
+    ).toBeNull();
+    // 引数を省略すると本番の値(60分)のままなので、この時刻ではまだ確認が出ていない
+    expect(findPendingCheckAt(session(), shortCheckAt(1))).toBeNull();
+  });
+
+  it('nextUnansweredCheckAt: 短い間隔で最初の確認時刻を返し、応答済みなら次の短い間隔の確認時刻を返す', () => {
+    expect(nextUnansweredCheckAt(session(), SHORT_INTERVAL, SHORT_WINDOW)).toBe(shortCheckAt(1));
+    expect(
+      nextUnansweredCheckAt(
+        session({ confirmations: [shortCheckAt(1) + 10 * 1000] }),
+        SHORT_INTERVAL,
+        SHORT_WINDOW,
+      ),
+    ).toBe(shortCheckAt(2));
+    // 引数を省略すると本番の値(60分)のまま
+    expect(nextUnansweredCheckAt(session())).toBe(checkAt(1));
+  });
+});
+
 describe('resolveSessionEnd: 応答あり', () => {
   it('各確認に応答していれば手動停止の時刻まで計測する', () => {
     const stopAt = checkAt(3) + 20 * MIN;

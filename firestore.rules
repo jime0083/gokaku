@@ -11,6 +11,13 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid;
     }
 
+    // P-055: 削除開始後・親削除後のクライアント書込/再作成を拒否する。
+    function canWriteUserData(uid) {
+      return isOwner(uid)
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.get('deletionInProgress', false) != true;
+    }
+
     // 数値が int/float のどちらであっても範囲チェックできるようにするヘルパー
     function isNumberInRange(value, minValue, maxValue) {
       return (value is int || value is float) && value >= minValue && value <= maxValue;
@@ -96,8 +103,8 @@ service cloud.firestore {
           'startDate', 'status', 'createdAt',
         ])
         && isValidFreeText(data.university)
-        && isNumberInRange(data.targetDeviation, 25.0, 80.0)
-        && isNumberInRange(data.currentDeviation, 25.0, 80.0)
+        && isValidEditDeviation(data.targetDeviation)
+        && isValidEditDeviation(data.currentDeviation)
         && data.subjectCount is int && data.subjectCount >= 1 && data.subjectCount <= 8
         && isValidGoalCommonFields(data);
     }
@@ -117,12 +124,64 @@ service cloud.firestore {
         && isValidGoalCommonFields(data);
     }
 
-    // users/{uid} のうち本人が書き込める項目(requirements 5。activeGoalId と設定系のみ。
-    // subscription・xLinked・xUsername・xNotice・createdAt 等サーバー専用の項目は対象外)
-    function isValidUsersUpdate() {
+    // 6-2a / P-048: Both creation and numeric edits use the same deviation precision validation.
+    // Shared deviationToTenths allows floating-point error <= 1e-6 in deviation units.
+    function isValidEditDeviation(value) {
+      return isNumberInRange(value, 25.0, 80.0)
+        && math.abs(math.round(value * 10) / 10.0 - value) <= 0.000001;
+    }
+
+    function isValidGoalNumericUpdate(uid, goalId) {
       let after = request.resource.data;
-      return after.diff(resource.data).affectedKeys().hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
-        && (!('activeGoalId' in after) || after.activeGoalId == null || (after.activeGoalId is string && after.activeGoalId.size() > 0))
+      let changed = after.diff(resource.data).affectedKeys();
+      return resource.data.status == 'active'
+        && get(/databases/$(database)/documents/users/$(uid)).data.activeGoalId == goalId
+        && changed.hasOnly(resource.data.type == 'exam'
+          ? ['targetHours', 'examDate', 'minDailyMinutes', 'goalDailyMinutes', 'targetDeviation', 'currentDeviation', 'subjectCount']
+          : ['targetHours', 'examDate', 'minDailyMinutes', 'goalDailyMinutes'])
+        && after.targetHours is int && after.targetHours >= 1 && after.targetHours <= 20000
+        && isRealDateKey(after.examDate) && dateKeyValue(after.examDate) > jstTodayValue()
+        && isValidDailyMinutes(after.minDailyMinutes) && isValidDailyMinutes(after.goalDailyMinutes)
+        && after.goalDailyMinutes >= after.minDailyMinutes
+        && ((resource.data.type == 'cert') || (resource.data.type == 'exam'
+          && isValidEditDeviation(after.targetDeviation) && isValidEditDeviation(after.currentDeviation)
+          && after.subjectCount is int && after.subjectCount >= 1 && after.subjectCount <= 8));
+    }
+
+    // 6-3a: A pointer change always designates a brand-new active goal in this commit.
+    // Reads are cached across the three writes (user + old goal + new goal).
+    function isValidGoalPointerTransition(uid, newId) {
+      let oldId = get(/databases/$(database)/documents/users/$(uid)).data.get('activeGoalId', null);
+      return newId is string && newId.size() > 0 && newId != oldId
+        && !exists(/databases/$(database)/documents/users/$(uid)/goals/$(newId))
+        && getAfter(/databases/$(database)/documents/users/$(uid)/goals/$(newId)).data.status == 'active'
+        && (oldId == null || (oldId is string && oldId.size() > 0
+          && get(/databases/$(database)/documents/users/$(uid)/goals/$(oldId)).data.status == 'active'
+          && getAfter(/databases/$(database)/documents/users/$(uid)/goals/$(oldId)).data.status == 'replaced'
+          && getAfter(/databases/$(database)/documents/users/$(uid)/goals/$(oldId)).data
+            .diff(get(/databases/$(database)/documents/users/$(uid)/goals/$(oldId)).data).affectedKeys().hasOnly(['status'])));
+    }
+
+    function isValidGoalCreation(uid, goalId) {
+      return getAfter(/databases/$(database)/documents/users/$(uid)).data.activeGoalId == goalId
+        && isValidGoalPointerTransition(uid, goalId);
+    }
+
+    function isValidGoalReplacement(uid, goalId) {
+      let nextId = getAfter(/databases/$(database)/documents/users/$(uid)).data.get('activeGoalId', null);
+      return resource.data.status == 'active'
+        && get(/databases/$(database)/documents/users/$(uid)).data.activeGoalId == goalId
+        && request.resource.data.status == 'replaced'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && isValidGoalPointerTransition(uid, nextId);
+    }
+
+    // Settings retain their 6-2b path when the pointer is unchanged.
+    function isValidUsersUpdate(uid) {
+      let after = request.resource.data;
+      let changed = after.diff(resource.data).affectedKeys();
+      return changed.hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
+        && (!changed.hasAny(['activeGoalId']) || isValidGoalPointerTransition(uid, after.get('activeGoalId', null)))
         && (!('checkEnabled' in after) || after.checkEnabled is bool)
         && (!('xPostEnabled' in after) || after.xPostEnabled is bool);
     }
@@ -130,7 +189,7 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if isOwner(uid);
       // users ドキュメント自体の作成(Sign in with Apple 時の初期作成)は 3-5b で扱う。ここでは既存ドキュメントの更新のみ許可する
-      allow update: if isOwner(uid) && isValidUsersUpdate();
+      allow update: if canWriteUserData(uid) && isValidUsersUpdate(uid);
 
       match /{document=**} {
         allow read: if isOwner(uid);
@@ -138,14 +197,18 @@ service cloud.firestore {
 
       // 目標の新規作成(requirements 4-5, 5。数値変更での上書き・目標変更での新規作成は Phase 6)
       match /goals/{goalId} {
-        allow create: if isOwner(uid) && (isValidExamGoal(request.resource.data) || isValidCertGoal(request.resource.data));
+        allow create: if canWriteUserData(uid) && (isValidExamGoal(request.resource.data) || isValidCertGoal(request.resource.data))
+          && isValidGoalCreation(uid, goalId);
+        allow update: if canWriteUserData(uid) && (isValidGoalNumericUpdate(uid, goalId) || isValidGoalReplacement(uid, goalId));
       }
     }
 
     // Phase 3-5a 技術検証: React Native Firebase(アプリ側クライアント SDK)から
     // Emulator の Firestore に読み書きできることを確かめるための専用コレクション。
     match /devProbe/{uid} {
-      allow read, write: if isOwner(uid);
+      allow read: if isOwner(uid);
+      // 開発診断もEmulator上で本人親docをseedしてから使う。
+      allow write: if canWriteUserData(uid);
     }
   }
 }

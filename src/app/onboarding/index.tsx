@@ -1,10 +1,12 @@
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { StepScreen } from '@/components/StepScreen';
 import { useOnboardingDraft } from '@/features/onboarding/OnboardingDraftContext';
 import { resolveOnboardingBackRoute } from '@/features/onboarding/navigation';
+import { REPLACEMENT_COMMUNICATION_ERROR } from '@/features/goals/goalReplacementFlow';
 import { spacing } from '@/theme/spacing';
 
 /**
@@ -14,7 +16,15 @@ import { spacing } from '@/theme/spacing';
  */
 export default function RouteSelectScreen() {
   const router = useRouter();
-  const { draft, updateDraft } = useOnboardingDraft();
+  const { draft, updateDraft, replacement, cancelReplacement } = useOnboardingDraft();
+  const [error, setError] = useState<string | null>(null);
+  const goBack = async () => {
+    if (!replacement) { router.replace(resolveOnboardingBackRoute('/onboarding', draft)); return; }
+    try {
+      await cancelReplacement();
+      router.replace('/(tabs)/home');
+    } catch { setError(REPLACEMENT_COMMUNICATION_ERROR); }
+  };
 
   const handleSelectExam = () => {
     updateDraft({ type: 'exam' });
@@ -29,7 +39,9 @@ export default function RouteSelectScreen() {
   return (
     <StepScreen
       title="目標の種類を選んでください"
-      onBack={() => router.replace(resolveOnboardingBackRoute('/onboarding', draft))}
+      onBack={goBack}
+      error={error}
+      errorTestID="route-select-replacement-error"
       showNext={false}
       backTestID="route-select-back-button"
     >

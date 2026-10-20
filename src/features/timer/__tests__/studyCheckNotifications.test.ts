@@ -99,6 +99,31 @@ describe('予約・取り消し(識別子を使う)', () => {
     );
   });
 
+  it.each(['user-a', ' user-a '])('新規予約の所有UID %pをそのままdataへ保持する', async (uid) => {
+    await scheduleStudyCheckNotification(Date.now() + 60_000, uid);
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(expect.objectContaining({
+      identifier: STUDY_CHECK_NOTIFICATION_IDENTIFIER,
+      content: {
+        title: '勉強中？', categoryIdentifier: 'STUDY_CHECK', data: { uid },
+      },
+    }));
+  });
+
+  it('UID省略時はlegacy形式を維持しdataを付加しない', async () => {
+    await scheduleStudyCheckNotification(Date.now() + 60_000);
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(expect.objectContaining({
+      content: { title: '勉強中？', categoryIdentifier: 'STUDY_CHECK' },
+    }));
+  });
+
+  it.each(['', '   ', '\t\n', null, 0, false, {}, []])('不正UID %pはOS操作前にrejectする', async (uid) => {
+    await expect(scheduleStudyCheckNotification(Date.now() + 60_000, uid as string))
+      .rejects.toThrow('study-check-notification-invalid-uid');
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+  });
+
   it('cancelStudyCheckNotification は同じ識別子を取り消す', async () => {
     await cancelStudyCheckNotification();
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith(

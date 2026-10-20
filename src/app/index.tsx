@@ -1,4 +1,8 @@
 import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { getCurrentUid } from '@/config/firebase';
+import { useAccountActions } from '@/features/account/AccountActionBoundary';
+import { loadGoalReplacement } from '@/features/onboarding/replacementStorage';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { PrimaryButton } from '@/components/PrimaryButton';
@@ -13,9 +17,30 @@ import { colors } from '@/theme/colors';
  */
 export default function LaunchScreen() {
   const router = useRouter();
+  const accountActions = useAccountActions();
+  const { ready, isReady } = accountActions;
+  const [checkedAccountActions, setCheckedAccountActions] = useState<typeof accountActions | null>(null);
+  const checkingReplacement = !ready || checkedAccountActions !== accountActions;
+  useEffect(() => {
+    if (!ready) return;
+    let mounted = true;
+    const uid = getCurrentUid();
+    const resume = async () => {
+      const record = uid ? await loadGoalReplacement(uid) : null;
+      if (mounted && isReady() && record && getCurrentUid() === uid) {
+        router.replace(record.committedGoalId ? '/onboarding/pace' : resolveOnboardingResumeRoute(record.draft, Date.now()));
+      }
+    };
+    void resume().finally(() => {
+      if (mounted && isReady()) setCheckedAccountActions(accountActions);
+    });
+    return () => { mounted = false; };
+  }, [accountActions, isReady, ready, router]);
 
   const handleStart = async () => {
+    if (!isReady() || checkingReplacement) return;
     const draft = await loadOnboardingDraft();
+    if (!isReady()) return;
     const route = resolveOnboardingResumeRoute(draft, Date.now());
     router.push(route);
   };
@@ -25,7 +50,7 @@ export default function LaunchScreen() {
       <Text style={styles.title}>合格ウォッチ</Text>
       <Text style={styles.subtitle}>勉強時間をフォロワーがチェックし、勉強をサボれなくするアプリ</Text>
       <View style={styles.buttonArea}>
-        <PrimaryButton title="はじめる" onPress={handleStart} testID="onboarding-start-button" />
+        <PrimaryButton title="はじめる" disabled={!ready || checkingReplacement} onPress={handleStart} testID="onboarding-start-button" />
       </View>
     </View>
   );

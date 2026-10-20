@@ -1,5 +1,6 @@
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 
+import { getWritableAccount } from './account/accountWriteGuard';
 import { ensureAdminApp } from './firebaseAdmin';
 
 /**
@@ -80,6 +81,7 @@ export async function enforceRateLimit(uid: string, kind: RateLimitKind, deps: R
   const ref = db.doc(rateLimitDocPath(uid, kind, nowMs));
 
   const exceeded = await db.runTransaction(async (tx) => {
+    await getWritableAccount(tx, db.doc(`users/${uid}`));
     const snap = await tx.get(ref);
     const count = snap.exists ? ((snap.get('count') as number | undefined) ?? 0) : 0;
     if (count >= limit) {

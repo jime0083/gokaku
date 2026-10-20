@@ -8,6 +8,13 @@ import { getFirebaseEmulatorConfig } from '../config/firebase-emulator';
 import { callIssueDeviceToken } from '../features/deviceToken/deviceTokenApi';
 import { saveDeviceTokenToKeychain } from '../features/deviceToken/studySyncAuthContext';
 import { generateLocalId } from '../features/timer/id';
+import {
+  DEV_STUDY_CHECK_INTERVAL_MS,
+  DEV_STUDY_CHECK_RESPONSE_WINDOW_MS,
+  getStudyCheckTiming,
+  isStudyCheckDevOverrideEnabled,
+  setStudyCheckDevOverrideEnabled,
+} from '../features/timer/studyCheckDevOverride';
 // study-sync は Phase 1-4 専用の検証用ローカル Expo Module(modules/study-sync)
 import StudySync from '../../modules/study-sync/src/StudySyncModule';
 
@@ -46,6 +53,13 @@ import StudySync from '../../modules/study-sync/src/StudySyncModule';
  * 同じ送信処理を直接試す(「デバイストークンを発行」で Keychain に保存した uid・token を使う)。
  * 401 を試すには Emulator UI で deviceTokens/{uid} を削除し、通信エラーを試すには Emulator を
  * 止める(手動の手順。5-3c-6 の確認手順)
+ *
+ * 5-3e-2(problem P-011 (3)): 「勉強中？」確認の間隔・応答期限(本番60分・10分)を、開発ビルドだけ
+ * 短い値(2分・1分。DEV_STUDY_CHECK_INTERVAL_MS 等)に切り替えるボタンを足す。この画面自体が
+ * 開発ビルド(emulatorConfig がある)でしか表示されないため、ここでは isDev の判定をせずに
+ * src/features/timer/studyCheckDevOverride.ts の関数をそのまま呼ぶ(既定で __DEV__ を見る)。
+ * 切り替えた設定は App Group に保存され、アプリのタイマー(useTimerSession)・ロック画面から
+ * 開始したときの通知の予約(StudySyncCheckNotification)の両方に効く
  */
 
 export default function DevLockscreenSpikeScreen() {
@@ -242,6 +256,26 @@ export default function DevLockscreenSpikeScreen() {
     appendLog('最後にロック画面で止めた計測を消した');
   }
 
+  // 5-3e-2: 「勉強中？」確認の間隔・応答期限を開発用の短い値(2分・1分)に切り替える・戻す・今の設定を見る
+  function handleEnableShortStudyCheckInterval() {
+    setStudyCheckDevOverrideEnabled(true);
+    appendLog(
+      `開発用の短い間隔に切り替えた(${DEV_STUDY_CHECK_INTERVAL_MS / 1000}秒・応答期限${DEV_STUDY_CHECK_RESPONSE_WINDOW_MS / 1000}秒)`,
+    );
+  }
+
+  function handleDisableShortStudyCheckInterval() {
+    setStudyCheckDevOverrideEnabled(false);
+    appendLog('本番の間隔(60分・応答期限10分)に戻した');
+  }
+
+  function handleShowStudyCheckTiming() {
+    const timing = getStudyCheckTiming();
+    appendLog(
+      `今の設定: 短い間隔=${isStudyCheckDevOverrideEnabled()}, 間隔=${timing.intervalMs / 1000}秒, 応答期限=${timing.responseWindowMs / 1000}秒`,
+    );
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>1-4 技術検証</Text>
@@ -271,6 +305,10 @@ export default function DevLockscreenSpikeScreen() {
       <Text style={styles.title}>5-3c-5a 最後にロック画面で止めた計測</Text>
       <Button title="最後にロック画面で止めた計測を読む" onPress={handleReadLastLockscreenStop} />
       <Button title="最後にロック画面で止めた計測を消す" onPress={handleClearLastLockscreenStop} />
+      <Text style={styles.title}>5-3e-2 「勉強中？」確認の間隔(開発ビルド専用)</Text>
+      <Button title="短い間隔(2分・応答期限1分)にする" onPress={handleEnableShortStudyCheckInterval} />
+      <Button title="本番の間隔(60分・応答期限10分)に戻す" onPress={handleDisableShortStudyCheckInterval} />
+      <Button title="今の設定を表示" onPress={handleShowStudyCheckTiming} />
       {log.map((line) => (
         <Text key={line} style={styles.log}>
           {line}

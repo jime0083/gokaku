@@ -1,6 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 
+jest.mock('@/features/account/accountActionService', () => ({
+  accountActionService: {
+    inspectPending: jest.fn(async () => ({
+      checkpoint: null, nativeBlock: null, retryOnly: false,
+    })),
+    perform: jest.fn(),
+    resume: jest.fn(),
+  },
+}), { virtual: true });
+
 /**
  * 概算の決め手(受験: 偏差値・科目数、資格: 選んだ資格)を戻って変えた場合の目標勉強時間の
  * 自動入れ直し(requirements 4-2 の 5, 2026-10-09 決定)を、実際のナビゲーション(renderRouter)で確認する。

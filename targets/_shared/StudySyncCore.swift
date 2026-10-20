@@ -91,6 +91,95 @@ enum StudySyncKeychain {
         try deleteOrThrow(account: StudySyncConstants.keychainAccountDeviceToken)
     }
 
+
+    // Account cleanup専用。呼出し側はaccount操作leaseを保持すること。
+    enum AccountInspection: Equatable {
+        case empty
+        case owned(uid: String, hasToken: Bool)
+    }
+
+    enum AccountClearResult: Equatable {
+        case empty
+        case cleared
+        case otherOwner
+    }
+
+    enum AccountInspectionError: Error, LocalizedError {
+        case readFailed(OSStatus)
+        case invalidData
+        case unknownOwner
+        case invalidExpectedUid
+
+        var errorDescription: String? {
+            switch self {
+            case .readFailed(let status):
+                return "Keychain inspection failed (OSStatus=\(status))"
+            case .invalidData:
+                return "Keychain inspection found invalid data"
+            case .unknownOwner:
+                return "Keychain ownership could not be verified"
+            case .invalidExpectedUid:
+                return "Keychain cleanup requires a valid UID"
+            }
+        }
+    }
+
+    static func inspectForAccountOperation() throws -> AccountInspection {
+        let uid = try readForAccountOperation(
+            account: StudySyncConstants.keychainAccountUid
+        )
+        let token = try readForAccountOperation(
+            account: StudySyncConstants.keychainAccountDeviceToken
+        )
+        guard let uid else {
+            guard token == nil else {
+                throw AccountInspectionError.unknownOwner
+            }
+            return .empty
+        }
+        guard !uid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AccountInspectionError.invalidData
+        }
+        return .owned(uid: uid, hasToken: token != nil)
+    }
+
+    @discardableResult
+    static func clear(expectedUid: String) throws -> AccountClearResult {
+        guard !expectedUid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AccountInspectionError.invalidExpectedUid
+        }
+        switch try inspectForAccountOperation() {
+        case .empty:
+            return .empty
+        case .owned(let uid, _):
+            guard uid == expectedUid else { return .otherOwner }
+            // token削除に失敗した場合はUIDを残し、再試行の所有証明を保持する。
+            try deleteOrThrow(
+                account: StudySyncConstants.keychainAccountDeviceToken
+            )
+            try deleteOrThrow(account: StudySyncConstants.keychainAccountUid)
+            return .cleared
+        }
+    }
+
+    private static func readForAccountOperation(account: String) throws -> String? {
+        var query = baseQuery(account: account)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw AccountInspectionError.readFailed(status)
+        }
+        guard let data = result as? Data,
+            let value = String(data: data, encoding: .utf8)
+        else {
+            throw AccountInspectionError.invalidData
+        }
+        return value
+    }
+
     private static var keychainAccessGroup: String {
         StudySyncConstants.appGroupIdentifier
     }
@@ -150,22 +239,24 @@ struct StudySyncQueueItem: Codable {
 
 /// 送れなかった操作を App Group の UserDefaults に溜めておく簡易キュー
 enum StudySyncQueue {
-    private static var defaults: UserDefaults? {
-        UserDefaults(suiteName: StudySyncConstants.appGroupIdentifier)
+    private static var preferencesID: CFString {
+        StudySyncConstants.appGroupIdentifier as CFString
     }
 
     /// キューに積める件数の上限(StudySyncConstants.queueMaxItems を参照。5-3c-6)
     static var maxItems: Int { StudySyncConstants.queueMaxItems }
 
     /// 末尾に積む。上限(maxItems)を超えたら、最も古いものから捨てる(古い順に並んでいる前提。5-3c-6)
-    static func enqueue(_ item: StudySyncQueueItem) {
-        guard let defaults = defaults, let data = try? JSONEncoder().encode(item) else { return }
-        var items = rawItems()
+    @discardableResult
+    static func enqueue(_ item: StudySyncQueueItem) -> Bool {
+        guard let data = try? JSONEncoder().encode(item),
+            var items = synchronizedRawItems()
+        else { return false }
         items.append(data)
         if items.count > maxItems {
             items.removeFirst(items.count - maxItems)
         }
-        defaults.set(items, forKey: StudySyncConstants.pendingQueueKey)
+        return writeAndVerify(items)
     }
 
     /// キューの内容を全て読み出す(空にはしない。読み込めない項目は捨てる。既存の動き)。
@@ -181,14 +272,14 @@ enum StudySyncQueue {
 
     /// キューの内容を丸ごと置き換える(1回の書き込み)。上限(maxItems)を超えたら、
     /// 最も古いものから捨てる(渡された配列が古い順に並んでいる前提)
-    static func replaceAll(_ items: [StudySyncQueueItem]) {
-        guard let defaults = defaults else { return }
+    @discardableResult
+    static func replaceAll(_ items: [StudySyncQueueItem]) -> Bool {
         var trimmed = items
         if trimmed.count > maxItems {
             trimmed.removeFirst(trimmed.count - maxItems)
         }
         let encoded = trimmed.compactMap { try? JSONEncoder().encode($0) }
-        defaults.set(encoded, forKey: StudySyncConstants.pendingQueueKey)
+        return writeAndVerify(encoded)
     }
 
     static func count() -> Int {
@@ -205,7 +296,31 @@ enum StudySyncQueue {
     }
 
     private static func rawItems() -> [Data] {
-        (defaults?.array(forKey: StudySyncConstants.pendingQueueKey) as? [Data]) ?? []
+        synchronizedRawItems() ?? []
+    }
+
+    /// 呼び出し元の操作lease内で、別プロセスの最後の書き込みを読み直す。
+    /// 同期失敗を空キューとして書き戻さないため、flushにはnilを伝える。
+    static func peekAllSynchronizedUnlocked() -> [StudySyncQueueItem]? {
+        synchronizedRawItems()?.compactMap {
+            try? JSONDecoder().decode(StudySyncQueueItem.self, from: $0)
+        }
+    }
+
+    private static func synchronizedRawItems() -> [Data]? {
+        guard CFPreferencesAppSynchronize(preferencesID) else { return nil }
+        return (CFPreferencesCopyAppValue(
+            StudySyncConstants.pendingQueueKey as CFString, preferencesID
+        ) as? [Data]) ?? []
+    }
+
+    private static func writeAndVerify(_ items: [Data]) -> Bool {
+        guard CFPreferencesAppSynchronize(preferencesID) else { return false }
+        CFPreferencesSetAppValue(
+            StudySyncConstants.pendingQueueKey as CFString, items as CFArray, preferencesID
+        )
+        guard let stored = synchronizedRawItems() else { return false }
+        return stored == items
     }
 }
 
@@ -249,6 +364,19 @@ enum StudySyncAPI {
     /// (捨てる場合は積まない)。戻り値は送れたか(true=200)
     @discardableResult
     static func send(_ event: StudySyncEvent) async -> Bool {
+        do {
+            return try await StudySyncAccountGate().withNormalOperation {
+                await sendUnlocked(event)
+            }
+        } catch {
+            StudySyncLastSyncError.set("native操作を実行できませんでした。再試行してください")
+            return false
+        }
+    }
+
+    /// Intent等が操作全体のleaseを保持している場合だけ使う。ここでは再取得しない。
+    @discardableResult
+    static func sendUnlocked(_ event: StudySyncEvent) async -> Bool {
         let result = await post(event)
         return applyAndEnqueueIfNeeded(event: event, result: result)
     }
@@ -256,13 +384,27 @@ enum StudySyncAPI {
     /// 次の機会(アプリ起動時・次の操作時)に溜まっていたキューを送り直す。
     /// 「トークンを待つ」印の付いた項目は送らない(印の付いていない項目だけが対象。5-3c-6)
     static func flushQueue() async -> Int {
-        await flush { !$0.waitingForToken }
+        do {
+            return try await StudySyncAccountGate().withNormalOperation {
+                await flushUnlocked { !$0.waitingForToken }
+            }
+        } catch {
+            StudySyncLastSyncError.set("native操作を実行できませんでした。再試行してください")
+            return 0
+        }
     }
 
     /// setAuthContext で新しいトークンを保存した直後に呼ぶ(5-3c-6)。その uid の
     /// 「トークンを待つ」印が付いた項目だけを送り直す(ほかの uid の印付き項目はそのまま残す)
     static func flushWaitingForToken(forUid uid: String) async -> Int {
-        await flush { $0.waitingForToken && $0.event.uid == uid }
+        do {
+            return try await StudySyncAccountGate().withNormalOperation {
+                await flushUnlocked { $0.waitingForToken && $0.event.uid == uid }
+            }
+        } catch {
+            StudySyncLastSyncError.set("native操作を実行できませんでした。再試行してください")
+            return 0
+        }
     }
 
     /// キューを(空にせずに)読み出し、`shouldSend` に合う項目だけを古い順に送る。合わない項目は
@@ -272,8 +414,15 @@ enum StudySyncAPI {
     /// 後続の項目は引き続き試みる(その項目限りの失敗のため)。
     /// 計算した新しいキューの内容は、最後に1回だけ書き戻す(StudySyncQueue.replaceAll。
     /// 送信中にプロセスが終了しても、書き戻し前であれば元のキューの内容がそのまま残る)
-    private static func flush(matching shouldSend: (StudySyncQueueItem) -> Bool) async -> Int {
-        let pending = StudySyncQueue.peekAll()
+    // 専用account drainも、withAccountOperationのlease内からだけ呼ぶ。
+    static func flushUnlocked(
+        retainDiscarded: Bool = false,
+        matching shouldSend: (StudySyncQueueItem) -> Bool
+    ) async -> Int {
+        guard let pending = StudySyncQueue.peekAllSynchronizedUnlocked() else {
+            StudySyncLastSyncError.set("nativeキューを同期できませんでした。再試行してください")
+            return 0
+        }
         var sentCount = 0
         var newQueue: [StudySyncQueueItem] = []
         var stopped = false
@@ -298,11 +447,19 @@ enum StudySyncAPI {
                 stopped = true
             case .discard(let reason):
                 StudySyncLastSyncError.set(reason)
-                // 新しいキューに入れない(捨てる)。後続の項目は引き続き試みる
+                if retainDiscarded {
+                    // account専用では未成功項目を失わず、再試行でも未同期を検出する。
+                    newQueue.append(item)
+                    stopped = true
+                }
+                // 通常の既定動作は捨てて後続を引き続き試みる。
             }
         }
 
-        StudySyncQueue.replaceAll(newQueue)
+        guard StudySyncQueue.replaceAll(newQueue) else {
+            StudySyncLastSyncError.set("nativeキューを保存できませんでした。再試行してください")
+            return 0
+        }
         return sentCount
     }
 
@@ -315,11 +472,15 @@ enum StudySyncAPI {
             return true
         case .retry(let reason):
             StudySyncLastSyncError.set(reason)
-            StudySyncQueue.enqueue(StudySyncQueueItem(event: event, waitingForToken: false))
+            if !StudySyncQueue.enqueue(StudySyncQueueItem(event: event, waitingForToken: false)) {
+                StudySyncLastSyncError.set("nativeキューを保存できませんでした。再試行してください")
+            }
             return false
         case .waitingForToken(let reason):
             StudySyncLastSyncError.set(reason)
-            StudySyncQueue.enqueue(StudySyncQueueItem(event: event, waitingForToken: true))
+            if !StudySyncQueue.enqueue(StudySyncQueueItem(event: event, waitingForToken: true)) {
+                StudySyncLastSyncError.set("nativeキューを保存できませんでした。再試行してください")
+            }
             return false
         case .discard(let reason):
             StudySyncLastSyncError.set(reason)
@@ -505,15 +666,29 @@ enum StudySyncCheckNotification {
     /// 予約する通知の識別子(JS の STUDY_CHECK_NOTIFICATION_IDENTIFIER と同じ。固定値なので
     /// 同じ識別子で予約し直すと置き換わる)
     static let notificationIdentifier = "study-check-notification"
-    /// 「勉強中？」確認の間隔(計測開始から60分ごと。requirements 3-2。shared/studyCheck.ts の
+    /// 本番の「勉強中？」確認の間隔(計測開始から60分ごと。requirements 3-2。shared/studyCheck.ts の
     /// STUDY_CHECK_INTERVAL_MS と同じ値)
-    static let firstCheckIntervalSeconds: TimeInterval = 60 * 60
+    static let productionIntervalSeconds: TimeInterval = 60 * 60
+
+    /// 実際に通知の予約で使う間隔。開発ビルド(#if DEBUG)だけ、5-3e-2 の開発用の上書き設定
+    /// (StudySyncSharedState.checkDevOverride)があれば使う。本番ビルドでは必ず
+    /// productionIntervalSeconds を使う(#if DEBUG の外では上書き設定自体を読まない)
+    static var firstCheckIntervalSeconds: TimeInterval {
+        #if DEBUG
+        if let override = StudySyncSharedState.checkDevOverride() {
+            return override.intervalMs / 1000
+        }
+        #endif
+        return productionIntervalSeconds
+    }
 
     /// 計測開始から `firstCheckIntervalSeconds` 後に通知を1件予約する(既存の予約があれば置き換える)
-    static func scheduleFirstCheck() async {
+    static func scheduleFirstCheck(uid: String) async {
+        guard !uid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let content = UNMutableNotificationContent()
         content.title = "勉強中？"
         content.categoryIdentifier = categoryIdentifier
+        content.userInfo["uid"] = uid
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: firstCheckIntervalSeconds,
             repeats: false
@@ -599,11 +774,69 @@ extension StudySyncSharedState {
     @discardableResult
     static func setLastLockscreenStop(_ stop: StudySyncLastLockscreenStop) -> Bool {
         guard let data = try? JSONEncoder().encode(stop) else { return false }
-        defaults?.set(data, forKey: lastLockscreenStopKey)
-        return true
+        // UIDのない通常書込は、同じ値でも以前の所有receiptを引き継がない。
+        do {
+            try StudySyncAccountData.invalidateOwnerReceipt(field: .lastLockscreenStop)
+            defaults?.set(data, forKey: lastLockscreenStopKey)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// callerが保持するnormal lease内で、新しい停止値だけを元sessionのUIDへ帰属させる。
+    @discardableResult
+    static func setLastLockscreenStop(_ stop: StudySyncLastLockscreenStop, uid: String) -> Bool {
+        guard !uid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let data = try? JSONEncoder().encode(stop)
+        else { return false }
+        do {
+            try StudySyncAccountData.invalidateOwnerReceipt(field: .lastLockscreenStop)
+            defaults?.set(data, forKey: lastLockscreenStopKey)
+            try StudySyncAccountData.recordOwnerReceipt(
+                field: .lastLockscreenStop, uid: uid, value: data
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 
     static func clearLastLockscreenStop() {
         defaults?.removeObject(forKey: lastLockscreenStopKey)
     }
+
+    #if DEBUG
+    /// 開発ビルド専用(5-3e-2。problem P-011 (3)): 「勉強中？」確認の間隔・応答期限の上書き設定を置くキー。
+    /// #if DEBUG の外(本番ビルド)ではこのキー自体を読み書きしない
+    private static let checkDevOverrideKey = "studySync.checkDevOverride.v1"
+
+    /// 開発ビルド専用の上書き設定を読む。無ければ nil
+    static func checkDevOverride() -> StudySyncCheckDevOverride? {
+        guard let data = defaults?.data(forKey: checkDevOverrideKey) else { return nil }
+        return try? JSONDecoder().decode(StudySyncCheckDevOverride.self, from: data)
+    }
+
+    /// 開発ビルド専用の上書き設定を書く。nil を渡すと消す(本番の値に戻す)
+    static func setCheckDevOverride(_ override: StudySyncCheckDevOverride?) {
+        guard let defaults else { return }
+        guard let override else {
+            defaults.removeObject(forKey: checkDevOverrideKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(override) else { return }
+        defaults.set(data, forKey: checkDevOverrideKey)
+    }
+    #endif
 }
+
+#if DEBUG
+/// 開発ビルド専用(5-3e-2): 「勉強中？」確認の間隔・応答期限の開発用の上書き設定(ミリ秒)。
+/// App Group に置き、アプリ(JS。src/features/timer/studyCheckDevOverride.ts)・ロック画面から開始した
+/// ときの通知の予約(StudySyncCheckNotification)の両方から読む。#if DEBUG でくくっているため、
+/// 本番ビルド(Release)にはこの型・読み書きの関数自体が存在しない
+struct StudySyncCheckDevOverride: Codable, Equatable {
+    let intervalMs: Double
+    let responseWindowMs: Double
+}
+#endif

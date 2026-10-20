@@ -9,6 +9,10 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { getCurrentUid } from '@/config/firebase';
+import type { AccountOperationLease } from '@/features/account/accountOperationGate';
+import { accountOperationGate } from '@/features/account/accountOperationRuntime';
+
 import { clearAutoStopNotice, loadAutoStopNotice, writeAutoStopNotice, type AutoStopNotice } from './autoStopNotice';
 import { fetchCheckEnabled } from './checkEnabledRepository';
 import { generateLocalId } from './id';
@@ -19,6 +23,7 @@ import {
   reconcileWithLockscreen,
   rememberCheckEnabledSetting,
 } from './lockscreenSync';
+import { getStudyCheckTiming } from './studyCheckDevOverride';
 import {
   addLocalConfirmation,
   findActiveSession,
@@ -81,29 +86,81 @@ function toCheckedSession(session: LocalStudySession): CheckedStudySession {
  * - それ以外: まだ応答していない最初の確認の時刻(先の確認でもよい)を予約する
  * 開始・応答・停止のたびに加え、画面を開いたとき・他のアプリから戻ったときにも呼ぶ
  * (requirements 3-2「予約の状態を、計測中のセッションに合わせて直す」)
+ *
+ * 間隔・応答期限は getStudyCheckTiming で決める(5-3e-2: 開発ビルドで短い値に切り替えている場合はその値。
+ * 本番ビルドは常に shared の既定値=60分・10分)
  */
 async function syncScheduledNotification(
   activeSession: LocalStudySession | null,
   now: number,
+  lease: AccountOperationLease,
 ): Promise<void> {
+  lease.assertCurrentUid();
   if (!activeSession || !activeSession.checkEnabled) {
     await cancelStudyCheckNotification();
+    lease.assertCurrentUid();
     return;
   }
-  const end = resolveSessionEnd(toCheckedSession(activeSession), now);
+  const { intervalMs, responseWindowMs } = getStudyCheckTiming();
+  const end = resolveSessionEnd(toCheckedSession(activeSession), now, intervalMs, responseWindowMs);
   if (end.endReason === 'check_timeout') {
     await cancelStudyCheckNotification();
+    lease.assertCurrentUid();
     return;
   }
-  const next = nextUnansweredCheckAt(toCheckedSession(activeSession));
+  const next = nextUnansweredCheckAt(toCheckedSession(activeSession), intervalMs, responseWindowMs);
   if (next === null) {
     await cancelStudyCheckNotification();
+    lease.assertCurrentUid();
     return;
   }
   // 予約中の通知を取り消してから次を予約する(requirements 3-2「取り消し、次の確認を予約する」)。
   // scheduleStudyCheckNotification は固定の識別子で予約し直すだけでも置き換わるが、取り消しを明示する
   await cancelStudyCheckNotification();
-  await scheduleStudyCheckNotification(next);
+  lease.assertCurrentUid();
+  await scheduleStudyCheckNotification(next, activeSession.uid);
+  lease.assertCurrentUid();
+}
+
+function assertTimerOwner(value: { uid?: string } | null, expectedUid: string): void {
+  if (value?.uid !== undefined && value.uid !== expectedUid) {
+    throw new Error('timer-session-owner-mismatch');
+  }
+}
+
+/** background入口でのみ拒否を受け止める。子処理の完了待ちはtask内で行う。 */
+async function runBackgroundTimerMutation(
+  task: (lease: AccountOperationLease, expectedUid: string) => Promise<void>,
+): Promise<void> {
+  try {
+    const expectedUid = getCurrentUid();
+    if (expectedUid === null) return;
+    await accountOperationGate.runNormal(
+      expectedUid,
+      async (lease) => { await task(lease, expectedUid); },
+    );
+  } catch {
+    // block・認証変更・保存/送信失敗を完了扱いにせず、保存済みデータを保持する。
+    // 次の通常の起動・復帰・操作機会で扱い、この入口から再試行は追加しない。
+  }
+}
+
+/** 保存対象を読み直し、既知UIDだけをcaptured Authと照合する。legacyの所有は補完しない。 */
+async function loadOwnedTimerSessions(
+  expectedUid: string,
+  lease: AccountOperationLease,
+): Promise<LocalStudySession[]> {
+  const stored = await loadLocalSessions();
+  lease.assertCurrentUid();
+  assertTimerOwner(findActiveSession(stored), expectedUid);
+  return stored;
+}
+
+/** 一方が失敗しても、起動済みの子処理が全て終わるまで通常leaseを解放しない。 */
+async function settleTimerChildren(children: Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(children);
+  const failure = results.find((result) => result.status === 'rejected');
+  if (failure?.status === 'rejected') throw failure.reason;
 }
 
 /**
@@ -137,80 +194,116 @@ export function useTimerSession(): TimerSessionState {
    * findPendingCheckAt で、今がどの確認の応答待ちでもない(応答期限を過ぎた・確認前など)場合も
    * 無視する(requirements 3-2, 5-2c)
    */
-  const applyConfirmation = useCallback(async (sessionsSnapshot: LocalStudySession[], now: number) => {
+  const applyConfirmation = useCallback(async (
+    sessionsSnapshot: LocalStudySession[],
+    now: number,
+    lease: AccountOperationLease,
+    expectedUid: string,
+  ) => {
+    lease.assertCurrentUid();
     const target = findActiveSession(sessionsSnapshot);
+    assertTimerOwner(target, expectedUid);
     if (!target) return;
-    if (findPendingCheckAt(toCheckedSession(target), now) === null) {
-      // 応答期限(確認の時刻 + 10分)を過ぎてから届いた応答・どの確認にも対応しない応答は無視する
-      // (requirements 3-2, 5-2c。すでに自動停止の扱い)
+    const { intervalMs, responseWindowMs } = getStudyCheckTiming();
+    if (findPendingCheckAt(toCheckedSession(target), now, intervalMs, responseWindowMs) === null) {
       return;
     }
     const updated = await addLocalConfirmation(now);
+    lease.assertCurrentUid();
     setSessions(updated);
+    sessionsRef.current = updated;
     setTick(Date.now());
-    addNativeConfirmation(now);
-    void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'confirm', clientTimeMs: now });
-    await syncScheduledNotification(findActiveSession(updated), now);
+    addNativeConfirmation(now, expectedUid, target.sessionId);
+    await settleTimerChildren([
+      syncScheduledNotification(findActiveSession(updated), now, lease),
+      enqueueAndSendStudyEvent({
+        sessionId: target.sessionId,
+        action: 'confirm',
+        clientTimeMs: now,
+        ...(target.uid === undefined ? {} : { uid: target.uid }),
+      }, lease),
+    ]);
+    lease.assertCurrentUid();
   }, []);
 
   useEffect(() => {
     let mounted = true;
     configureStudyCheckNotifications();
-
     const responseSubscription = addStudyCheckConfirmListener(({ respondedAtMs }) => {
-      void applyConfirmation(sessionsRef.current, respondedAtMs);
+      void runBackgroundTimerMutation(async (lease, expectedUid) => {
+        const loaded = await loadOwnedTimerSessions(expectedUid, lease);
+        if (!mounted) return;
+        await applyConfirmation(loaded, respondedAtMs, lease, expectedUid);
+      });
     });
 
-    loadLocalSessions().then(async (loaded) => {
+    void runBackgroundTimerMutation(async (lease, expectedUid) => {
+      const loaded = await loadOwnedTimerSessions(expectedUid, lease);
       if (!mounted) return;
       const now = Date.now();
-      // ロック画面での開始・停止を端末の記録に取り込む(5-3c-5b。requirements 3-2)
-      const reconciled = await reconcileWithLockscreen(loaded, now);
+      const reconciled = await reconcileWithLockscreen(loaded, now, expectedUid, lease);
+      lease.assertCurrentUid();
+      assertTimerOwner(findActiveSession(reconciled.sessions), expectedUid);
       if (!mounted) return;
       setSessions(reconciled.sessions);
       sessionsRef.current = reconciled.sessions;
       setTick(Date.now());
       setIsLoading(false);
-
-      // アプリが終了していて通知のアクションから起動された場合の応答(5-2-0 の制約)
       const launchResponse = consumeLastStudyCheckConfirmOnLaunch();
-      if (launchResponse) {
-        void applyConfirmation(reconciled.sessions, launchResponse.respondedAtMs);
-      } else {
-        void syncScheduledNotification(findActiveSession(reconciled.sessions), Date.now());
-      }
+      await settleTimerChildren([
+        (async () => {
+          if (launchResponse) {
+            const latest = await loadOwnedTimerSessions(expectedUid, lease);
+            if (!mounted) return;
+            await applyConfirmation(latest, launchResponse.respondedAtMs, lease, expectedUid);
+          } else {
+            await syncScheduledNotification(findActiveSession(reconciled.sessions), now, lease);
+          }
+        })(),
+        flushStudyEventQueue(lease),
+      ]);
+      lease.assertCurrentUid();
+    }).then(() => {
+      if (mounted) setIsLoading(false);
     });
-    loadAutoStopNotice().then((notice) => {
+
+    void loadAutoStopNotice().then((notice) => {
       if (mounted) setAutoStopNoticeState(notice);
+    }).catch(() => {
+      // 読込失敗時も保存済みnoticeを消去しない。
     });
-    // アプリ起動時に送信待ちの列を再送する(5-1b-2。requirements 3-2)
-    void flushStudyEventQueue();
     return () => {
       mounted = false;
       responseSubscription.remove();
     };
   }, [applyConfirmation]);
 
-  // 他のアプリから戻ったとき(AppState が active)に、無応答の判定をやり直し、送信待ちの列を再送し、
-  // 通知の予約の状態を直す(5-2c。requirements 3-2「予約の状態を、計測中のセッションに合わせて直す」)
   useEffect(() => {
+    let mounted = true;
     const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
-      if (state === 'active') {
-        void (async () => {
-          const now = Date.now();
-          // ロック画面での開始・停止を端末の記録に取り込む(5-3c-5b。requirements 3-2)
-          const reconciled = await reconcileWithLockscreen(sessionsRef.current, now);
-          if (reconciled.changed) {
-            setSessions(reconciled.sessions);
-            sessionsRef.current = reconciled.sessions;
-          }
-          setTick(Date.now());
-          void flushStudyEventQueue();
-          await syncScheduledNotification(findActiveSession(reconciled.sessions), now);
-        })();
-      }
+      if (state !== 'active') return;
+      void runBackgroundTimerMutation(async (lease, expectedUid) => {
+        const loaded = await loadOwnedTimerSessions(expectedUid, lease);
+        if (!mounted) return;
+        const now = Date.now();
+        const reconciled = await reconcileWithLockscreen(loaded, now, expectedUid, lease);
+        lease.assertCurrentUid();
+        assertTimerOwner(findActiveSession(reconciled.sessions), expectedUid);
+        if (!mounted) return;
+        setSessions(reconciled.sessions);
+        sessionsRef.current = reconciled.sessions;
+        setTick(Date.now());
+        await settleTimerChildren([
+          syncScheduledNotification(findActiveSession(reconciled.sessions), now, lease),
+          flushStudyEventQueue(lease),
+        ]);
+        lease.assertCurrentUid();
+      });
     });
-    return () => subscription.remove();
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
   }, []);
 
   const storedActive = findActiveSession(sessions);
@@ -227,67 +320,134 @@ export function useTimerSession(): TimerSessionState {
     if (!storedActive || autoStoppingRef.current) {
       return;
     }
-    const end = resolveSessionEnd(toCheckedSession(storedActive), tick);
+    const { intervalMs, responseWindowMs } = getStudyCheckTiming();
+    const end = resolveSessionEnd(toCheckedSession(storedActive), tick, intervalMs, responseWindowMs);
     if (end.endReason !== 'check_timeout') {
       return;
     }
     autoStoppingRef.current = true;
-    const stoppedAt = end.endAt;
-    const sessionId = storedActive.sessionId;
-    void (async () => {
+    void runBackgroundTimerMutation(async (lease, expectedUid) => {
+      assertTimerOwner(storedActive, expectedUid);
+      const loaded = await loadOwnedTimerSessions(expectedUid, lease);
+      const target = findActiveSession(loaded);
+      if (!target || target.sessionId !== storedActive.sessionId) return;
+      const currentEnd = resolveSessionEnd(toCheckedSession(target), tick, intervalMs, responseWindowMs);
+      if (currentEnd.endReason !== 'check_timeout') return;
+      const stoppedAt = currentEnd.endAt;
       const updated = await stopLocalSession(tick, stoppedAt);
+      lease.assertCurrentUid();
       setSessions(updated);
-      await writeAutoStopNotice(stoppedAt);
-      setAutoStopNoticeState({ stoppedAt });
-      void notifyNativeMeasurementStop(sessionId).catch(() => {});
-      void enqueueAndSendStudyEvent({ sessionId, action: 'stop', clientTimeMs: stoppedAt });
-      await cancelStudyCheckNotification();
-    })().finally(() => {
+      sessionsRef.current = updated;
+      await writeAutoStopNotice(stoppedAt, target.uid);
+      lease.assertCurrentUid();
+      setAutoStopNoticeState({
+        stoppedAt, ...(target.uid === undefined ? {} : { uid: target.uid }),
+      });
+      await settleTimerChildren([
+        cancelStudyCheckNotification(),
+        notifyNativeMeasurementStop(target.sessionId).catch(() => {}),
+        enqueueAndSendStudyEvent({
+          sessionId: target.sessionId, action: 'stop', clientTimeMs: stoppedAt,
+          ...(target.uid === undefined ? {} : { uid: target.uid }),
+        }, lease),
+      ]);
+      lease.assertCurrentUid();
+    }).then(() => {
       autoStoppingRef.current = false;
     });
   }, [storedActive, tick]);
 
-  const effectiveEnd = storedActive ? resolveSessionEnd(toCheckedSession(storedActive), tick) : null;
+  // 5-3e-2: 開発ビルドで短い間隔に切り替えている場合はその値を使う(本番ビルドは常に60分・10分)
+  const { intervalMs: checkIntervalMs, responseWindowMs: checkResponseWindowMs } = getStudyCheckTiming();
+  const effectiveEnd = storedActive
+    ? resolveSessionEnd(toCheckedSession(storedActive), tick, checkIntervalMs, checkResponseWindowMs)
+    : null;
   const isRunning = effectiveEnd !== null && effectiveEnd.endReason !== 'check_timeout';
   const elapsedMs = isRunning && storedActive ? Math.max(0, tick - storedActive.startAt) : 0;
   const pendingCheck =
-    isRunning && storedActive ? findPendingCheckAt(toCheckedSession(storedActive), tick) !== null : false;
+    isRunning && storedActive
+      ? findPendingCheckAt(toCheckedSession(storedActive), tick, checkIntervalMs, checkResponseWindowMs) !== null
+      : false;
 
   const start = useCallback(async () => {
-    const now = Date.now();
-    const sessionId = generateLocalId();
-    // 初めて計測を開始したときにだけ、通知の許可を求める(requirements 3-2)
-    await requestNotificationPermissionOnce();
-    const checkEnabled = await fetchCheckEnabled();
-    rememberCheckEnabledSetting(checkEnabled);
-    const updated = await startLocalSession(now, sessionId, checkEnabled);
-    setSessions(updated);
-    setTick(Date.now());
-    void notifyNativeMeasurementStart(sessionId, now, checkEnabled).catch(() => {});
-    void enqueueAndSendStudyEvent({ sessionId, action: 'start', clientTimeMs: now, checkEnabled });
-    await syncScheduledNotification(findActiveSession(updated), now);
+    const ownerUid = getCurrentUid();
+    if (ownerUid === null) return;
+    await accountOperationGate.runNormal(ownerUid, async (lease) => {
+      const stored = await loadOwnedTimerSessions(ownerUid, lease);
+      if (findActiveSession(stored)) return;
+      const now = Date.now();
+      const sessionId = generateLocalId();
+      await requestNotificationPermissionOnce();
+      lease.assertCurrentUid();
+      const checkEnabled = await fetchCheckEnabled();
+      lease.assertCurrentUid();
+      rememberCheckEnabledSetting(checkEnabled, ownerUid);
+      const updated = await startLocalSession(now, sessionId, checkEnabled, ownerUid);
+      lease.assertCurrentUid();
+      setSessions(updated);
+      sessionsRef.current = updated;
+      setTick(Date.now());
+      await settleTimerChildren([
+        syncScheduledNotification(findActiveSession(updated), now, lease),
+        notifyNativeMeasurementStart(sessionId, now, checkEnabled).catch(() => {}),
+        enqueueAndSendStudyEvent({
+          sessionId, action: 'start', clientTimeMs: now, checkEnabled, uid: ownerUid,
+        }, lease),
+      ]);
+      lease.assertCurrentUid();
+    });
   }, []);
 
   const stop = useCallback(async () => {
-    const now = Date.now();
-    const target = findActiveSession(sessions);
-    const updated = await stopLocalSession(now);
-    setSessions(updated);
-    setTick(Date.now());
-    if (target) {
-      void notifyNativeMeasurementStop(target.sessionId).catch(() => {});
-      void enqueueAndSendStudyEvent({ sessionId: target.sessionId, action: 'stop', clientTimeMs: now });
-    }
-    await cancelStudyCheckNotification();
-  }, [sessions]);
+    const expectedUid = getCurrentUid();
+    if (expectedUid === null) return;
+    await accountOperationGate.runNormal(expectedUid, async (lease) => {
+      const stored = await loadOwnedTimerSessions(expectedUid, lease);
+      const now = Date.now();
+      const target = findActiveSession(stored);
+      const updated = await stopLocalSession(now);
+      lease.assertCurrentUid();
+      setSessions(updated);
+      sessionsRef.current = updated;
+      setTick(Date.now());
+      await settleTimerChildren([
+        cancelStudyCheckNotification(),
+        ...(target ? [
+          notifyNativeMeasurementStop(target.sessionId).catch(() => {}),
+          enqueueAndSendStudyEvent({
+            sessionId: target.sessionId,
+            action: 'stop',
+            clientTimeMs: now,
+            ...(target.uid === undefined ? {} : { uid: target.uid }),
+          }, lease),
+        ] : []),
+      ]);
+      lease.assertCurrentUid();
+    });
+  }, []);
 
   const confirm = useCallback(async () => {
-    await applyConfirmation(sessions, Date.now());
-  }, [sessions, applyConfirmation]);
+    const expectedUid = getCurrentUid();
+    if (expectedUid === null) return;
+    await accountOperationGate.runNormal(expectedUid, async (lease) => {
+      const stored = await loadOwnedTimerSessions(expectedUid, lease);
+      await applyConfirmation(stored, Date.now(), lease, expectedUid);
+      lease.assertCurrentUid();
+    });
+  }, [applyConfirmation]);
 
   const dismissAutoStopNotice = useCallback(async () => {
-    await clearAutoStopNotice();
-    setAutoStopNoticeState(null);
+    const expectedUid = getCurrentUid();
+    if (expectedUid === null) return;
+    await accountOperationGate.runNormal(expectedUid, async (lease) => {
+      await loadOwnedTimerSessions(expectedUid, lease);
+      const notice = await loadAutoStopNotice();
+      lease.assertCurrentUid();
+      assertTimerOwner(notice, expectedUid);
+      await clearAutoStopNotice();
+      lease.assertCurrentUid();
+      setAutoStopNoticeState(null);
+    });
   }, []);
 
   const todayMinutes = isLoading

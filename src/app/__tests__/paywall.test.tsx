@@ -2,6 +2,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { deriveAppAccountToken } from '@shared/index';
 import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 
+jest.mock('@/features/account/accountActionService', () => ({
+  accountActionService: {
+    inspectPending: jest.fn(async () => ({
+      checkpoint: null, nativeBlock: null, retryOnly: false,
+    })),
+    perform: jest.fn(),
+    resume: jest.fn(),
+  },
+}), { virtual: true });
+
 /**
  * 課金画面(4-1b・4-2c)の画面テスト。expo-iap・getCurrentUid・verifyApplePurchase(Cloud Functions 呼び出し層)
  * はモックにし、renderRouter で実際の遷移(購入・復元成功後に仮の次の画面へ進むこと)を確認する

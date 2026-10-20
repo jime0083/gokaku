@@ -15,7 +15,7 @@ import { addDays, jstStartOfDay, toJstDateKey, type CheckedStudySession } from '
  */
 export const TIMER_SESSIONS_STORAGE_KEY = 'timer:sessions:v1';
 
-export type LocalStudySession = CheckedStudySession & { sessionId: string };
+export type LocalStudySession = CheckedStudySession & { sessionId: string; uid?: string };
 
 /**
  * 保存されていた値を検査し、妥当な LocalStudySession に正規化する(妥当でなければ null)。
@@ -44,6 +44,7 @@ function parseSession(value: unknown): LocalStudySession | null {
     sessionId: record.sessionId as string,
     checkEnabled,
     confirmations,
+    ...(typeof record.uid === 'string' ? { uid: record.uid } : {}),
   };
 }
 
@@ -92,17 +93,22 @@ export function findActiveSession(sessions: readonly LocalStudySession[]): Local
  * sessionId は呼び出し側(useTimerSession)が作った値を渡す(サーバーへの送信に使うため)。
  * checkEnabled は計測開始時点の「勉強中？」確認の ON/OFF(5-2b。users.checkEnabled を読んだ値)
  */
-export async function startLocalSession(
+async function startLocalSessionUnserialized(
   now: number,
   sessionId: string,
   checkEnabled: boolean,
+  ownerUid?: string,
 ): Promise<LocalStudySession[]> {
+  if (ownerUid !== undefined && (typeof ownerUid !== 'string' || ownerUid.trim().length === 0)) {
+    throw new Error('local-session-invalid-uid');
+  }
   const sessions = await loadLocalSessions();
   if (findActiveSession(sessions)) {
     return sessions;
   }
   const updated = pruneOldSessions(
-    [...sessions, { startAt: now, stopAt: null, sessionId, checkEnabled, confirmations: [] }],
+    [...sessions, { startAt: now, stopAt: null, sessionId, checkEnabled, confirmations: [],
+      ...(ownerUid === undefined ? {} : { uid: ownerUid }) }],
     now,
   );
   await saveLocalSessions(updated);
@@ -114,7 +120,7 @@ export async function startLocalSession(
  * stopAt(省略時は now)に停止時刻を設定する。無応答による自動停止(5-2b)では、
  * 実際に無応答が確定した確認の時刻(t_k。now より前)を stopAt に渡す
  */
-export async function stopLocalSession(
+async function stopLocalSessionUnserialized(
   now: number,
   stopAt: number = now,
 ): Promise<LocalStudySession[]> {
@@ -137,10 +143,13 @@ export async function stopLocalSession(
  * 端末にすでに計測中のセッションがある場合は何もしない(呼び出し側が「端末が計測していない」ことを
  * 確認してから呼ぶ想定の保険)
  */
-export async function adoptRemoteActiveSession(
+async function adoptRemoteActiveSessionUnserialized(
   now: number,
-  remote: { sessionId: string; startAt: number; checkEnabled: boolean; confirmations: number[] },
+  remote: { sessionId: string; startAt: number; checkEnabled: boolean; confirmations: number[]; uid?: string },
 ): Promise<LocalStudySession[]> {
+  if (remote.uid !== undefined && (typeof remote.uid !== 'string' || remote.uid.trim().length === 0)) {
+    throw new Error('local-session-invalid-uid');
+  }
   const sessions = await loadLocalSessions();
   if (findActiveSession(sessions)) {
     return sessions;
@@ -154,6 +163,7 @@ export async function adoptRemoteActiveSession(
         stopAt: null,
         checkEnabled: remote.checkEnabled,
         confirmations: remote.confirmations,
+        ...(remote.uid === undefined ? {} : { uid: remote.uid }),
       },
     ],
     now,
@@ -166,7 +176,7 @@ export async function adoptRemoteActiveSession(
  * 「勉強中？」確認への応答(5-2b。requirements 3-2)。計測中のセッションの confirmations に
  * 応答時刻(now)を追加する。計測中のセッションがなければ何もしない
  */
-export async function addLocalConfirmation(now: number): Promise<LocalStudySession[]> {
+async function addLocalConfirmationUnserialized(now: number): Promise<LocalStudySession[]> {
   const sessions = await loadLocalSessions();
   if (!findActiveSession(sessions)) {
     return sessions;
@@ -181,4 +191,43 @@ export async function addLocalConfirmation(now: number): Promise<LocalStudySessi
   );
   await saveLocalSessions(updated);
   return updated;
+}
+
+/** JS側の記録更新と旧IDのcleanupを直列化し、新しい開始/停止の書込を失わない。 */
+let sessionMutation: Promise<unknown> = Promise.resolve();
+function mutateSessions<T>(task: () => Promise<T>): Promise<T> {
+  const result = sessionMutation.then(task, task);
+  sessionMutation = result.catch(() => undefined);
+  return result;
+}
+
+/** 置換前に保存したIDsのみ除去。読込await後にも認証・有効目標・停止状態を確認する。 */
+export function removeReplacedLocalSessions(
+  oldSessionIds: readonly string[],
+  guard: () => Promise<void>,
+): Promise<void> {
+  return mutateSessions(async () => {
+    await guard();
+    const sessions = await loadLocalSessions();
+    await guard();
+    const old = new Set(oldSessionIds);
+    const kept = sessions.filter((session) => !old.has(session.sessionId));
+    if (kept.length !== sessions.length) await saveLocalSessions(kept);
+  });
+}
+
+export function startLocalSession(...args: Parameters<typeof startLocalSessionUnserialized>): ReturnType<typeof startLocalSessionUnserialized> {
+  return mutateSessions(() => startLocalSessionUnserialized(...args));
+}
+
+export function stopLocalSession(...args: Parameters<typeof stopLocalSessionUnserialized>): ReturnType<typeof stopLocalSessionUnserialized> {
+  return mutateSessions(() => stopLocalSessionUnserialized(...args));
+}
+
+export function adoptRemoteActiveSession(...args: Parameters<typeof adoptRemoteActiveSessionUnserialized>): ReturnType<typeof adoptRemoteActiveSessionUnserialized> {
+  return mutateSessions(() => adoptRemoteActiveSessionUnserialized(...args));
+}
+
+export function addLocalConfirmation(...args: Parameters<typeof addLocalConfirmationUnserialized>): ReturnType<typeof addLocalConfirmationUnserialized> {
+  return mutateSessions(() => addLocalConfirmationUnserialized(...args));
 }

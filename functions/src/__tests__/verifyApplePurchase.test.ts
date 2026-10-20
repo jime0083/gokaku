@@ -1,9 +1,10 @@
 import jwt from 'jsonwebtoken';
 
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldPath, getFirestore } from 'firebase-admin/firestore';
 
 import { AppStoreServerAPIClient, Environment, SignedDataVerifier } from '@apple/app-store-server-library';
 
+import { markAccountDeletionStarted } from '../account/accountWriteGuard';
 import { deriveAppAccountToken, MONTHLY_PRODUCT_ID } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
 import { RATE_LIMITS, rateLimitDocPath } from '../rateLimit';
@@ -31,12 +32,63 @@ import {
 
 const BUNDLE_ID = 'com.jime0083.gokakuwatch';
 
+
+const appleTestPaths = new Set<string>();
+const appleTestUids = new Set<string>();
+
+beforeAll(() => {
+  if (!process.env.GCLOUD_PROJECT?.startsWith('demo-') || !process.env.FIRESTORE_EMULATOR_HOST) {
+    throw new Error('Apple購入テストはdemoプロジェクトのFirestore Emulatorで実行してください');
+  }
+});
+
+afterEach(async () => {
+  ensureAdminApp();
+  const db = getFirestore();
+  try {
+    const failures: unknown[] = [];
+    await Promise.all([...appleTestUids].map(async (uid) => {
+      try {
+        const counters = await db.collection('rateLimits')
+          .where(FieldPath.documentId(), '>=', `${uid}_purchase-verify_`)
+          .where(FieldPath.documentId(), '<', `${uid}_purchase-verify_\uf8ff`)
+          .get();
+        for (const counter of counters.docs) {
+          appleTestPaths.add(counter.ref.path);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }));
+    const results = await Promise.allSettled([...appleTestPaths].map((path) => db.doc(path).delete()));
+    for (const result of results) {
+      if (result.status === 'rejected') failures.push(result.reason);
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'Appleテストデータの後片付けに失敗しました');
+  } finally {
+    appleTestPaths.clear();
+    appleTestUids.clear();
+  }
+});
+
+async function seedUser(uid: string): Promise<void> {
+  ensureAdminApp();
+  await getFirestore().doc(`users/${uid}`).set({ checkEnabled: true });
+}
+
 function toDerBuffer(base64Der: string): Buffer {
   return Buffer.from(base64Der, 'base64');
 }
 
 function uniqueId(label: string): string {
-  return `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const id = `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (label.startsWith('uid-')) {
+    appleTestUids.add(id);
+    appleTestPaths.add(`users/${id}`);
+  } else if (label.startsWith('otxn-')) {
+    appleTestPaths.add(`appleSubscriptions/${id}`);
+  }
+  return id;
 }
 
 /** 数字だけの一意な transactionId(/^[0-9]+$/ を満たす) */
@@ -132,6 +184,7 @@ function buildDeps(options: {
 describe('verifyApplePurchaseCore', () => {
   it('正常な取引(Production)は active を返し、users.subscription と appleSubscriptions を保存する', async () => {
     const uid = uniqueId('uid-ok');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-ok');
     const transactionId = uniqueTransactionId();
     const futureExpiresDate = Date.now() + 1000 * 60 * 60 * 24 * 30;
@@ -168,10 +221,15 @@ describe('verifyApplePurchaseCore', () => {
 
     const ownerDoc = await getFirestoreDoc(`appleSubscriptions/${originalTransactionId}`);
     expect(ownerDoc).toMatchObject({ uid, productId: MONTHLY_PRODUCT_ID, environment: 'PRODUCTION' });
+    expect(userDoc?.checkEnabled).toBe(true);
+    // 同じ持ち主による再確認でも所有情報(createdAtを含む)は変えない。
+    await expect(verifyApplePurchaseCore(uid, transactionId, deps)).resolves.toEqual(result);
+    expect(await getFirestoreDoc(`appleSubscriptions/${originalTransactionId}`)).toEqual(ownerDoc);
   });
 
   it('Production では見つからず(404 + TRANSACTION_ID_NOT_FOUND)、Sandbox で見つかる', async () => {
     const uid = uniqueId('uid-sandbox');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-sandbox');
     const transactionId = uniqueTransactionId();
     const futureExpiresDate = Date.now() + 1000 * 60 * 60 * 24 * 30;
@@ -204,6 +262,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('署名が不正(改ざん)だと invalid-transaction', async () => {
     const uid = uniqueId('uid-tamper');
+    await seedUser(uid);
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
       bundleId: BUNDLE_ID,
@@ -228,6 +287,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('appAccountToken が違うと invalid-transaction', async () => {
     const uid = uniqueId('uid-token-mismatch');
+    await seedUser(uid);
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
       bundleId: BUNDLE_ID,
@@ -247,6 +307,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('製品IDが違うと invalid-transaction', async () => {
     const uid = uniqueId('uid-bad-product');
+    await seedUser(uid);
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
       bundleId: BUNDLE_ID,
@@ -266,7 +327,9 @@ describe('verifyApplePurchaseCore', () => {
 
   it('別のアカウントが持ち主の購入は owned-by-other-account', async () => {
     const ownerUid = uniqueId('uid-owner');
+    await seedUser(ownerUid);
     const otherUid = uniqueId('uid-other');
+    await seedUser(otherUid);
     const originalTransactionId = uniqueId('otxn-owned');
     const futureExpiresDate = Date.now() + 1000 * 60 * 60 * 24 * 30;
 
@@ -321,6 +384,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('期限切れの取引は expired を返す(エラーではない)', async () => {
     const uid = uniqueId('uid-expired');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-expired');
     const transactionId = uniqueTransactionId();
     const pastExpiresDate = Date.now() - 1000 * 60 * 60 * 24;
@@ -350,6 +414,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('取り消された(revocationDate あり)取引は、取り消された時点を expiresAt にして expired を返す', async () => {
     const uid = uniqueId('uid-revoked');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-revoked');
     const transactionId = uniqueTransactionId();
     const futureExpiresDate = Date.now() + 1000 * 60 * 60 * 24 * 30; // 元の期限はまだ先
@@ -378,6 +443,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('通信エラー(Apple API への到達不可)は verification-unavailable', async () => {
     const uid = uniqueId('uid-network-error');
+    await seedUser(uid);
     const transactionId = uniqueTransactionId();
 
     const deps = buildDeps({ production: { transactionInfo: { throws: new Error('network down') } } });
@@ -389,6 +455,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('getAllSubscriptionStatuses の応答に該当 originalTransactionId の取引がないと verification-unavailable(users.subscription は保存されない)', async () => {
     const uid = uniqueId('uid-status-no-match');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-status-no-match');
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
@@ -419,6 +486,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('getAllSubscriptionStatuses の応答の取引一覧が空だと verification-unavailable(users.subscription は保存されない)', async () => {
     const uid = uniqueId('uid-status-empty');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-status-empty');
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
@@ -448,6 +516,7 @@ describe('verifyApplePurchaseCore', () => {
 
   it('getAllSubscriptionStatuses が失敗しても verification-unavailable', async () => {
     const uid = uniqueId('uid-status-error');
+    await seedUser(uid);
     const originalTransactionId = uniqueId('otxn-status-error');
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
@@ -483,7 +552,10 @@ describe('handleVerifyApplePurchaseRequest', () => {
 
   it('transactionId が数字の文字列でないと HttpsError(invalid-argument)', async () => {
     const deps = buildDeps({});
-    const authData = { uid: 'uid-1', token: {} as never, rawToken: '' };
+    const uid = uniqueId('uid-handler-input');
+    await seedUser(uid);
+    await seedUser(uid);
+    const authData = { uid, token: {} as never, rawToken: '' };
 
     const error = await handleVerifyApplePurchaseRequest({ auth: authData, data: { transactionId: 'not-a-number' } }, deps).catch((e) => e);
     expect(error).toMatchObject({ code: 'invalid-argument' });
@@ -491,6 +563,7 @@ describe('handleVerifyApplePurchaseRequest', () => {
 
   it('不正な取引(invalid-transaction)は HttpsError(failed-precondition, details.reason)', async () => {
     const uid = uniqueId('uid-handler-invalid');
+    await seedUser(uid);
     const transactionId = uniqueTransactionId();
     const signed = signTestTransaction({
       bundleId: BUNDLE_ID,
@@ -509,6 +582,7 @@ describe('handleVerifyApplePurchaseRequest', () => {
 
   it('通信エラーは HttpsError(unavailable, details.reason)', async () => {
     const uid = uniqueId('uid-handler-unavailable');
+    await seedUser(uid);
     const transactionId = uniqueTransactionId();
     const deps = buildDeps({ production: { transactionInfo: { throws: new Error('network down') } } });
     const authData = { uid, token: {} as never, rawToken: '' };
@@ -520,6 +594,7 @@ describe('handleVerifyApplePurchaseRequest', () => {
   describe('呼び出し回数の制限(5-3b-2。requirements 3-2「大量の呼び出しへの対策」)', () => {
     async function seedRateLimitCount(uid: string, nowMs: number, count: number): Promise<void> {
       ensureAdminApp();
+      await seedUser(uid);
       await getFirestore().doc(rateLimitDocPath(uid, 'purchase-verify', nowMs)).set({ count });
     }
 
@@ -566,5 +641,56 @@ describe('handleVerifyApplePurchaseRequest', () => {
       // 上限はもう引っかからない(別のエラー=verification-unavailable になる)
       expect(error).toMatchObject({ code: 'unavailable', details: { reason: 'verification-unavailable' } });
     });
+  });
+});
+
+describe('P-055 Apple購入の所有claim', () => {
+  it.each(['deleting', 'missing'] as const)('%sの親には所有情報を再作成しない', async (reason) => {
+    const uid = uniqueId('uid-claim-blocked');
+    const otherUid = uniqueId('uid-claim-unrelated');
+    const originalTransactionId = uniqueId('otxn-claim-blocked');
+    const otherOriginalTransactionId = uniqueId('otxn-claim-unrelated');
+    const transactionId = uniqueTransactionId();
+    await seedUser(uid);
+    await seedUser(otherUid);
+    const db = getFirestore();
+    const userRef = db.doc(`users/${uid}`);
+    const ownerRef = db.doc(`appleSubscriptions/${originalTransactionId}`);
+    const otherOwnerRef = db.doc(`appleSubscriptions/${otherOriginalTransactionId}`);
+    await otherOwnerRef.set({ uid: otherUid, productId: MONTHLY_PRODUCT_ID, environment: 'PRODUCTION' });
+    const beforeOtherUser = (await db.doc(`users/${otherUid}`).get()).data();
+    const beforeOtherOwner = (await otherOwnerRef.get()).data();
+    const signed = signTestTransaction({
+      bundleId: BUNDLE_ID,
+      environment: Environment.PRODUCTION,
+      transactionId,
+      originalTransactionId,
+      productId: MONTHLY_PRODUCT_ID,
+      appAccountToken: deriveAppAccountToken(uid),
+      expiresDate: Date.now() + 60_000,
+    });
+    const client: AppleApiClientLike = {
+      getTransactionInfo: jest.fn(async () => {
+        await markAccountDeletionStarted(uid);
+        await ownerRef.delete();
+        if (reason === 'missing') {
+          await userRef.delete();
+        }
+        return { signedTransactionInfo: signed };
+      }),
+      getAllSubscriptionStatuses: jest.fn(async () => ({ data: [] })),
+    };
+    await expect(verifyApplePurchaseCore(uid, transactionId, {
+      createApiClient: () => client,
+      createVerifier: createTestVerifier,
+      now: () => Date.now(),
+    })).rejects.toMatchObject({ name: 'AccountWriteBlockedError', reason });
+    expect(client.getAllSubscriptionStatuses).not.toHaveBeenCalled();
+    expect((await ownerRef.get()).exists).toBe(false);
+    expect((await userRef.get()).data()).toEqual(reason === 'missing' ? undefined : {
+      checkEnabled: true, deletionInProgress: true,
+    });
+    expect((await db.doc(`users/${otherUid}`).get()).data()).toEqual(beforeOtherUser);
+    expect((await otherOwnerRef.get()).data()).toEqual(beforeOtherOwner);
   });
 });

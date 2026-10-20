@@ -86,13 +86,17 @@ export async function isNotificationPermissionGranted(): Promise<boolean> {
 }
 
 /** 確認の時刻(checkAtMs)にローカル通知を1件予約する(既存の予約があれば置き換える) */
-export async function scheduleStudyCheckNotification(checkAtMs: number): Promise<void> {
+export async function scheduleStudyCheckNotification(checkAtMs: number, ownerUid?: string): Promise<void> {
+  if (ownerUid !== undefined && (typeof ownerUid !== 'string' || ownerUid.trim().length === 0)) {
+    throw new Error('study-check-notification-invalid-uid');
+  }
   const seconds = Math.max(1, Math.round((checkAtMs - Date.now()) / 1000));
   await Notifications.scheduleNotificationAsync({
     identifier: STUDY_CHECK_NOTIFICATION_IDENTIFIER,
     content: {
       title: '勉強中？',
       categoryIdentifier: STUDY_CHECK_CATEGORY_IDENTIFIER,
+      ...(ownerUid === undefined ? {} : { data: { uid: ownerUid } }),
     },
     trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds },
   });

@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
+import { AccountActionBoundary } from '@/features/account/AccountActionBoundary';
 import { useDeviceTokenSync } from '@/features/deviceToken/useDeviceTokenSync';
 
 export default function RootLayout() {
@@ -9,9 +10,9 @@ export default function RootLayout() {
   useDeviceTokenSync();
 
   return (
-    <>
+    <AccountActionBoundary>
       <Stack screenOptions={{ headerShown: false }} />
       <StatusBar style="dark" />
-    </>
+    </AccountActionBoundary>
   );
 }

@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, setLogLevel } from 'firebase/firestore';
+import { doc, getDoc, setDoc, setLogLevel, writeBatch } from 'firebase/firestore';
 
 import { addDays, toJstDateKey } from '@shared/index';
 
@@ -94,18 +94,18 @@ describe('デフォルト拒否', () => {
 
 // Phase 3-5c-1: users/{uid} のうち本人が書ける項目(activeGoalId・設定系)の書き込み許可(requirements 5)
 describe('users/{uid} の書き込み(本人の目標・設定)', () => {
-  it('本人は activeGoalId を更新できる', async () => {
+  it('本人でも既存の不完全なgoalへactiveGoalIdを切り替えられない', async () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
-    await assertSucceeds(
+    await assertFails(
       setDoc(doc(db, 'users', OWNER_UID), { activeGoalId: 'goal-1' }, { merge: true }),
     );
   });
 
-  it('本人は activeGoalId を null に戻せる', async () => {
+  it('本人でも未設定activeGoalIdをnullへ変更できない', async () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
-    await assertSucceeds(
+    await assertFails(
       setDoc(doc(db, 'users', OWNER_UID), { activeGoalId: null }, { merge: true }),
     );
   });
@@ -178,6 +178,19 @@ describe('users/{uid} の書き込み(本人の目標・設定)', () => {
 });
 
 // Phase 3-5c-1: goals/{goalId} の新規作成(requirements 4-2・4-3・5、mokuhyo.txt 1 の範囲チェック)
+
+async function createWithPointer(db: ReturnType<ReturnType<RulesTestEnvironment['authenticatedContext']>['firestore']>, owner: string, id: string, data: Record<string, unknown>) {
+  // Read fixture metadata with admin privileges so non-owner tests reach the denied commit.
+  let current: unknown;
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    current = (await getDoc(doc(context.firestore(), 'users', owner))).data()?.activeGoalId;
+  });
+  const batch = writeBatch(db);
+  if (typeof current === 'string') batch.update(doc(db, 'users', owner, 'goals', current), { status: 'replaced' });
+  batch.set(doc(db, 'users', owner, 'goals', id), data);
+  batch.update(doc(db, 'users', owner), { activeGoalId: id });
+  return batch.commit();
+}
 describe('users/{uid}/goals/{goalId} の作成', () => {
   // ルール(firestore.rules)は startDate がサーバー(request.time)の日本時間の「今日」と一致することを要求する(problem P-021)。
   // そのためテストの startDate も実行時点の今日を使う(固定の過去・未来日付だと常に拒否されてしまう)
@@ -219,20 +232,20 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
   it('本人は有効な受験の goal を作成できる', async () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
-    await assertSucceeds(setDoc(doc(db, 'users', OWNER_UID, 'goals', 'exam-goal'), validExamGoal));
+    await assertSucceeds(createWithPointer(db, OWNER_UID, 'exam-goal', validExamGoal));
   });
 
   it('本人は有効な資格(一覧)の goal を作成できる', async () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
-    await assertSucceeds(setDoc(doc(db, 'users', OWNER_UID, 'goals', 'cert-goal'), validCertGoal));
+    await assertSucceeds(createWithPointer(db, OWNER_UID, 'cert-goal', validCertGoal));
   });
 
   it('本人は有効な資格(その他)の goal を作成できる', async () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'cert-other-goal'), {
+      createWithPointer(db, OWNER_UID, 'cert-other-goal', {
         ...validCertGoal,
         certId: 'other',
         certOtherName: '自作資格',
@@ -245,14 +258,14 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'min-goal'), {
+      createWithPointer(db, OWNER_UID, 'min-goal', {
         ...validExamGoal,
         targetDeviation: 25.0,
         currentDeviation: 25.0,
       }),
     );
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'max-goal'), {
+      createWithPointer(db, OWNER_UID, 'max-goal', {
         ...validExamGoal,
         targetDeviation: 80.0,
         currentDeviation: 25.0,
@@ -260,11 +273,32 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     );
   });
 
+  it.each(['targetDeviation', 'currentDeviation'])('P-048: 新規作成の%sは0.1刻み以外を原子的に拒否する', async (field) => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const userRef = doc(db, 'users', OWNER_UID);
+    const before = (await getDoc(userRef)).data();
+    for (const value of [60.05, 60.00001]) {
+      const id = `invalid-${field}-${String(value).replace('.', '-')}`;
+      await assertFails(createWithPointer(db, OWNER_UID, id, { ...validExamGoal, [field]: value }));
+      expect((await getDoc(userRef)).data()).toEqual(before);
+      expect((await getDoc(doc(db, 'users', OWNER_UID, 'goals', id))).exists()).toBe(false);
+    }
+  });
+
+  it.each([25, 80, 60.1, 60.1000005])('P-048: 新規作成で両偏差値の正常刻み・許容差%sを受け入れる', async (value) => {
+    const db = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const id = 'valid-deviations';
+    const goal = { ...validExamGoal, targetDeviation: value, currentDeviation: value };
+    await assertSucceeds(createWithPointer(db, OWNER_UID, id, goal));
+    expect((await getDoc(doc(db, 'users', OWNER_UID, 'goals', id))).data()).toEqual(goal);
+    expect((await getDoc(doc(db, 'users', OWNER_UID))).data()?.activeGoalId).toBe(id);
+  });
+
   it('偏差値が上限を1つ超える(80.1)だと作成できない', async () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal', {
         ...validExamGoal,
         targetDeviation: 80.1,
       }),
@@ -275,7 +309,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal', {
         ...validExamGoal,
         targetDeviation: 24.9,
       }),
@@ -286,10 +320,10 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'min-goal'), { ...validExamGoal, subjectCount: 1 }),
+      createWithPointer(db, OWNER_UID, 'min-goal', { ...validExamGoal, subjectCount: 1 }),
     );
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'max-goal'), { ...validExamGoal, subjectCount: 8 }),
+      createWithPointer(db, OWNER_UID, 'max-goal', { ...validExamGoal, subjectCount: 8 }),
     );
   });
 
@@ -297,10 +331,10 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-0'), { ...validExamGoal, subjectCount: 0 }),
+      createWithPointer(db, OWNER_UID, 'bad-goal-0', { ...validExamGoal, subjectCount: 0 }),
     );
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-9'), { ...validExamGoal, subjectCount: 9 }),
+      createWithPointer(db, OWNER_UID, 'bad-goal-9', { ...validExamGoal, subjectCount: 9 }),
     );
   });
 
@@ -308,10 +342,10 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'min-goal'), { ...validExamGoal, targetHours: 1 }),
+      createWithPointer(db, OWNER_UID, 'min-goal', { ...validExamGoal, targetHours: 1 }),
     );
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'max-goal'), { ...validExamGoal, targetHours: 20_000 }),
+      createWithPointer(db, OWNER_UID, 'max-goal', { ...validExamGoal, targetHours: 20_000 }),
     );
   });
 
@@ -319,10 +353,10 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-0'), { ...validExamGoal, targetHours: 0 }),
+      createWithPointer(db, OWNER_UID, 'bad-goal-0', { ...validExamGoal, targetHours: 0 }),
     );
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-20001'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal-20001', {
         ...validExamGoal,
         targetHours: 20_001,
       }),
@@ -333,14 +367,14 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'min-goal'), {
+      createWithPointer(db, OWNER_UID, 'min-goal', {
         ...validExamGoal,
         minDailyMinutes: 10,
         goalDailyMinutes: 10,
       }),
     );
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'max-goal'), {
+      createWithPointer(db, OWNER_UID, 'max-goal', {
         ...validExamGoal,
         minDailyMinutes: 960,
         goalDailyMinutes: 960,
@@ -352,21 +386,21 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-0'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal-0', {
         ...validExamGoal,
         minDailyMinutes: 0,
         goalDailyMinutes: 10,
       }),
     );
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-970'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal-970', {
         ...validExamGoal,
         minDailyMinutes: 970,
         goalDailyMinutes: 970,
       }),
     );
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-65'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal-65', {
         ...validExamGoal,
         minDailyMinutes: 65,
       }),
@@ -377,7 +411,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'equal-goal'), {
+      createWithPointer(db, OWNER_UID, 'equal-goal', {
         ...validExamGoal,
         minDailyMinutes: 60,
         goalDailyMinutes: 60,
@@ -389,7 +423,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal', {
         ...validExamGoal,
         minDailyMinutes: 120,
         goalDailyMinutes: 60,
@@ -401,10 +435,10 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'min-goal'), { ...validExamGoal, university: 'あ' }),
+      createWithPointer(db, OWNER_UID, 'min-goal', { ...validExamGoal, university: 'あ' }),
     );
     await assertSucceeds(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'max-goal'), {
+      createWithPointer(db, OWNER_UID, 'max-goal', {
         ...validExamGoal,
         university: 'あ'.repeat(50),
       }),
@@ -415,10 +449,10 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-0'), { ...validExamGoal, university: '' }),
+      createWithPointer(db, OWNER_UID, 'bad-goal-0', { ...validExamGoal, university: '' }),
     );
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-51'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal-51', {
         ...validExamGoal,
         university: 'あ'.repeat(51),
       }),
@@ -429,7 +463,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), { ...validExamGoal, type: 'other' }),
+      createWithPointer(db, OWNER_UID, 'bad-goal', { ...validExamGoal, type: 'other' }),
     );
   });
 
@@ -437,7 +471,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), { ...validExamGoal, status: 'finished' }),
+      createWithPointer(db, OWNER_UID, 'bad-goal', { ...validExamGoal, status: 'finished' }),
     );
   });
 
@@ -445,7 +479,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
     const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
     await assertFails(
-      setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+      createWithPointer(db, OWNER_UID, 'bad-goal', {
         ...validCertGoal,
         university: '合格大学',
       }),
@@ -458,7 +492,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal', {
           ...validExamGoal,
           examDate: 'not-a-date',
         }),
@@ -469,7 +503,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal', {
           ...validExamGoal,
           startDate: '2027-02-30',
         }),
@@ -480,7 +514,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal', {
           ...validExamGoal,
           examDate: '2027-02-30',
         }),
@@ -491,13 +525,13 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-same'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal-same', {
           ...validExamGoal,
           examDate: TODAY_KEY,
         }),
       );
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal-before'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal-before', {
           ...validExamGoal,
           examDate: YESTERDAY_KEY,
         }),
@@ -508,7 +542,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal', {
           ...validExamGoal,
           startDate: YESTERDAY_KEY,
           examDate: TODAY_KEY,
@@ -521,7 +555,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const tomorrowKey = addDays(TODAY_KEY, 1);
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal', {
           ...validExamGoal,
           startDate: tomorrowKey,
           examDate: addDays(tomorrowKey, 1),
@@ -533,7 +567,7 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'bad-goal'), {
+        createWithPointer(db, OWNER_UID, 'bad-goal', {
           ...validExamGoal,
           startDate: FAR_FUTURE_KEY,
           examDate: addDays(FAR_FUTURE_KEY, 1),
@@ -546,14 +580,14 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const tomorrowKey = addDays(TODAY_KEY, 1);
 
       await assertSucceeds(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'ok-goal-tomorrow'), {
+        createWithPointer(db, OWNER_UID, 'ok-goal-tomorrow', {
           ...validExamGoal,
           startDate: TODAY_KEY,
           examDate: tomorrowKey,
         }),
       );
       await assertSucceeds(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'ok-goal-far'), {
+        createWithPointer(db, OWNER_UID, 'ok-goal-far', {
           ...validExamGoal,
           startDate: TODAY_KEY,
           examDate: FAR_FUTURE_EXAM_DATE,
@@ -568,21 +602,21 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
 
       // 2028年はうるう年(4で割れて100で割れない) → 実在する日付
       await assertSucceeds(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'leap-2028'), {
+        createWithPointer(db, OWNER_UID, 'leap-2028', {
           ...validExamGoal,
           examDate: '2028-02-29',
         }),
       );
       // 2027年はうるう年でない → 2月29日は実在しない
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'leap-2027'), {
+        createWithPointer(db, OWNER_UID, 'leap-2027', {
           ...validExamGoal,
           examDate: '2027-02-29',
         }),
       );
       // 2100年は100で割れるが400で割れない(西暦の century rule) → うるう年でない
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'leap-2100'), {
+        createWithPointer(db, OWNER_UID, 'leap-2100', {
           ...validExamGoal,
           examDate: '2100-02-29',
         }),
@@ -594,21 +628,21 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
 
       // 4月は30日まで
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'april-31'), {
+        createWithPointer(db, OWNER_UID, 'april-31', {
           ...validExamGoal,
           examDate: '2027-04-31',
         }),
       );
       // 6月は30日まで
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'june-31'), {
+        createWithPointer(db, OWNER_UID, 'june-31', {
           ...validExamGoal,
           examDate: '2027-06-31',
         }),
       );
       // 12月は31日まである
       await assertSucceeds(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'dec-31'), {
+        createWithPointer(db, OWNER_UID, 'dec-31', {
           ...validExamGoal,
           examDate: '2027-12-31',
         }),
@@ -619,13 +653,13 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'month-00'), {
+        createWithPointer(db, OWNER_UID, 'month-00', {
           ...validExamGoal,
           examDate: '2027-00-15',
         }),
       );
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'month-13'), {
+        createWithPointer(db, OWNER_UID, 'month-13', {
           ...validExamGoal,
           examDate: '2027-13-15',
         }),
@@ -636,13 +670,13 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'day-00'), {
+        createWithPointer(db, OWNER_UID, 'day-00', {
           ...validExamGoal,
           examDate: '2027-05-00',
         }),
       );
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'day-32'), {
+        createWithPointer(db, OWNER_UID, 'day-32', {
           ...validExamGoal,
           examDate: '2027-05-32',
         }),
@@ -653,19 +687,19 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'format-short'), {
+        createWithPointer(db, OWNER_UID, 'format-short', {
           ...validExamGoal,
           examDate: '2027-2-1',
         }),
       );
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'format-nodash'), {
+        createWithPointer(db, OWNER_UID, 'format-nodash', {
           ...validExamGoal,
           examDate: '20270201',
         }),
       );
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'format-time'), {
+        createWithPointer(db, OWNER_UID, 'format-time', {
           ...validExamGoal,
           examDate: '2027-02-01T00:00',
         }),
@@ -676,13 +710,13 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
       const db = testEnv.authenticatedContext(OWNER_UID).firestore();
 
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'non-string-number'), {
+        createWithPointer(db, OWNER_UID, 'non-string-number', {
           ...validExamGoal,
           examDate: 20_270_201,
         }),
       );
       await assertFails(
-        setDoc(doc(db, 'users', OWNER_UID, 'goals', 'non-string-bool'), {
+        createWithPointer(db, OWNER_UID, 'non-string-bool', {
           ...validExamGoal,
           examDate: true,
         }),
@@ -693,13 +727,13 @@ describe('users/{uid}/goals/{goalId} の作成', () => {
   it('他人は goals を作成できない', async () => {
     const db = testEnv.authenticatedContext(OTHER_UID).firestore();
 
-    await assertFails(setDoc(doc(db, 'users', OWNER_UID, 'goals', 'exam-goal'), validExamGoal));
+    await assertFails(createWithPointer(db, OWNER_UID, 'exam-goal', validExamGoal));
   });
 
   it('未ログインは goals を作成できない', async () => {
     const db = testEnv.unauthenticatedContext().firestore();
 
-    await assertFails(setDoc(doc(db, 'users', OWNER_UID, 'goals', 'exam-goal'), validExamGoal));
+    await assertFails(createWithPointer(db, OWNER_UID, 'exam-goal', validExamGoal));
   });
 });
 

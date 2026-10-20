@@ -11,9 +11,10 @@ export const STUDY_EVENT_QUEUE_STORAGE_KEY = 'timer:studyEventQueue:v1';
  * 'start' だけ checkEnabled(計測開始時点の「勉強中？」確認の ON/OFF。5-2b)を必須で持つ
  * (recordStudyEvent が action が 'start' のときだけ checkEnabled を必須で受け取るため)
  */
-export type PendingStudyEvent =
+export type PendingStudyEvent = { uid?: string } & (
   | { sessionId: string; action: 'start'; clientTimeMs: number; idempotencyKey: string; checkEnabled: boolean }
-  | { sessionId: string; action: 'stop' | 'confirm'; clientTimeMs: number; idempotencyKey: string };
+  | { sessionId: string; action: 'stop' | 'confirm'; clientTimeMs: number; idempotencyKey: string }
+);
 
 function isValidPendingEvent(value: unknown): value is PendingStudyEvent {
   if (typeof value !== 'object' || value === null) return false;
@@ -74,17 +75,44 @@ export function loadStudyEventQueue(): Promise<PendingStudyEvent[]> {
 }
 
 /** 列の末尾に操作を追加する */
-export function appendStudyEvent(event: PendingStudyEvent): Promise<void> {
+export function appendStudyEvent(
+  event: PendingStudyEvent,
+  ownerUid?: string,
+  assertCurrentUid?: () => void,
+): Promise<void> {
   return runExclusive(async () => {
+    // 新規eventだけに付与する。既存queueやlegacyを現在UIDへ追認しない。
+    for (const uid of [event.uid, ownerUid]) {
+      if (uid !== undefined && (typeof uid !== 'string' || uid.trim().length === 0)) {
+        throw new Error('study-event-invalid-uid');
+      }
+    }
+    if (event.uid !== undefined && ownerUid !== undefined && event.uid !== ownerUid) {
+      throw new Error('study-event-owner-mismatch');
+    }
+    const ownedEvent = event.uid === undefined && ownerUid !== undefined
+      ? { ...event, uid: ownerUid } : event;
+    assertCurrentUid?.();
     const queue = await readQueue();
-    await writeQueue([...queue, event]);
+    assertCurrentUid?.();
+    await writeQueue([...queue, ownedEvent]);
+    assertCurrentUid?.();
   });
 }
 
-/** idempotencyKey が一致する操作を列から取り除く(送信できた・送り直しても成功しない場合に呼ぶ) */
-export function removeStudyEvent(idempotencyKey: string): Promise<void> {
+/** key一致を除去する。UID指定時はその所有分だけ除去し、別UID・legacyを保持する。 */
+export function removeStudyEvent(
+  idempotencyKey: string,
+  expectedUid?: string,
+  assertCurrentUid?: () => void,
+): Promise<void> {
   return runExclusive(async () => {
+    assertCurrentUid?.();
     const queue = await readQueue();
-    await writeQueue(queue.filter((event) => event.idempotencyKey !== idempotencyKey));
+    assertCurrentUid?.();
+    await writeQueue(queue.filter((event) => event.idempotencyKey !== idempotencyKey || (
+      expectedUid !== undefined && event.uid !== expectedUid
+    )));
+    assertCurrentUid?.();
   });
 }

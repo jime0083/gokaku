@@ -89,3 +89,6 @@ jest.mock('expo-notifications', () => ({
   clearLastNotificationResponse: jest.fn(),
   SchedulableTriggerInputTypes: { DATE: 'date', TIME_INTERVAL: 'timeInterval' },
 }));
+
+// Subscription management uses native StoreKit UI; unit/router tests never open it.
+jest.mock('expo-iap', () => ({ showManageSubscriptionsIOS: jest.fn().mockResolvedValue([]) }));

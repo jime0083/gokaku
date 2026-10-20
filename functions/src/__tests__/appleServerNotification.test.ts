@@ -1,7 +1,12 @@
 import jwt from 'jsonwebtoken';
 
+import { FieldPath, getFirestore } from 'firebase-admin/firestore';
+
+import { ensureAdminApp } from '../firebaseAdmin';
+
 import { AppStoreServerAPIClient, Environment, NotificationTypeV2, SignedDataVerifier } from '@apple/app-store-server-library';
 
+import { markAccountDeletionStarted } from '../account/accountWriteGuard';
 import { deriveAppAccountToken, MONTHLY_PRODUCT_ID } from '../domain';
 import {
   APPLE_SERVER_NOTIFICATION_MAX_BODY_BYTES,
@@ -33,12 +38,63 @@ import {
 const BUNDLE_ID = 'com.jime0083.gokakuwatch';
 const APP_APPLE_ID = 1234;
 
+
+const appleTestPaths = new Set<string>();
+const appleTestUids = new Set<string>();
+
+beforeAll(() => {
+  if (!process.env.GCLOUD_PROJECT?.startsWith('demo-') || !process.env.FIRESTORE_EMULATOR_HOST) {
+    throw new Error('Apple購入テストはdemoプロジェクトのFirestore Emulatorで実行してください');
+  }
+});
+
+afterEach(async () => {
+  ensureAdminApp();
+  const db = getFirestore();
+  try {
+    const failures: unknown[] = [];
+    await Promise.all([...appleTestUids].map(async (uid) => {
+      try {
+        const counters = await db.collection('rateLimits')
+          .where(FieldPath.documentId(), '>=', `${uid}_purchase-verify_`)
+          .where(FieldPath.documentId(), '<', `${uid}_purchase-verify_\uf8ff`)
+          .get();
+        for (const counter of counters.docs) {
+          appleTestPaths.add(counter.ref.path);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }));
+    const results = await Promise.allSettled([...appleTestPaths].map((path) => db.doc(path).delete()));
+    for (const result of results) {
+      if (result.status === 'rejected') failures.push(result.reason);
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'Appleテストデータの後片付けに失敗しました');
+  } finally {
+    appleTestPaths.clear();
+    appleTestUids.clear();
+  }
+});
+
+async function seedUser(uid: string): Promise<void> {
+  ensureAdminApp();
+  await getFirestore().doc(`users/${uid}`).set({ checkEnabled: true });
+}
+
 function toDerBuffer(base64Der: string): Buffer {
   return Buffer.from(base64Der, 'base64');
 }
 
 function uniqueId(label: string): string {
-  return `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const id = `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (label.startsWith('uid-')) {
+    appleTestUids.add(id);
+    appleTestPaths.add(`users/${id}`);
+  } else if (label.startsWith('otxn-')) {
+    appleTestPaths.add(`appleSubscriptions/${id}`);
+  }
+  return id;
 }
 
 /** 数字だけの一意な transactionId(/^[0-9]+$/ を満たす) */
@@ -197,6 +253,7 @@ async function seedOwnedSubscription(options: {
     },
   });
 
+  await seedUser(options.uid);
   await verifyApplePurchaseCore(options.uid, transactionId, deps);
 }
 
@@ -537,5 +594,75 @@ describe('appleServerNotification (Functions Emulator・HTTP)', () => {
 describe('appleServerNotification の maxInstances(5-3b-2)', () => {
   it('maxInstances が設定されている', () => {
     expect(APPLE_SERVER_NOTIFICATION_OPTIONS.maxInstances).toBe(APPLE_SERVER_NOTIFICATION_MAX_INSTANCES);
+  });
+});
+
+describe('P-055 Apple通知とアカウント削除の競合', () => {
+  it.each(['deleting', 'missing'] as const)('API待機中に親が%sになった通知は再作成しない', async (reason) => {
+    const uid = uniqueId('uid-notification-blocked');
+    const otherUid = uniqueId('uid-notification-unrelated');
+    const originalTransactionId = uniqueId('otxn-notification-blocked');
+    const otherOriginalTransactionId = uniqueId('otxn-notification-unrelated');
+    const expiresDate = Date.now() + 60_000;
+    await seedOwnedSubscription({ uid, originalTransactionId, expiresDate });
+    await seedOwnedSubscription({ uid: otherUid, originalTransactionId: otherOriginalTransactionId, expiresDate });
+    const db = getFirestore();
+    const userRef = db.doc(`users/${uid}`);
+    const ownerRef = db.doc(`appleSubscriptions/${originalTransactionId}`);
+    const otherUserRef = db.doc(`users/${otherUid}`);
+    const otherOwnerRef = db.doc(`appleSubscriptions/${otherOriginalTransactionId}`);
+    const beforeOtherUser = (await otherUserRef.get()).data();
+    const beforeOtherOwner = (await otherOwnerRef.get()).data();
+    const signed = signTestTransaction({
+      bundleId: BUNDLE_ID,
+      environment: Environment.PRODUCTION,
+      transactionId: uniqueTransactionId(),
+      originalTransactionId,
+      productId: MONTHLY_PRODUCT_ID,
+      appAccountToken: deriveAppAccountToken(uid),
+      expiresDate: expiresDate + 60_000,
+    });
+    const notification = signTestNotification({
+      notificationType: NotificationTypeV2.DID_RENEW,
+      environment: 'Production',
+      signedTransactionInfo: signed,
+    });
+    let signalApiStarted!: () => void;
+    let resumeApi!: () => void;
+    const apiStarted = new Promise<void>((resolve) => { signalApiStarted = resolve; });
+    const apiResumed = new Promise<void>((resolve) => { resumeApi = resolve; });
+    const client: AppleApiClientLike = {
+      getTransactionInfo: jest.fn(async () => { throw new Error('通知からの取引取得は禁止'); }),
+      getAllSubscriptionStatuses: jest.fn(async () => {
+        signalApiStarted();
+        await apiResumed;
+        return { data: [{ lastTransactions: [{ originalTransactionId, signedTransactionInfo: signed }] }] };
+      }),
+    };
+    // 先にrejection handlerを接続し、finallyでも必ず待機を解除・回収する。
+    const pending = handleAppleServerNotification({ signedPayload: notification }, {
+      createApiClient: () => client,
+      createVerifier: createTestVerifier,
+      now: () => Date.now(),
+    }).then((result) => ({ result }), (error: unknown) => ({ error }));
+    try {
+      await apiStarted; // この時点で通知はowner取得済み、Apple API応答を待っている。
+      await markAccountDeletionStarted(uid);
+      await ownerRef.delete();
+      if (reason === 'missing') {
+        await userRef.delete();
+      }
+      const blockedUser = (await userRef.get()).data();
+      resumeApi();
+      await expect(pending).resolves.toMatchObject({ error: { name: 'AccountWriteBlockedError', reason } });
+      expect((await userRef.get()).data()).toEqual(blockedUser);
+      expect((await ownerRef.get()).exists).toBe(false);
+      expect((await otherUserRef.get()).data()).toEqual(beforeOtherUser);
+      expect((await otherOwnerRef.get()).data()).toEqual(beforeOtherOwner);
+      expect(client.getAllSubscriptionStatuses).toHaveBeenCalledTimes(1);
+    } finally {
+      resumeApi();
+      await pending;
+    }
   });
 });

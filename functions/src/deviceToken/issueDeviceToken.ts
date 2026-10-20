@@ -1,6 +1,7 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { randomBytes } from 'node:crypto';
 
+import { getWritableAccount } from '../account/accountWriteGuard';
 import { hashDeviceToken } from '../deviceTokenHash';
 import { ensureAdminApp } from '../firebaseAdmin';
 
@@ -45,10 +46,14 @@ export async function issueDeviceTokenForUid(
   const expiresAt = issuedAt + DEVICE_TOKEN_TTL_MS;
 
   // 1人につき有効なトークンは1つのため、常に上書きする(古いトークンのハッシュはここで消える)
-  await getFirestore().doc(`deviceTokens/${uid}`).set({
-    tokenHash: hashDeviceToken(deviceToken),
-    issuedAt,
-    expiresAt,
+  const db = getFirestore();
+  await db.runTransaction(async (tx) => {
+    await getWritableAccount(tx, db.doc(`users/${uid}`));
+    tx.set(db.doc(`deviceTokens/${uid}`), {
+      tokenHash: hashDeviceToken(deviceToken),
+      issuedAt,
+      expiresAt,
+    });
   });
 
   return { deviceToken, expiresAt };

@@ -1,5 +1,6 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
+import { AccountWriteBlockedError } from '../account/accountWriteGuard';
 import { addDays, jstStartOfDay, toJstDateKey } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
 import { RATE_LIMITS, rateLimitDocPath } from '../rateLimit';
@@ -11,7 +12,7 @@ import {
   type RecordStudySessionEventDeps,
   type RecordStudySessionEventInput,
 } from '../studySession/recordStudySessionEvent';
-import { getFirestoreDoc } from './emulator';
+import { getFirestoreDoc, listFirestoreDocs } from './emulator';
 
 /**
  * 5-1b-1・5-2a: 計測記録を受け取る Function のテスト(Emulator 上。requirements 3-2「アプリからの記録の保存」)。
@@ -25,9 +26,40 @@ function buildDeps(now: number): RecordStudySessionEventDeps {
   return { now: () => now };
 }
 
+
+const accountFixtureUids = new Set<string>();
+
+/** 正常な親を明示する。既存の親や削除中markerは上書きしない。 */
+async function createAccount(uid: string): Promise<void> {
+  ensureAdminApp();
+  const db = getFirestore();
+  const ref = db.doc(`users/${uid}`);
+  accountFixtureUids.add(uid);
+  if (!(await ref.get()).exists) {
+    await ref.set({
+      createdAt: FieldValue.serverTimestamp(),
+      checkEnabled: true,
+      xPostEnabled: false,
+      xLinked: false,
+    });
+  }
+}
+
+afterEach(async () => {
+  if (accountFixtureUids.size === 0) return;
+  const db = getFirestore();
+  await Promise.all(
+    [...accountFixtureUids].map(async (uid) => {
+      await db.recursiveDelete(db.doc(`users/${uid}`));
+
+    }),
+  );
+  accountFixtureUids.clear();
+});
+
 /** テスト対象の uid 配下に有効な目標(goals/{goalId})を作る */
 async function createGoal(uid: string, goalId: string): Promise<void> {
-  ensureAdminApp();
+  await createAccount(uid);
   await getFirestore().doc(`users/${uid}/goals/${goalId}`).set({ type: 'cert' });
 }
 
@@ -592,6 +624,7 @@ describe('handleRecordStudyEventRequest', () => {
 
   it('架空の goalId は HttpsError(invalid-argument)', async () => {
     const authUid = uniqueId('uid-bad-goal');
+    await createAccount(authUid);
     const deps = buildDeps(Date.now());
     const authData = { uid: authUid, token: {} as never, rawToken: '' };
 
@@ -656,9 +689,6 @@ describe('handleRecordStudyEventRequest', () => {
   });
 
   describe('不正な入力(HttpsError(invalid-argument))', () => {
-    const authUid = uniqueId('uid-invalid');
-    const authData = { uid: authUid, token: {} as never, rawToken: '' };
-    const deps = buildDeps(Date.now());
     const base = () => buildInput({ sessionId: uniqueId('session'), goalId: uniqueId('goal') });
 
     it.each<[string, Record<string, unknown>]>([
@@ -679,6 +709,10 @@ describe('handleRecordStudyEventRequest', () => {
       ['action が start で checkEnabled が欠落', (() => { const { checkEnabled, ...rest } = base(); return rest; })()],
       ['action が start で checkEnabled が bool でない', { ...base(), checkEnabled: 'true' }],
     ])('%s', async (_label, data) => {
+      const authUid = uniqueId('uid-invalid');
+      await createAccount(authUid);
+      const authData = { uid: authUid, token: {} as never, rawToken: '' };
+      const deps = buildDeps(Date.now());
       const error = await handleRecordStudyEventRequest({ auth: authData, data }, deps).catch((e) => e);
       expect(error).toMatchObject({ code: 'invalid-argument' });
     });
@@ -747,4 +781,96 @@ describe('handleRecordStudyEventRequest', () => {
       expect(result).toEqual({ status: 'recorded' });
     });
   });
+});
+
+// P-055: 両入口が使うshared writerで親の状態と計測書き込みを同じtransactionで扱う。
+describe('recordStudySessionEvent account write guard (P-055)', () => {
+  const cases = (['app', 'lockscreen'] as const).flatMap((source) =>
+    (['deleting', 'missing'] as const).map((reason) => ({ source, reason })),
+  );
+
+  it.each(cases)(
+    '$source/$reason: start・stop・confirmを拒否し、再作成ゼロ・他UID保持',
+    async ({ source, reason }) => {
+      const uid = uniqueId('uid-blocked');
+      const otherUid = uniqueId('uid-unaffected');
+      const goalId = uniqueId('goal');
+      const sessionId = uniqueId('session');
+      await createGoal(uid, goalId);
+      await createGoal(otherUid, goalId);
+      const db = getFirestore();
+      const userRef = db.doc(`users/${uid}`);
+      const nowMs = Date.parse('2026-10-16T12:00:00+09:00');
+      const deps = buildDeps(nowMs);
+      const otherInput = buildInput({
+        sessionId, goalId, source, clientTimeMs: nowMs - 1000,
+      });
+      await recordStudySessionEvent(otherUid, otherInput, deps);
+      const otherSessionRef = db.doc(`users/${otherUid}/sessions/${sessionId}`);
+      const otherEventRef = db.doc(`users/${otherUid}/sessionEvents/${otherInput.idempotencyKey}`);
+      const otherSession = (await otherSessionRef.get()).data();
+      const otherEvent = (await otherEventRef.get()).data();
+      const otherAccount = (await db.doc(`users/${otherUid}`).get()).data();
+
+      if (reason === 'deleting') {
+        await userRef.update({ deletionInProgress: true });
+      } else {
+        // 親だけを削除し、transaction外のgoal確認を通過できる状態を再現する。
+        await userRef.delete();
+      }
+      for (const action of ['start', 'stop', 'confirm'] as const) {
+        const error: unknown = await recordStudySessionEvent(
+          uid,
+          { ...otherInput, action },
+          deps,
+        ).catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(AccountWriteBlockedError);
+        expect(error).toMatchObject({ reason });
+        expect(await listFirestoreDocs(`users/${uid}/sessions`)).toEqual([]);
+        expect(await listFirestoreDocs(`users/${uid}/sessionEvents`)).toEqual([]);
+      }
+      const parent = await userRef.get();
+      expect(parent.exists).toBe(reason === 'deleting');
+      if (parent.exists) expect(parent.get('deletionInProgress')).toBe(true);
+      expect((await otherSessionRef.get()).data()).toEqual(otherSession);
+      expect((await otherEventRef.get()).data()).toEqual(otherEvent);
+      expect((await db.doc(`users/${otherUid}`).get()).data()).toEqual(otherAccount);
+    },
+  );
+
+  it.each(cases)(
+    '$source/$reason: 既存idempotencyKeyでも親を確認して拒否し、保存済み記録を保持',
+    async ({ source, reason }) => {
+      const uid = uniqueId('uid-blocked-replay');
+      const goalId = uniqueId('goal');
+      const sessionId = uniqueId('session');
+      await createGoal(uid, goalId);
+      const db = getFirestore();
+      const nowMs = Date.parse('2026-10-16T12:00:00+09:00');
+      const deps = buildDeps(nowMs);
+      const input = buildInput({
+        sessionId, goalId, source, action: 'confirm', clientTimeMs: nowMs - 1000,
+      });
+      await recordStudySessionEvent(uid, input, deps);
+      const sessionRef = db.doc(`users/${uid}/sessions/${sessionId}`);
+      const eventRef = db.doc(`users/${uid}/sessionEvents/${input.idempotencyKey}`);
+      const session = (await sessionRef.get()).data();
+      const event = (await eventRef.get()).data();
+      const userRef = db.doc(`users/${uid}`);
+      if (reason === 'deleting') {
+        await userRef.update({ deletionInProgress: true });
+      } else {
+        await userRef.delete();
+      }
+
+      const error: unknown = await recordStudySessionEvent(uid, input, deps)
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(AccountWriteBlockedError);
+      expect(error).toMatchObject({ reason });
+      expect((await sessionRef.get()).data()).toEqual(session);
+      expect((await eventRef.get()).data()).toEqual(event);
+      expect(await listFirestoreDocs(`users/${uid}/sessionEvents`)).toHaveLength(1);
+      expect((await userRef.get()).exists).toBe(reason === 'deleting');
+    },
+  );
 });

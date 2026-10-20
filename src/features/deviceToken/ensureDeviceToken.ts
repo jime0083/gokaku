@@ -14,6 +14,7 @@
  * - 同時に2回走らない(呼ばれた時点で実行中なら何もしない)
  */
 import { getCurrentUid } from '@/config/firebase';
+import { accountOperationGate } from '@/features/account/accountOperationRuntime';
 
 import { callIssueDeviceToken } from './deviceTokenApi';
 import { loadDeviceTokenMeta, saveDeviceTokenMeta, type DeviceTokenMeta } from './deviceTokenStorage';
@@ -51,24 +52,32 @@ export async function ensureDeviceToken(now: number = Date.now()): Promise<void>
       return;
     }
 
-    const meta = await loadDeviceTokenMeta();
-    if (!needsIssue(meta, uid, now)) {
-      return;
-    }
+    await accountOperationGate.runNormal(uid, async (lease) => {
+      const meta = await loadDeviceTokenMeta();
+      lease.assertCurrentUid();
+      if (!needsIssue(meta, uid, now)) {
+        return;
+      }
 
-    const result = await callIssueDeviceToken();
-    if (!result) {
-      // 発行に失敗(通信エラー等)。何もせず次の機会に試す
-      return;
-    }
+      lease.assertCurrentUid();
+      const result = await callIssueDeviceToken();
+      lease.assertCurrentUid();
+      if (!result) {
+        // 発行に失敗(通信エラー等)。何もせず次の機会に試す
+        return;
+      }
 
-    const saved = saveDeviceTokenToKeychain(uid, result.deviceToken);
-    if (!saved) {
-      // Keychain への保存に失敗。AsyncStorage の期限は更新せず、次の機会に発行し直す
-      return;
-    }
+      lease.assertCurrentUid();
+      const saved = saveDeviceTokenToKeychain(uid, result.deviceToken);
+      if (!saved) {
+        // Keychain への保存に失敗。AsyncStorage の期限は更新せず、次の機会に発行し直す
+        return;
+      }
 
-    await saveDeviceTokenMeta({ uid, expiresAt: result.expiresAt });
+      lease.assertCurrentUid();
+      await saveDeviceTokenMeta({ uid, expiresAt: result.expiresAt });
+      lease.assertCurrentUid();
+    });
   } catch {
     // 失敗したら何もしない。次の機会(起動時・他のアプリから戻ったとき)に再試行する
   } finally {

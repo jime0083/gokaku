@@ -5,6 +5,7 @@
 # - タスクは上から順に実施する(依存関係順)
 # - Phase開始前に manual-work.txt の最終ラインを必ず確認する
 # - 仕様の根拠は requirements.md を参照
+# - 2026-10-14ユーザー指示: Phase 6の全タスク完了後はcommit/pushして作業を停止し、残る手動作業を整理して報告する。Phase 7へ自動着手しない。
 # - Phaseの全タスク完了時に git commit と git push を行う(リモート名: gokaku)
 # - 完了時は「※完了(YYYY-MM-DD): レビューPASS(検証内容の要約)」を追記する
 # - 2026-10-08 から: 各タスクの合否は速いテスト(Jest・renderRouter・Emulator)で決める。完了条件中の「E2E」「2機種のスクショ」は Phase 末の X-E2E タスクでまとめて確認する
@@ -708,7 +709,7 @@ Phase 5: タイマー
       - ロック画面コントロールからの開始と、Dynamic Island の停止は、ユーザーが手で確かめた(P-011 (2) は解決)
       - 通知のアクションの確認は、5-3e-2 のあとで行う
 
-[ ] 5-3e-2 開発ビルドだけで「勉強中？」の確認の間隔を短くする仕組み
+[x] 5-3e-2 開発ビルドだけで「勉強中？」の確認の間隔を短くする仕組み
     内容: 通知のアクション「勉強中」の確認(P-011 (3))を、60分待たずにできるようにする。
           開発ビルド(__DEV__ と Swift の DEBUG)のときだけ、開発用の画面から確認の間隔を短くできるようにする(例: 2分・応答期限1分)。
           JS(studyCheck の定数を使う所・通知の予約)と Swift(ロック画面からの開始の通知の予約)の両方に効くこと。
@@ -718,6 +719,7 @@ Phase 5: タイマー
       - 開発ビルドで短い間隔にすると、通知がその間隔で予約されること(テストか確認画面で示す)
       - 本番ビルドで切り替えられないこと
       - typecheck / lint / test が緑
+    ※完了(2026-10-14): レビューPASS。本番60分・10分の維持、実物のJS予約処理による120秒予約と応答後の90秒予約を確認。Release構成の確認は既存8-0で行う。
 
 [ ] 5-3f 実機での確認(画面ロック中の操作)
     ※開始前確認: manual-work W12(実機での確認)完了必須
@@ -728,33 +730,52 @@ Phase 5: タイマー
 Phase 6: ホーム・編集・アカウント管理
 =====================================
 
-[ ] 6-1 ホーム画面
+[x] 6-1 ホーム画面
     内容: requirements 4-6 の表示(積み上げ・%・グリーン系スライダー・達成日数・あと○日・残り必要時間・お知らせ)
           時間の数値は shared/displayNumber.ts の formatWithThousandsSeparator で3桁区切りにする(P-017)
     完了条件: 画面テストで0件・100%超・試験日以降。E2E 正常系(Emulator のテストデータ)が2機種で緑
+    ※完了(2026-10-14): レビューPASS。0件・100%超・試験日境界、タブ復帰・前面復帰・時刻更新の画面テストを確認。Home19件、全体669件・typecheck・lintが緑。E2EはPhase末で扱う。
 
-[ ] 6-2a 編集ポップアップ: 目標の数値の変更
+[x] 6-2a 編集ポップアップ: 目標の数値の変更
     内容: 目標勉強時間・試験日・最低/努力目標・偏差値・科目数の変更と、ホームの再計算(requirements 4-7・mokuhyo「5」)
           (3-5c-1 セキュリティ指摘)goals の update を許可する場合は、本人のみ・変えられない項目(type・startDate 等)の保護・日付と範囲の再検査をルールで行い、
           「既存の目標を不正な内容に書き換えられない」ことを明示するルールのテストを追加する
     完了条件: 画面テストで各数値の変更と再計算。E2E 正常系が2機種で緑
+    ※完了(2026-10-14): レビューPASS・セキュリティPASS。数値編集の保存/破棄/不正入力/失敗後の再試行、ホーム再計算、タイマー復帰時の目標更新(P-042)を確認。対象108件・全体724件・ルール150件・typecheck/lintが緑。E2EはPhase末で扱う。
 
-[ ] 6-2b 編集ポップアップ: 設定とリンク
+[x] 6-2b 編集ポップアップ: 設定とリンク
     内容: 「勉強中？」確認 ON/OFF、X投稿 ON/OFF、サブスクの管理画面を開く、規約・問い合わせのリンク
     完了条件: 画面テストで各設定が保存される。E2E 正常系が2機種で緑
+    ※完了(2026-10-14): レビューPASS・セキュリティPASS。設定の一括保存/破棄/再試行、読込失敗、保存前・待機中の認証切替(P-044)、次回開始用設定の反映、管理/規約リンクと問い合わせ未設定時の無効表示を確認。全体746件・ルール162件・typecheck/lintが緑。実機表示・E2EはPhase末で確認。
 
-[ ] 6-3a 目標そのものの変更
+[x] 6-3a 目標そのものの変更
     内容: 確認ダイアログ → 目標入力のやり直し → 積み上げ0から、旧目標は replaced
           あわせて(3-5c-1 のセキュリティ指摘): goals の作成時に「有効な目標がまだないこと」と、users.activeGoalId が自分の実在する目標であることをルールで検査する
           (3-5c-1 セキュリティ指摘)goals の update を許可する場合は、本人のみ・変えられない項目(type・startDate 等)の保護・日付と範囲の再検査をルールで行い、
           「既存の目標を不正な内容に書き換えられない」ことを明示するルールのテストを追加する
     完了条件: Emulator 上で旧目標のデータが残り、新目標の積み上げが0になるテストが緑。E2E 正常系が2機種で緑
 
-[ ] 6-3b 試験日以降の画面
+    ※完了(2026-10-16): レビューPASS・最終セキュリティPASS。旧目標の保持と原子的切替、同UIDの入力再開/キャンセル/失敗再試行、未送信・計測中の拒否、旧ID限定の端末後処理と新記録保護を確認。全体787件・ルール206件・typecheck/lintが緑。最終securityで画面9件も独立PASS。E2EはPhase末で扱う。
+
+[x] 6-3b 試験日以降の画面
     内容: 試験日当日以降のホームに「お疲れさまでした」と「次の目標を設定」を表示し、目標入力のやり直しへ進む
     完了条件: 画面テストで試験日前日/当日/以降の表示が切り替わる
 
-[ ] 6-4 ログアウトとアカウント削除  【セキュリティ確認】
+    ※完了(2026-10-16): レビューPASS。前日/当日/以降とJST0:00表示切替、次の目標の確認/空欄入力/戻る、計測中・UID変更の拒否を独立41件で確認。typecheck/lintが緑。数値・計算式の変更なし。見た目・E2EはPhase末。
+
+[x] 6-4 ログアウトとアカウント削除  【セキュリティ確認】
+    ※完了(2026-10-20): review/security双方PASS。本人限定cloud/local消去、Apple再認証/失効adapter、未送信同期、unknown-owner停止、UID拘束、再開/最終処理の再試行、全producer lease、起動guardと実画面接続を確認。全体Jest1311件＋追加回帰3件、TZ268件×2、全体typecheck/lint PASS。Functions212/rules269は同sourceの既PASSを採用。署名付きarm64 iOS buildとSE/ProMax起動PASS。実Apple確認は仕様どおりW13後。既存onboarding error/backのE2EはP-085/P-016としてFAIL保持し全E2E合格とは扱わない。旧目標変更cleanupのP-081も別scope未修正。完了後commit/pushしてからPhase7へ進む。
+    ※統合確認(2026-10-20): service・backgroundは独立review/security PASS(対象80件、root型/対象lint)。実Expo/iOS arm64全体buildも成功。P-079の残るHome/Boundaryのmock参照・fixture整合を調査中で、UI全体reviewと最終回帰は未完了。ユーザー指示により6-4完了→commit/push→Phase7を厳守し、7-1aは準備scriptのみ未反映。
+    ※独立確認(2026-10-20): native cleanup/finish/cancelとP-075/P-076はreview/security PASS。本人限定消去、未成功保持、async lease、未知状態・途中失敗の保全を確認。service/画面統合は別途検証中で6-4は未完了。
+    ※部分検証(2026-10-20): 中断前の実装担当パッチを復元しnative cleanup/finish/cancelを反映。実Gate/Data/Opsの隔離fakeテストRelease/DEBUG、iOS17 SDK型チェック両mode、TS/mock APIテスト6件・対象型/lintがPASS。独立review/security確認中。service・通常producer・画面接続と最終統合が残るため未完了。
+    ※部分検証(2026-10-19/再開): server統合はFunctions212・rules269件PASS、Emulator正常停止。端末token writerはreview/security PASS(24件)、sender gate/所有保全はreview/security PASS(47件)。新たなP-075(account専用の未成功保持)はJS/nativeを限定修正中で同期全体は未完了。native消去/finish/cancel、service・画面接続、最終アプリ検証が残る。
+    ※部分検証(2026-10-19): Cloud clientとserver expectedUid preconditionはreview/security PASS(client42・handler16、独立12条件)。P-072解決。実装担当typecheck/lint PASS。端末token writerのgate接続も24件PASSでreview/securityへ移行。service/native専用cleanup/画面の統合が残る。
+    ※部分検証(2026-10-19): C1 raw所有確認helperはreview/security PASS(隔離72+独立58チェック、iOS17 Release/DEBUG型)。Pod再生成完了。Cloud clientはP-072によりreview FAIL、対象client修正と再レビューを行う。
+    ※部分検証(2026-10-19): native unitA(固定flock lease・永続block)とJS singleton runtimeは独立review/security PASS。runtime対象33件、native隔離2プロセス/await/再開/不正block拒否とiOS17向け型チェックを確認。実iOS実行・C1/Keychain・service/UI接続は未検証。実装担当の全体Jest1147件・時差各268件・typecheck/lint PASS報告あり。
+    ※部分検証(2026-10-19): P-071のタイマー所有UID接続は独立review/security PASS(31件)、所有担当typecheck/lint PASS。JS gate/checkpoint/cleanup/writerのsecurityも232件PASS。native所有確認・runtime・画面への統合が残るため6-4は未完了。
+    ※JS writer追記(2026-10-17/P-068): start/adopt/noticeの指定UID不正を読込・保存前にreject。先行24件FAIL→対象5スイート159件PASS。P-066のUID継承期待値1行も修正済み。全体typecheckはP-065修正待ち。独立review/security前につき未完了。
+    ※JS writer単位(2026-10-17): session/eventのoptional uid保持、新規recordだけへのowner付与、event所有不一致・不正UIDの保存前拒否、autoStopNotice v2/legacy両対応を実装。指定3tests＋cleanup helperの116件PASS、対象3modulesの行coverage92.68%、lint PASS。全体typecheckは範囲外P-065で停止。呼出接続・operation gate・nativeは本単位の対象外。P-066の既存lockscreen期待値更新は接続unitへ申し送り。review/security前につき6-4は未完了。
+    ※途中経過(2026-10-16): backend削除・再作成防止はreview/security PASS(Functions196・rules269件)。Apple再認証/失効adapterはreview/security PASS(29件)、部品利用可否probeはSE/ProMax成功。端末cleanup・再試行統合と画面、Phase末E2Eは未完了。実Apple確認はW13後。
     内容: ログアウト、アカウント削除(確認ダイアログ、Firestore の全データ・Xトークン・デバイストークン削除、Firebase Auth のユーザー削除)
           ※5-3a・5-3a-2 の申し送り: ログアウトでもサーバーのデバイストークンを失効(revokeDeviceToken)し、端末の Keychain を StudySync.clearAuthContext で消し、AsyncStorage の deviceToken:meta:v1 も消す
           ※5-3c-6 の申し送り: ログアウト・アカウント削除のときに、ロック画面側の送信待ちのキュー(App Group)からその uid の項目も消す(401 で「トークンを待つ」印の付いた項目が残り続けないようにする)
@@ -831,6 +852,7 @@ Phase 8: リリース準備
     内容: src/app/dev-* の画面を、本番のビルドで到達できないようにする(ルートから外す・__DEV__ のときだけ登録する等)。
           StudySyncModule の debug 用の関数(debugSendStudySyncEvent 等)を #if DEBUG で外す
           あわせて StartStudyIntent・StopStudyIntent に isDiscoverable = false を付け、Siri やショートカットから見えないようにするか検討する(5-3d-2 レビューの申し送り)
+          あわせて Release 構成でビルドが通り、5-3e-2 の #if DEBUG の部分(確認の間隔を短くする仕組み)が本番に入っていないことを確かめる
     完了条件: 本番相当のビルドで gokaku:///dev-* を開いても画面が出ない。debug 用の関数が本番のビルドにない。typecheck/lint/test が緑
 
 [ ] 8-5 リリース前の依存脆弱性の再確認(problem P-001)

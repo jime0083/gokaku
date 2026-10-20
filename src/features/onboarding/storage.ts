@@ -13,7 +13,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** 保存されていた値の形が壊れている場合に初期値へフォールバックする(壊れたデータで次へ進めなくなることを防ぐ) */
-function sanitize(value: unknown): OnboardingDraft {
+export function sanitizeOnboardingDraft(value: unknown): OnboardingDraft {
   if (!isPlainObject(value)) {
     return INITIAL_ONBOARDING_DRAFT;
   }
@@ -58,7 +58,7 @@ export async function loadOnboardingDraft(): Promise<OnboardingDraft> {
     return INITIAL_ONBOARDING_DRAFT;
   }
   try {
-    return sanitize(JSON.parse(raw));
+    return sanitizeOnboardingDraft(JSON.parse(raw));
   } catch {
     return INITIAL_ONBOARDING_DRAFT;
   }

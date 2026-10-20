@@ -51,40 +51,44 @@ struct StopStudyIntent: LiveActivityIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        // 計測中の状態があれば、その sessionId で stop を送り、状態を消し、通知の予約を取り消す
-        // (計測中の状態がすでに無い=別の経路でこの計測が止められている場合は、送信せずに
-        // ライブアクティビティの後片付けだけ行う)。
-        // 5-3c-5a: 消す前に、この sessionId・止めた時刻(stopAt)を「最後にロック画面で止めた計測」
-        // として App Group に残す(1件だけ。上書き)。アプリを次に開いたとき(5-3c-5b)に、
-        // この sessionId・stopAt を使って端末内の記録を「ロック画面で止まった計測」として取り込むため
-        if let session = StudySyncSharedState.activeSession() {
-            let stoppedAt = Date()
-            let event = StudySyncEvent(
-                uid: session.uid,
-                sessionId: session.sessionId,
-                goalId: session.goalId,
-                action: .stop,
-                clientTimeMs: stoppedAt.timeIntervalSince1970 * 1000,
-                idempotencyKey: UUID().uuidString,
-                checkEnabled: nil
-            )
-            await StudySyncAPI.send(event)
-            StudySyncSharedState.setLastLockscreenStop(
-                StudySyncLastLockscreenStop(
+        // busy/blockedは状態を読む前にthrowし、OSによる再試行に委ねる。
+        try await StudySyncAccountGate().withNormalOperation {
+            // 計測中の状態があれば、その sessionId で stop を送り、状態を消し、通知の予約を取り消す
+            // (計測中の状態がすでに無い=別の経路でこの計測が止められている場合は、送信せずに
+            // ライブアクティビティの後片付けだけ行う)。
+            // 5-3c-5a: 消す前に、この sessionId・止めた時刻(stopAt)を「最後にロック画面で止めた計測」
+            // として App Group に残す(1件だけ。上書き)。アプリを次に開いたとき(5-3c-5b)に、
+            // この sessionId・stopAt を使って端末内の記録を「ロック画面で止まった計測」として取り込むため
+            if let session = StudySyncSharedState.activeSession() {
+                let stoppedAt = Date()
+                let event = StudySyncEvent(
+                    uid: session.uid,
                     sessionId: session.sessionId,
-                    stopAt: stoppedAt.timeIntervalSince1970 * 1000
+                    goalId: session.goalId,
+                    action: .stop,
+                    clientTimeMs: stoppedAt.timeIntervalSince1970 * 1000,
+                    idempotencyKey: UUID().uuidString,
+                    checkEnabled: nil
                 )
-            )
-            StudySyncSharedState.clearActiveSession()
-            StudySyncCheckNotification.cancel()
-        }
+                await StudySyncAPI.sendUnlocked(event)
+                StudySyncSharedState.setLastLockscreenStop(
+                    StudySyncLastLockscreenStop(
+                        sessionId: session.sessionId,
+                        stopAt: stoppedAt.timeIntervalSince1970 * 1000
+                    ),
+                    uid: session.uid
+                )
+                StudySyncSharedState.clearActiveSession()
+                StudySyncCheckNotification.cancel()
+            }
 
-        for activity in Activity<StudyActivityAttributes>.activities
-        where activity.attributes.uid == uid {
-            await activity.end(
-                ActivityContent(state: activity.content.state, staleDate: nil),
-                dismissalPolicy: .immediate
-            )
+            for activity in Activity<StudyActivityAttributes>.activities
+            where activity.attributes.uid == uid {
+                await activity.end(
+                    ActivityContent(state: activity.content.state, staleDate: nil),
+                    dismissalPolicy: .immediate
+                )
+            }
         }
         return .result()
     }
@@ -123,24 +127,25 @@ struct StartStudyIntent: LiveActivityIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult {
-        guard StudySyncSharedState.activeSession() == nil else {
-            return .result()
-        }
-        guard let auth = StudySyncKeychain.readDeviceToken() else {
-            return .result()
-        }
-        guard let goalId = StudySyncSharedState.currentGoalId(), !goalId.isEmpty else {
-            return .result()
-        }
+        // busy/blockedは状態を読む前にthrowし、OSによる再試行に委ねる。
+        try await StudySyncAccountGate().withNormalOperation {
+            guard StudySyncSharedState.activeSession() == nil else {
+                return
+            }
+            guard let auth = StudySyncKeychain.readDeviceToken() else {
+                return
+            }
+            guard let goalId = StudySyncSharedState.currentGoalId(), !goalId.isEmpty else {
+                return
+            }
 
-        let sessionId = UUID().uuidString
-        let startedAt = Date()
-        let checkEnabled = StudySyncSharedState.checkEnabledSetting()
+            let sessionId = UUID().uuidString
+            let startedAt = Date()
+            let checkEnabled = StudySyncSharedState.checkEnabledSetting()
 
-        // ネットワークの成否に関わらず、計測中の状態はまず App Group に書く
-        // (アプリ側の表示・ロック画面の停止操作は、この状態を正として動く。5-3c-3)
-        StudySyncSharedState.setActiveSession(
-            StudySyncActiveSession(
+            // ネットワークの成否に関わらず、計測中の状態はまず App Group に書く
+            // (アプリ側の表示・ロック画面の停止操作は、この状態を正として動く。5-3c-3)
+            let session = StudySyncActiveSession(
                 sessionId: sessionId,
                 uid: auth.uid,
                 goalId: goalId,
@@ -148,31 +153,31 @@ struct StartStudyIntent: LiveActivityIntent {
                 checkEnabled: checkEnabled,
                 confirmations: []
             )
-        )
+            StudySyncSharedState.setActiveSession(session)
 
-        let event = StudySyncEvent(
-            uid: auth.uid,
-            sessionId: sessionId,
-            goalId: goalId,
-            action: .start,
-            clientTimeMs: startedAt.timeIntervalSince1970 * 1000,
-            idempotencyKey: UUID().uuidString,
-            checkEnabled: checkEnabled
-        )
-        // 送れなければ StudySyncAPI.send が App Group のキューに積む(5-3c-6 で送り直し方を整理する)
-        await StudySyncAPI.send(event)
+            let event = StudySyncEvent(
+                uid: auth.uid,
+                sessionId: sessionId,
+                goalId: goalId,
+                action: .start,
+                clientTimeMs: startedAt.timeIntervalSince1970 * 1000,
+                idempotencyKey: UUID().uuidString,
+                checkEnabled: checkEnabled
+            )
+            // 送れなければ sendUnlocked が同じlease内で App Group のキューに積む(5-3c-6 で送り直し方を整理する)
+            await StudySyncAPI.sendUnlocked(event)
 
-        let attributes = StudyActivityAttributes(uid: auth.uid)
-        let state = StudyActivityAttributes.ContentState(startedAt: startedAt, goalId: goalId)
-        _ = try? Activity<StudyActivityAttributes>.request(
-            attributes: attributes,
-            content: ActivityContent(state: state, staleDate: nil)
-        )
+            let attributes = StudyActivityAttributes(uid: auth.uid)
+            let state = StudyActivityAttributes.ContentState(startedAt: startedAt, goalId: goalId)
+            _ = try? Activity<StudyActivityAttributes>.request(
+                attributes: attributes,
+                content: ActivityContent(state: state, staleDate: nil)
+            )
 
-        if checkEnabled {
-            await StudySyncCheckNotification.scheduleFirstCheck()
+            if checkEnabled {
+                await StudySyncCheckNotification.scheduleFirstCheck(uid: session.uid)
+            }
         }
-
         return .result()
     }
 }

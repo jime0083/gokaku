@@ -1,5 +1,6 @@
 import { splitHoursMinutes } from '@shared/index';
-import { useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -44,7 +45,7 @@ export default function TimerScreen() {
   const [goalTargets, setGoalTargets] = useState<ActiveGoalDailyTargets | null | undefined>(undefined);
   const showNotificationPermissionNotice = useStudyCheckNotificationNotice();
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     let mounted = true;
     fetchActiveGoalDailyTargets().then((result) => {
       if (mounted) {
@@ -54,7 +55,7 @@ export default function TimerScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, []));
 
   const toggle = () => {
     if (isRunning) {
