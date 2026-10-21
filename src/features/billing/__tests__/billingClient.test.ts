@@ -16,6 +16,7 @@ const mockInitConnection = jest.fn(async () => true);
 const mockFetchProducts = jest.fn();
 const mockRequestPurchase = jest.fn(async () => null);
 const mockGetAvailablePurchases = jest.fn();
+const mockGetPendingTransactionsIOS = jest.fn();
 const mockFinishTransaction = jest.fn(async () => undefined);
 const mockIsUserCancelledError = jest.fn((error: unknown) => {
   return (error as { code?: string } | null)?.code === 'user-cancelled';
@@ -28,6 +29,7 @@ jest.mock('expo-iap', () => ({
   fetchProducts: mockFetchProducts,
   requestPurchase: mockRequestPurchase,
   getAvailablePurchases: mockGetAvailablePurchases,
+  getPendingTransactionsIOS: mockGetPendingTransactionsIOS,
   finishTransaction: mockFinishTransaction,
   isUserCancelledError: mockIsUserCancelledError,
   purchaseUpdatedListener: (listener: Listener<unknown>) => {
@@ -55,9 +57,88 @@ describe('billingClient(4-1b。expo-iap をモック)', () => {
     mockFetchProducts.mockClear();
     mockRequestPurchase.mockClear();
     mockGetAvailablePurchases.mockClear();
+    mockGetPendingTransactionsIOS.mockReset();
     mockFinishTransaction.mockClear();
     mockRemoveUpdatedListener.mockClear();
     mockRemoveErrorListener.mockClear();
+  });
+
+  describe('loadPendingBillingPurchases', () => {
+    it('接続失敗を秘匿し、再接続後は既知の未完了取引だけを変換する', async () => {
+      mockInitConnection.mockRejectedValueOnce(new Error('private-native-detail'));
+
+      const failure = await billingClient.loadPendingBillingPurchases().catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(BillingPurchaseFailedError);
+      expect(failure).toMatchObject({ cause: undefined });
+      expect(String(failure)).not.toContain('private-native-detail');
+      expect(mockGetPendingTransactionsIOS).not.toHaveBeenCalled();
+
+      const monthly = {
+        id: 'pending-monthly',
+        productId: MONTHLY_PRODUCT_ID,
+        originalTransactionIdentifierIOS: 'original-monthly',
+        purchaseToken: 'test-jws',
+      };
+      const yearly = { id: 'pending-yearly', productId: YEARLY_PRODUCT_ID };
+      mockGetPendingTransactionsIOS.mockResolvedValueOnce([
+        monthly,
+        { id: 'foreign', productId: 'com.example.other.product' },
+        yearly,
+      ]);
+
+      await expect(billingClient.loadPendingBillingPurchases()).resolves.toEqual([
+        {
+          productId: MONTHLY_PRODUCT_ID,
+          transactionId: monthly.id,
+          originalTransactionIdentifierIOS: 'original-monthly',
+          purchaseToken: 'test-jws',
+          rawPurchase: monthly,
+        },
+        {
+          productId: YEARLY_PRODUCT_ID,
+          transactionId: yearly.id,
+          originalTransactionIdentifierIOS: null,
+          purchaseToken: null,
+          rawPurchase: yearly,
+        },
+      ]);
+      expect(mockInitConnection).toHaveBeenCalledTimes(2);
+      expect(mockGetPendingTransactionsIOS).toHaveBeenCalledTimes(1);
+      expect(mockGetAvailablePurchases).not.toHaveBeenCalled();
+      expect(mockRequestPurchase).not.toHaveBeenCalled();
+      expect(mockFetchProducts).not.toHaveBeenCalled();
+      expect(mockFinishTransaction).not.toHaveBeenCalled();
+    });
+
+    it('未完了取引がなければ空配列を返し、購入・復元・完了処理をしない', async () => {
+      mockGetPendingTransactionsIOS.mockResolvedValueOnce([]);
+
+      await expect(billingClient.loadPendingBillingPurchases()).resolves.toEqual([]);
+
+      expect(mockGetPendingTransactionsIOS).toHaveBeenCalledTimes(1);
+      expect(mockGetAvailablePurchases).not.toHaveBeenCalled();
+      expect(mockRequestPurchase).not.toHaveBeenCalled();
+      expect(mockFinishTransaction).not.toHaveBeenCalled();
+    });
+
+    it('SDKの取得失敗をcauseにも残さず固定エラーへ変換する', async () => {
+      mockGetPendingTransactionsIOS.mockRejectedValueOnce({
+        message: 'private-receipt',
+        purchaseToken: 'private-token',
+      });
+
+      const failure = await billingClient.loadPendingBillingPurchases().catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(BillingPurchaseFailedError);
+      expect(failure).toMatchObject({ cause: undefined });
+      expect(JSON.stringify(failure)).not.toContain('private');
+      expect(mockFinishTransaction).not.toHaveBeenCalled();
+    });
   });
 
   describe('fetchBillingProducts', () => {

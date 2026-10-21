@@ -5,6 +5,7 @@ import RootLayout from '@/app/_layout';
 import HomeScreen from '@/app/(tabs)/home';
 import LaunchScreen from '@/app/index';
 import { getCurrentUid } from '@/config/firebase';
+import { loadSubscriptionSession } from '@/features/billing/subscriptionRepository';
 import { fetchHomeData } from '@/features/home/homeDataRepository';
 import { loadGoalReplacement } from '@/features/onboarding/replacementStorage';
 import { loadOnboardingDraft } from '@/features/onboarding/storage';
@@ -12,6 +13,13 @@ import { INITIAL_ONBOARDING_DRAFT } from '@/features/onboarding/types';
 import { openSettingsLink } from '@/features/settings/settingsLinks';
 
 import { accountActionService } from '../accountActionService';
+
+jest.mock('@/features/billing/subscriptionRepository', () => ({
+  loadSubscriptionSession: jest.fn(async (uid: string) => ({
+    uid, registered: true, xLinked: true, access: 'allowed' as const,
+  })),
+  subscribeSubscriptionAuth: jest.fn(() => jest.fn()),
+}));
 
 jest.mock('../accountActionService', () => ({
   accountActionService: {
@@ -67,7 +75,7 @@ async function open(url = '/home') {
     routerResult = renderRouter({
       _layout: RootLayout,
       index: LaunchScreen,
-      home: HomeScreen,
+      '(tabs)/home': HomeScreen,
       'onboarding/pace': () => <Text testID="replacement-resumed">replacement</Text>,
       'onboarding/index': () => <Text testID="draft-resumed">draft</Text>,
     }, { initialUrl: url });
@@ -88,10 +96,17 @@ async function foreground() {
   });
 }
 
+function setSubscriptionRegistered(registered: boolean) {
+  jest.mocked(loadSubscriptionSession).mockReset().mockImplementation(async (uid) => ({
+    uid, registered, xLinked: true, access: 'allowed',
+  }));
+}
+
 function succeed() {
   service.perform.mockImplementation(async (_action, _uid, { launch }) => {
     service.inspectPending.mockResolvedValue(empty);
     jest.mocked(loadGoalReplacement).mockResolvedValue(null);
+    jest.mocked(getCurrentUid).mockReturnValue(null);
     await launch();
     return complete;
   });
@@ -99,6 +114,7 @@ function succeed() {
 
 beforeEach(() => {
   routerResult = undefined;
+  setSubscriptionRegistered(true);
   service.inspectPending.mockReset().mockResolvedValue(empty);
   service.perform.mockReset().mockResolvedValue(incomplete);
   service.resume.mockReset().mockResolvedValue(incomplete);
@@ -217,6 +233,7 @@ it('cloud成功確定CPだけresumeへ配線しlaunch後に初回画面を解放
   });
   service.resume.mockImplementation(async ({ launch }) => {
     service.inspectPending.mockResolvedValue(empty);
+    jest.mocked(getCurrentUid).mockReturnValue(null);
     await launch();
     return complete;
   });
@@ -313,6 +330,7 @@ it('古いforeground inspect完了で進行中performやretry overlayを消さ�
 });
 
 it('replacement読込途中にforeground CPを検出したら遅い読込で遷移しない', async () => {
+  setSubscriptionRegistered(false);
   const replacement = deferred<Awaited<ReturnType<typeof loadGoalReplacement>>>();
   jest.mocked(loadGoalReplacement).mockReturnValueOnce(replacement.promise);
   await open('/');
@@ -344,12 +362,18 @@ it('perform後のunknown readも完了扱いにせずerror overlayへ移る', as
 });
 
 it('P083 初回replacement確認が終わるまで開始できない', async () => {
+  setSubscriptionRegistered(false);
   const replacement = deferred<Awaited<ReturnType<typeof loadGoalReplacement>>>();
   jest.mocked(loadGoalReplacement).mockReturnValueOnce(replacement.promise);
   await open('/');
   await waitFor(() => expect(loadGoalReplacement).toHaveBeenCalledTimes(1));
-  expect(screen.getByTestId('onboarding-start-button')).toBeDisabled();
-  await fireEvent.press(screen.getByTestId('onboarding-start-button'));
+  expect(screen.getByTestId('subscription-guard')).toBeTruthy();
+  const content = screen.getByTestId('subscription-content', { includeHiddenElements: true });
+  expect(content.props.pointerEvents).toBe('none');
+  expect(content.props.accessibilityElementsHidden).toBe(true);
+  expect(content.props.importantForAccessibility).toBe('no-hide-descendants');
+  expect(screen.getByTestId('onboarding-start-button', { includeHiddenElements: true })).toBeDisabled();
+  await fireEvent.press(screen.getByTestId('onboarding-start-button', { includeHiddenElements: true }));
   expect(loadOnboardingDraft).not.toHaveBeenCalled();
 
   await act(async () => { replacement.resolve(null); });
@@ -358,6 +382,7 @@ it('P083 初回replacement確認が終わるまで開始できない', async () 
 });
 
 it('P083 ready復帰後も新しいreplacement確認が終わるまで開始できない', async () => {
+  setSubscriptionRegistered(false);
   await open('/');
   await waitFor(() => expect(screen.getByTestId('onboarding-start-button')).toBeEnabled());
   expect(loadGoalReplacement).toHaveBeenCalledTimes(1);
@@ -372,8 +397,13 @@ it('P083 ready復帰後も新しいreplacement確認が終わるまで開始で�
   jest.mocked(loadGoalReplacement).mockReturnValueOnce(replacement.promise);
   await act(async () => { inspection.resolve(empty); });
   await waitFor(() => expect(loadGoalReplacement).toHaveBeenCalledTimes(2));
-  expect(screen.getByTestId('onboarding-start-button')).toBeDisabled();
-  await fireEvent.press(screen.getByTestId('onboarding-start-button'));
+  expect(screen.getByTestId('subscription-guard')).toBeTruthy();
+  const content = screen.getByTestId('subscription-content', { includeHiddenElements: true });
+  expect(content.props.pointerEvents).toBe('none');
+  expect(content.props.accessibilityElementsHidden).toBe(true);
+  expect(content.props.importantForAccessibility).toBe('no-hide-descendants');
+  expect(screen.getByTestId('onboarding-start-button', { includeHiddenElements: true })).toBeDisabled();
+  await fireEvent.press(screen.getByTestId('onboarding-start-button', { includeHiddenElements: true }));
   expect(loadOnboardingDraft).not.toHaveBeenCalled();
 
   await act(async () => { replacement.resolve(null); });
@@ -382,6 +412,7 @@ it('P083 ready復帰後も新しいreplacement確認が終わるまで開始で�
 });
 
 it('P083 replacement読込中にUIDが変わったら元UIDの入力へ遷移しない', async () => {
+  setSubscriptionRegistered(false);
   const replacement = deferred<Awaited<ReturnType<typeof loadGoalReplacement>>>();
   jest.mocked(loadGoalReplacement).mockReturnValueOnce(replacement.promise);
   await open('/');

@@ -13,6 +13,7 @@ import {
   fetchProducts as fetchIapProducts,
   finishTransaction,
   getAvailablePurchases,
+  getPendingTransactionsIOS,
   initConnection,
   isUserCancelledError,
   purchaseErrorListener,
@@ -184,6 +185,23 @@ export async function restoreBillingPurchases(): Promise<BillingPurchaseResult[]
 
   const sorted = [...relevant].sort((a, b) => (b.transactionDate ?? 0) - (a.transactionDate ?? 0));
   return sorted.map(toPurchaseResult);
+}
+
+/**
+ * 起動時に再確認する未完了取引だけを取得する(4-3)。
+ * 購入・復元・購入履歴の取得は行わず、完了処理は呼出側のサーバー確認後に行う。
+ * ネイティブのエラー内容は外へ返さない。
+ */
+export async function loadPendingBillingPurchases(): Promise<BillingPurchaseResult[]> {
+  try {
+    await ensureConnected();
+    const purchases = await getPendingTransactionsIOS();
+    return purchases
+      .filter((purchase) => isKnownAppleIapProductId(purchase.productId))
+      .map(toPurchaseResult);
+  } catch {
+    throw new BillingPurchaseFailedError();
+  }
 }
 
 /**

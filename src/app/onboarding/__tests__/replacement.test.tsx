@@ -9,6 +9,13 @@ import { loadGoalReplacement, saveGoalReplacement } from '@/features/onboarding/
 import { INITIAL_ONBOARDING_DRAFT } from '@/features/onboarding/types';
 import { saveOnboardingDraft, loadOnboardingDraft } from '@/features/onboarding/storage';
 
+jest.mock('@/features/billing/subscriptionRepository', () => ({
+  loadSubscriptionSession: jest.fn(async (uid: string) => ({
+    uid, registered: true, xLinked: true, access: 'allowed' as const,
+  })),
+  subscribeSubscriptionAuth: jest.fn(() => jest.fn()),
+}));
+
 jest.mock('@/features/account/accountActionService', () => ({
   accountActionService: {
     inspectPending: jest.fn(async () => ({

@@ -3,6 +3,7 @@ import {
   type LocalAccountStore, type RawEntry,
 } from '../localAccountData';
 import { INITIAL_ONBOARDING_DRAFT } from '../../onboarding/types';
+import { SUBSCRIPTION_CACHE_PREFIX } from '../../billing/subscriptionCache';
 
 const UID = 'owner-a';
 const OTHER = 'owner-b';
@@ -196,4 +197,117 @@ it('accepts owned drafts with incomplete or invalid business inputs without norm
   expect(await inspectLocalAccountData(UID, h.store, h.guard)).toMatchObject({ ownership: 'known' });
   await cleanupLocalAccountData(UID, h.store, h.guard);
   expect(h.data.size).toBe(0);
+});
+
+const subscriptionCacheKey = (uid: string) => SUBSCRIPTION_CACHE_PREFIX + encodeURIComponent(uid);
+const subscriptionCache = (uid = UID) => ({
+  version: 1, uid, registered: true, xLinked: true,
+  subscription: { status: 'active', expiresAt: 500 },
+});
+
+it('removes only the target UID subscription cache, including encoded UID keys', async () => {
+  const uid = 'owner/a:% 日本';
+  for (const subscription of [
+    null,
+    { status: 'active', expiresAt: 500 },
+    { status: 'expired', expiresAt: 100 },
+  ]) {
+    const key = subscriptionCacheKey(uid);
+    const h = harness([entry(key, { ...subscriptionCache(uid), subscription })]);
+    expect(await inspectLocalAccountData(uid, h.store, h.guard)).toEqual({
+      ownership: 'known', measuring: false, pendingRecords: false, unknownKeys: [],
+    });
+    await cleanupLocalAccountData(uid, h.store, h.guard);
+    expect(h.store.removeItem).toHaveBeenCalledWith(key);
+    expect(h.data.size).toBe(0);
+    expect(h.store.setItem).not.toHaveBeenCalled();
+  }
+});
+
+it('preserves a valid other UID subscription cache byte-for-byte', async () => {
+  const otherKey = subscriptionCacheKey(OTHER);
+  const otherRaw = JSON.stringify({
+    ...subscriptionCache(OTHER), registered: false, xLinked: false, subscription: null,
+  }, null, 2);
+  const h = harness([
+    entry(subscriptionCacheKey(UID), subscriptionCache()),
+    [otherKey, otherRaw],
+  ]);
+  await cleanupLocalAccountData(UID, h.store, h.guard);
+  expect([...h.data]).toEqual([[otherKey, otherRaw]]);
+  expect(h.store.removeItem).toHaveBeenCalledTimes(1);
+  expect(h.store.removeItem).toHaveBeenCalledWith(subscriptionCacheKey(UID));
+  expect(h.store.setItem).not.toHaveBeenCalled();
+});
+
+it('blocks all cleanup for malformed or mismatched subscription cache UID keys', async () => {
+  const invalidEntries: RawEntry[] = [
+    entry(SUBSCRIPTION_CACHE_PREFIX, subscriptionCache()),
+    entry(SUBSCRIPTION_CACHE_PREFIX + '%ZZ', subscriptionCache()),
+    entry(subscriptionCacheKey(OTHER), subscriptionCache()),
+    entry(subscriptionCacheKey(UID), subscriptionCache(OTHER)),
+  ];
+  for (const invalidEntry of invalidEntries) {
+    const h = harness([entry(META, { uid: UID, expiresAt: 500 }), invalidEntry]);
+    const before = [...h.data];
+    expect(await inspectLocalAccountData(UID, h.store, h.guard)).toMatchObject({
+      ownership: 'unknown', unknownKeys: [invalidEntry[0]],
+    });
+    await expect(cleanupLocalAccountData(UID, h.store, h.guard))
+      .rejects.toThrow('local-account-data-unknown');
+    expect([...h.data]).toEqual(before);
+    expect(h.store.removeItem).not.toHaveBeenCalled();
+    expect(h.store.setItem).not.toHaveBeenCalled();
+  }
+});
+
+it('never infers ownership from a subscription cache key after invalid data', async () => {
+  const { uid: _uid, ...ownerless } = subscriptionCache();
+  const invalidValues: unknown[] = [
+    null,
+    {},
+    ownerless,
+    { ...subscriptionCache(), uid: '' },
+    { ...subscriptionCache(), uid: ' ' },
+    { ...subscriptionCache(), version: 2 },
+    { ...subscriptionCache(), registered: 'true' },
+    { ...subscriptionCache(), xLinked: null },
+    { ...subscriptionCache(), subscription: undefined },
+    { ...subscriptionCache(), subscription: {} },
+    { ...subscriptionCache(), subscription: { status: 'unknown', expiresAt: 500 } },
+    { ...subscriptionCache(), subscription: { status: 'active', expiresAt: null } },
+    { ...subscriptionCache(), subscription: { status: 'active', expiresAt: '500' } },
+  ];
+  const invalidRaws = ['{', ...invalidValues.map((value) => JSON.stringify(value))];
+  for (const uid of [UID, OTHER]) {
+    const key = subscriptionCacheKey(uid);
+    for (const raw of invalidRaws) {
+      const h = harness([entry(META, { uid: UID, expiresAt: 500 }), [key, raw]]);
+      const before = [...h.data];
+      expect(parseLocalAccountData(UID, [[key, raw]])).toMatchObject({
+        ownership: 'unknown', unknownKeys: [key],
+      });
+      await expect(cleanupLocalAccountData(UID, h.store, h.guard))
+        .rejects.toThrow('local-account-data-unknown');
+      expect([...h.data]).toEqual(before);
+      expect(h.store.removeItem).not.toHaveBeenCalled();
+      expect(h.store.setItem).not.toHaveBeenCalled();
+    }
+  }
+});
+
+it('reads subscription cache entries during inspection without reading unrelated keys', async () => {
+  const targetKey = subscriptionCacheKey(UID);
+  const otherKey = subscriptionCacheKey(OTHER);
+  const h = harness([
+    entry(targetKey, subscriptionCache()),
+    entry(otherKey, subscriptionCache(OTHER)),
+    ['unrelated', '{'],
+  ]);
+  expect(await inspectLocalAccountData(UID, h.store, h.guard)).toEqual({
+    ownership: 'known', measuring: false, pendingRecords: false, unknownKeys: [],
+  });
+  expect(h.store.getItem.mock.calls).toEqual([[targetKey], [otherKey]]);
+  expect(h.store.removeItem).not.toHaveBeenCalled();
+  expect(h.store.setItem).not.toHaveBeenCalled();
 });

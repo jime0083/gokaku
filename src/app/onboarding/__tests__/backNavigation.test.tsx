@@ -5,6 +5,13 @@ import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-rou
 import { saveOnboardingDraft } from '@/features/onboarding/storage';
 import { INITIAL_ONBOARDING_DRAFT, OTHER_CERTIFICATION_ID } from '@/features/onboarding/types';
 
+jest.mock('@/features/billing/subscriptionRepository', () => ({
+  loadSubscriptionSession: jest.fn(async (uid: string) => ({
+    uid, registered: true, xLinked: true, access: 'allowed' as const,
+  })),
+  subscribeSubscriptionAuth: jest.fn(() => jest.fn()),
+}));
+
 jest.mock('@/features/account/accountActionService', () => ({
   accountActionService: {
     inspectPending: jest.fn(async () => ({

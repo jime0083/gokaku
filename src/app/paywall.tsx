@@ -1,6 +1,5 @@
 import { deriveAppAccountToken } from '@shared/index';
 import * as Linking from 'expo-linking';
-import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,6 +9,7 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { getCurrentUid } from '@/config/firebase';
 import { TERMS_OF_SERVICE_URL, PRIVACY_POLICY_URL } from '@/config/legalLinks';
 import { calculateYearlyDiscountPercent } from '@/features/billing/discount';
+import { useSubscriptionAccess } from '@/features/billing/SubscriptionBoundary';
 import {
   fetchBillingProducts,
   finishPurchaseTransaction,
@@ -45,12 +45,6 @@ const FEATURE_LINES: readonly string[] = [
   '試験日までの進み具合をひと目で確認',
 ];
 
-/**
- * 購入・復元に成功した後に進む仮の行き先(4-3 で X 連携の画面に差し替える)。
- * X 連携の画面がまだ無いため、初回起動画面に戻す
- */
-const NEXT_ROUTE_AFTER_PURCHASE = '/' as const;
-
 /** requirements 3-4・4-5 の 2 の文言 */
 const PURCHASE_FAILED_MESSAGE = '購入できませんでした。時間をおいてもう一度お試しください';
 const VERIFICATION_UNAVAILABLE_MESSAGE =
@@ -84,7 +78,7 @@ function findProduct(products: BillingProduct[], plan: BillingPlan): BillingProd
 }
 
 export default function PaywallScreen() {
-  const router = useRouter();
+  const { afterPurchase } = useSubscriptionAccess();
   const insets = useSafeAreaInsets();
 
   const [loadState, setLoadState] = useState<LoadState>({ status: 'loading' });
@@ -127,23 +121,31 @@ export default function PaywallScreen() {
     setReloadToken((token) => token + 1);
   }, []);
 
-  const goToNextScreen = useCallback(() => {
-    router.replace(NEXT_ROUTE_AFTER_PURCHASE);
-  }, [router]);
-
-  /** 購入・復元に成功した取引を確認し、active なら finishTransaction して次の画面へ進む(4-2c) */
+  /** 開始時のUIDを各非同期処理の境界で確認し、成功後の利用判定はBoundaryに委譲する。 */
   const confirmAndFinish = useCallback(
-    async (result: BillingPurchaseResult): Promise<boolean> => {
+    async (result: BillingPurchaseResult, expectedUid: string): Promise<boolean> => {
+      if (getCurrentUid() !== expectedUid) {
+        setActionError(PURCHASE_FAILED_MESSAGE);
+        return false;
+      }
       const outcome = await verifyApplePurchase(result.transactionId);
+      if (getCurrentUid() !== expectedUid) {
+        setActionError(PURCHASE_FAILED_MESSAGE);
+        return false;
+      }
       if (outcome.status === 'active') {
         await finishPurchaseTransaction(result);
-        goToNextScreen();
+        if (getCurrentUid() !== expectedUid) {
+          setActionError(PURCHASE_FAILED_MESSAGE);
+          return false;
+        }
+        await afterPurchase();
         return true;
       }
       setActionError(describeVerifyFailure(outcome));
       return false;
     },
-    [goToNextScreen],
+    [afterPurchase],
   );
 
   const handlePurchase = useCallback(async () => {
@@ -162,7 +164,7 @@ export default function PaywallScreen() {
     try {
       const appAccountToken = deriveAppAccountToken(uid);
       const result = await purchaseBillingProduct(product.productId, appAccountToken);
-      await confirmAndFinish(result);
+      await confirmAndFinish(result, uid);
     } catch (error) {
       if (!(error instanceof BillingCancelledError)) {
         setActionError(error instanceof Error ? error.message : PURCHASE_FAILED_MESSAGE);
@@ -173,13 +175,22 @@ export default function PaywallScreen() {
   }, [loadState, selectedPlan, confirmAndFinish]);
 
   const handleRestore = useCallback(async () => {
+    const uid = getCurrentUid();
+    if (!uid) {
+      setActionError(PURCHASE_FAILED_MESSAGE);
+      return;
+    }
     setProcessing(true);
     setActionError(null);
     try {
       const results = await restoreBillingPurchases();
+      if (getCurrentUid() !== uid) {
+        setActionError(PURCHASE_FAILED_MESSAGE);
+        return;
+      }
       const [first] = results;
       if (first) {
-        await confirmAndFinish(first);
+        await confirmAndFinish(first, uid);
       }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : '復元できる購入が見つかりませんでした');

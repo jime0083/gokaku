@@ -1526,3 +1526,79 @@
 - 修正計画: 実装担当が導入済みRNTLのイベント/公開コンポーネント取得で同じハンドラへの連打を検証する。連打1回だけのbegin/browser、アンマウント後completeなしのassertionは維持。製品処理をテスト都合で変更しない。
 
 - 7-1b最終確認(2026-10-21): P-095は型宣言だけ、P-097/P-099は画面テストだけ、P-098は同じ全面overlayの明示指定へ修正。画面10/10・全体1418件・TZ268×2・全体型/lint PASS。独立review/securityは7-1b全体PASS。P-093/P-096に残るnative取消/ephemeral/ProMaxセッションと2機種E2Eは未確認のままPhase末へ引継ぎ。通常Debug署名ビルドへ戻してSE/ProMax双方へ反映し、NativeSyncBaseURL=localhost:5001/demo-gokakuを確認。停止済みmock URLの成果物は通常用へ置換、検証用Metro/所有PID残存なし。古いP-081/P-085/P-016等の状態・既存タスク順序は変更していない。
+
+## P-100 課金ロック境界案が旧StyleSheet APIを再使用
+- 発見日: 2026-10-21(4-3 root境界の適用前確認)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現/調査: 未適用のSubscriptionBoundary案のcoverがStyleSheet.absoluteFillObjectを参照。現RN0.86には存在しないことはP-098で確認済み。新規案は当該APIの互換性確認が不足した。
+- 修正計画: 実装担当が同じ全画面coverをposition:absolute/top/right/bottom/left:0で明示する限定修正を作成。根拠なく型を回避せず、型/画面テスト/独立reviewを確認する。過去P-098の状態は変更しない。
+
+## P-101 課金画面追加テストのmock戻り値型がundefinedへ狭まる
+- 発見日: 2026-10-21(4-3統合型チェック)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: paywall.test.tsx 427/518でPromise<void>をPromise<undefined>推論のmockFinishTransactionへ渡しTS2345。
+- 原因: 既存の引数なしasync mockの戻り値型を追加の遅延テストへ合わせて明示していない。
+- 修正計画: 実装担当がmock型のみ明示し、処理順序/UID中断のassertionを維持して対象テスト/型を再検証する。
+
+## P-102 契約ロック境界の終了処理でrefカウンタのlint警告
+- 発見日: 2026-10-21(4-3統合lint)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: SubscriptionBoundary.tsx 212のgeneration.current加算にreact-hooks/exhaustive-deps警告。警告0設定で失敗。
+- 原因: effectの終了処理で可変refを直接参照し、ルールが終了時に参照対象が変わる可能性を警告する。refはDOMではなく無効化用の世代カウンタ。
+- 修正計画: 世代無効化を安定したcallbackへまとめ、同じ終了時の無効化を維持して警告を解消する。型回避/無効化ルールの一括抑制は行わない。
+
+## P-103 新規起動ガードの依存が既存画面テストで未定義
+- 発見日: 2026-10-21(4-3全体Jest)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: 全87suite中6fail/81pass、110fail/1383pass。RootLayoutへ追加したSubscriptionBoundaryが新たに認証監視を起動し、既存SDK mockにonAuthStateChangedがなく停止。主な対象はtimer/home/旧onboarding/AccountActionBoundaryのルート統合テスト。
+- 原因: rootへ追加した契約読込/認証監視という依存に、非課金画面の既存テスト環境が追従していない。新規Boundary専用15件は成功。
+- 修正計画: 対象6テストで契約repository依存を明示し、それぞれの認証UIDに対する有効契約とunsubscribeを再現。旧画面のassertion/操作条件・実router・実Boundaryを保持し、本番コードへ未搭載SDKのfail-openを追加しない。型と対象6suite確認後、全体Jestを再実行。別原因を検出したら隠さず別途記録する。
+
+## P-104 起動時の目標変更再開読込と遷移判定が重複
+- 発見日: 2026-10-21(4-3旧画面テスト統合)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: P-103修正後7suite中6pass/1fail、131pass/5fail。AccountActionBoundary旧テストの再開読込回数が期待1→実3。
+- 原因: 新規SubscriptionBoundaryと既存LaunchScreenが双方loadGoalReplacementを呼び、起動購入再確認後にも同じlookupを行う。両者がrootの遷移先を決め、従来の再開優先順位や初回ガードと競合する。
+- 修正計画: 再開lookupは既存LaunchScreenだけで行い、UID/アカウント操作世代に結び付いた確認済み結果を課金境界へ通知する。登録済み・有効契約でrootからhome/Xへ移るのは、その確認が終わって再開先がない場合のみ。待機中の子は維持し旧P083/CP優先のassertionを弱めず、実LaunchScreenを含む統合テストを追加する。未登録fixture変更だけで重複読込を隠さない。
+
+## P-105 既存アカウント画面テストの契約・認証stubが新規起動遷移と不整合
+- 発見日: 2026-10-21(P-103依存追加後)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 調査: 完了を返すservice.perform/resume stubが本来のsignOutを再現せずUIDを残している。追加repository stubは全ケースで登録済み有効とし、初回入力ガードを扱う旧launchケースの前提を区別していない。また実アプリの/(tabs)/home遷移先が旧テストのroute mapにないためUnmatched Routeとなる。
+- 対応境界: P-104の製品側重複lookupは別に修正し、fixtureで回避しない。service成功の実契約(本人確認後signOut→launch)と、承認済み未登録launch/登録済みhomeの各状態に沿う明示的なtest設定を検討する。旧タイマー・再開・CP優先のassertionは維持し、登録済み実LaunchScreenの一度だけの再開確認→homeも新規統合テストで検証する。
+
+## P-106 初回画面単体テストの通知callback mockが毎render別関数となる
+- 発見日: 2026-10-21(4-3最終全体Jest)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: 87suite中86pass/1fail、1492pass/1fail。home-screen.test.tsxのみ5秒timeout。
+- 原因: P-105で追加したuseSubscriptionAccess mockが呼出ごとに新しいjest.fnをreportLaunchInspectionへ返し、LaunchScreen effectの依存関数が毎render変わる。新しいcheckedAccountActionsオブジェクトをsetするためeffect→setState→再renderが反復する。実BoundaryのcallbackはuseCallbackで安定しており、実画面の統合34件はPASS。
+- 修正計画: 実装担当が単体テストのmodule factory内でcallbackを1回だけ作り再利用する。製品source・assertion・timeoutは変更しない。全体差し戻し3回(110fail→5fail→1fail)を踏まえAGENTS規定どおりユーザーへ原因と限定修正案を報告して指示を仰ぐ。
+
+## P-107 起動時の再開データ読込失敗が新規課金ガードへ通知されない
+- 発見日: 2026-10-21(4-3/P-104独立review)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 調査: loadGoalReplacementのAsyncStorage.getItemはrejectし得る。LaunchScreenのresumeはfinallyだけでcatchがなく、reportLaunchInspectionへ到達しない。新規SubscriptionBoundaryはwaitForLaunchを解除できず確認中coverを保持する。未処理rejectは以前から存在するが、通知欠落で新規coverが残る経路はP-104で追加。静的経路確認済み、動的失敗注入はreview担当が準備中。
+- 決定: ユーザー承認(2026-10-21)により「再開データを読み込めませんでした」と再試行を表示し、データは保持、成功まで遷移を止める。
+- 修正計画: 実装担当がUID/ownerに拘束した失敗通知・再試行を実装。旧UIDやunmount後の応答を無視し、失敗を再開先なしとして扱わない。実LaunchScreenを含む失敗→再試行→正常遷移のテストと独立review/securityを実施。過去問題や既存タスク順序は変更しない。
+
+## P-108 P-107連打テストがhost要素のonPressを直接取得して失敗
+- 発見日: 2026-10-21(P-107対象テスト)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: 対象48件中42PASS/6FAILのうち追加4ケースがpress is not a function。getByTestIdのhost propsにはonPressがない。過去P-099と同じテスト手法の誤り。
+- 修正計画: 実装担当が公開PrimaryButtonコンポーネントのcallback取得またはRNTLイベントを用い、同一ハンドラ連打とlookup2回のみのassertionを維持する。製品source変更なし。
+
+## P-109 新規待機coverにより既存P083テストが非表示要素を取得できない
+- 発見日: 2026-10-21(P-107対象テスト)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: 既存P083の2ケースがonboarding-start-button取得失敗。描画ログにはdisabled=trueの同ボタンとsubscription-contentのaccessibilityElementsHidden=trueが存在する。
+- 原因: 承認済みの再開データ確認待機でroot coverが操作を遮断し、RNTL通常queryから背後要素が隠れる。ボタン削除・有効化ではない。
+- 修正計画: 実装担当が当該待機区間のみincludeHiddenElementsを明示し、disabled/no draft load/成功後enabledのassertionを保持。cover遮断自体も確認し、既存P083問題の状態や仕様は変更しない。
+
+## P-110 再開データ読込失敗時の遷移停止に未承認の課金例外を追加
+- 発見日: 2026-10-21(4-3最終独立review)
+- 状態: 解決済み(2026-10-21。4-3独立review/security PASS)
+- 再現: 登録済み・期限切れの状態で再開データ読込をrejectすると、指定エラー/再試行よりpaywall遷移を優先。追加テストもその例外を期待してPASSしていた。
+- 原因: mainがセキュリティ側の助言を実装依頼へ入れ、ユーザー承認の「再試行が成功するまで画面遷移を止める」にない期限切れ例外を混入した。全体1506件PASSでも仕様整合性が不足していた。
+- 修正計画: 承認済み仕様を優先し、rootの再開確認失敗は期限切れでも指定エラー/再試行を表示し遮断を継続。読込再試行成功後に最新契約が期限切れならpaywallへ進む。保護対象画面の操作や利用は許可しない。通常の期限切れロックとUID/owner/古い結果排除を保持する。impl限定修正→対象テスト→独立review/securityで検証。
+
+- 4-3最終確認(2026-10-21): P-100〜P-110は独立review/security PASS。P-106限定修正後1493件PASS、P-107読込失敗の捕捉/再試行を追加し、P-108/P-109のテスト取得不整合を修正。P-110の未承認課金例外を削除し、再試行成功まで遷移を遮断する承認仕様へ統一。最終87suite1507件PASS、対象49件PASS、独立security199件PASS、全体typecheck/lint/diffcheck PASS。過去P-099以前の状態・内容は変更していない。サーバー/ルール/native未変更、実課金・本番操作・E2Eなし。

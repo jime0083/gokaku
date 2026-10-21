@@ -1,6 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 
+jest.mock('@/features/billing/subscriptionRepository', () => ({
+  loadSubscriptionSession: jest.fn(async (uid: string) => ({
+    uid, registered: true, xLinked: true, access: 'allowed' as const,
+  })),
+  subscribeSubscriptionAuth: jest.fn(() => jest.fn()),
+}));
+
 jest.mock('@/features/account/accountActionService', () => ({
   accountActionService: {
     inspectPending: jest.fn(async () => ({

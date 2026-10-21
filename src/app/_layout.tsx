@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { AccountActionBoundary } from '@/features/account/AccountActionBoundary';
+import { SubscriptionBoundary } from '@/features/billing/SubscriptionBoundary';
 import { useDeviceTokenSync } from '@/features/deviceToken/useDeviceTokenSync';
 
 export default function RootLayout() {
@@ -11,7 +12,9 @@ export default function RootLayout() {
 
   return (
     <AccountActionBoundary>
-      <Stack screenOptions={{ headerShown: false }} />
+      <SubscriptionBoundary>
+        <Stack screenOptions={{ headerShown: false }} />
+      </SubscriptionBoundary>
       <StatusBar style="dark" />
     </AccountActionBoundary>
   );

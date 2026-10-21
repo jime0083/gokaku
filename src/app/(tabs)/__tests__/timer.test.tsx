@@ -6,6 +6,13 @@ import { AppState } from 'react-native';
 import { startLocalSession } from '@/features/timer/storage';
 import { getCurrentUid } from '@/config/firebase';
 
+jest.mock('@/features/billing/subscriptionRepository', () => ({
+  loadSubscriptionSession: jest.fn(async (uid: string) => ({
+    uid, registered: true, xLinked: true, access: 'allowed' as const,
+  })),
+  subscribeSubscriptionAuth: jest.fn(() => jest.fn()),
+}));
+
 jest.mock('@/features/account/accountActionService', () => ({
   accountActionService: {
     inspectPending: jest.fn(async () => ({

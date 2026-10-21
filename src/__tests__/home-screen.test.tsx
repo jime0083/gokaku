@@ -2,6 +2,15 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react-native'
 
 import HomeScreen from '@/app/index';
 
+jest.mock('@/features/billing/SubscriptionBoundary', () => {
+  const reportLaunchInspection = jest.fn();
+  return {
+    useSubscriptionAccess: () => ({
+      reportLaunchInspection,
+    }),
+  };
+});
+
 jest.mock('@/features/account/AccountActionBoundary', () => {
   const actions = {
     ready: true,

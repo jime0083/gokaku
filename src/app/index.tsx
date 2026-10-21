@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getCurrentUid } from '@/config/firebase';
 import { useAccountActions } from '@/features/account/AccountActionBoundary';
+import { useSubscriptionAccess } from '@/features/billing/SubscriptionBoundary';
 import { loadGoalReplacement } from '@/features/onboarding/replacementStorage';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -19,28 +20,57 @@ export default function LaunchScreen() {
   const router = useRouter();
   const accountActions = useAccountActions();
   const { ready, isReady } = accountActions;
-  const [checkedAccountActions, setCheckedAccountActions] = useState<typeof accountActions | null>(null);
-  const checkingReplacement = !ready || checkedAccountActions !== accountActions;
+  const { reportLaunchInspection } = useSubscriptionAccess();
+  const uid = getCurrentUid();
+  const identity = useRef({ accountActions, uid });
+  useLayoutEffect(() => {
+    identity.current = { accountActions, uid };
+  });
+  const [checkedAccountActions, setCheckedAccountActions] = useState<{
+    owner: typeof accountActions;
+    uid: string | null;
+  } | null>(null);
+  const checkingReplacement = !ready ||
+    checkedAccountActions?.owner !== accountActions || checkedAccountActions?.uid !== uid;
   useEffect(() => {
     if (!ready) return;
     let mounted = true;
-    const uid = getCurrentUid();
+    let generation = 0;
+    let working = false;
+    let completed = false;
+    const valid = () => mounted && isReady() && getCurrentUid() === uid &&
+      identity.current.accountActions === accountActions && identity.current.uid === uid;
     const resume = async () => {
-      const record = uid ? await loadGoalReplacement(uid) : null;
-      if (mounted && isReady() && record && getCurrentUid() === uid) {
-        router.replace(record.committedGoalId ? '/onboarding/pace' : resolveOnboardingResumeRoute(record.draft, Date.now()));
+      if (!valid() || working || completed) return;
+      working = true;
+      const token = ++generation;
+      reportLaunchInspection(uid, accountActions, { phase: 'checking', retry });
+      try {
+        const record = uid ? await loadGoalReplacement(uid) : null;
+        if (!valid() || generation !== token) return;
+        const route = record
+          ? record.committedGoalId ? '/onboarding/pace' : resolveOnboardingResumeRoute(record.draft, Date.now())
+          : undefined;
+        completed = true;
+        reportLaunchInspection(uid, accountActions, Boolean(record), route);
+        setCheckedAccountActions({ owner: accountActions, uid });
+      } catch {
+        if (valid() && generation === token) {
+          reportLaunchInspection(uid, accountActions, { phase: 'error', retry });
+        }
+      } finally {
+        if (generation === token) working = false;
       }
     };
-    void resume().finally(() => {
-      if (mounted && isReady()) setCheckedAccountActions(accountActions);
-    });
-    return () => { mounted = false; };
-  }, [accountActions, isReady, ready, router]);
+    function retry() { void resume(); }
+    retry();
+    return () => { mounted = false; ++generation; };
+  }, [accountActions, isReady, ready, reportLaunchInspection, uid]);
 
   const handleStart = async () => {
-    if (!isReady() || checkingReplacement) return;
+    if (!isReady() || checkingReplacement || getCurrentUid() !== uid) return;
     const draft = await loadOnboardingDraft();
-    if (!isReady()) return;
+    if (!isReady() || getCurrentUid() !== uid) return;
     const route = resolveOnboardingResumeRoute(draft, Date.now());
     router.push(route);
   };

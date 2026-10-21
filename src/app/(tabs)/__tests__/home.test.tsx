@@ -11,6 +11,13 @@ import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-rou
 import type { HomeDataResult } from '@/features/home/homeDataRepository';
 import { loadLocalSessions, startLocalSession } from '@/features/timer/storage';
 
+jest.mock('@/features/billing/subscriptionRepository', () => ({
+  loadSubscriptionSession: jest.fn(async (uid: string) => ({
+    uid, registered: true, xLinked: true, access: 'allowed' as const,
+  })),
+  subscribeSubscriptionAuth: jest.fn(() => jest.fn()),
+}));
+
 jest.mock('@/config/firebase', () => ({
   ...jest.requireActual<typeof import('@/config/firebase')>('@/config/firebase'),
   getCurrentUid: jest.fn(),
