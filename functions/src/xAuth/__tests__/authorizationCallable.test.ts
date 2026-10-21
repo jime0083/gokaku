@@ -11,6 +11,8 @@ import {
   handleAuthorizationRequest,
 } from '../authorizationCallable';
 import type { AuthorizationFlow } from '../authorizationFlow';
+import type { CandidateFlow } from '../candidateFlow';
+import { createCandidateStore } from '../candidateStore';
 import {
   AuthorizationConfigError,
   X_OAUTH_CLIENT_ID,
@@ -38,6 +40,7 @@ jest.mock('firebase-admin/firestore', () => ({
 }));
 jest.mock('../stateStore', () => ({ createStateStore: jest.fn() }));
 jest.mock('../tokenStore', () => ({ createTokenStore: jest.fn() }));
+jest.mock('../candidateStore', () => ({ createCandidateStore: jest.fn() }));
 
 const registration = jest.mocked(onCall).mock.calls.slice();
 const UID = 'callable-user';
@@ -351,4 +354,218 @@ it('rejects missing synthetic runtime redirect with fixed config failure', () =>
   expect(() => f.config.X_OAUTH_REDIRECT_URI.value(() => undefined))
     .toThrow('X authorization is not configured');
   expect(f.reads).toEqual({ environment: 0, values: 0 });
+});
+
+function candidateFixture() {
+  const candidate = {
+    candidateId: 'candidate_1-test',
+    profile: { id: '123', username: 'tester', profileImageUrl: null },
+    expiresAt: 123456789,
+  };
+  const flow: jest.Mocked<CandidateFlow> = {
+    getPending: jest.fn().mockResolvedValue({
+      ...candidate,
+      encryptedAccessToken: PRIVATE,
+      encryptedRefreshToken: PRIVATE,
+      profile: { ...candidate.profile, token: PRIVATE },
+    }),
+    confirm: jest.fn().mockResolvedValue({ token: PRIVATE }),
+    discard: jest.fn().mockResolvedValue({ token: PRIVATE }),
+  };
+  return { candidate, flow, factory: jest.fn(async () => flow) };
+}
+
+describe('candidate callable actions', () => {
+  const actions = [
+    { action: 'pending' },
+    { action: 'confirm', candidateId: 'candidate_1-test', postEnabled: true },
+    { action: 'discard', candidateId: 'candidate_1-test' },
+  ];
+
+  it('returns only public pending fields, including null', async () => {
+    const auth = fixture();
+    const f = candidateFixture();
+    expect(await handleAuthorizationRequest(
+      request(actions[0]), auth.factory, f.factory,
+    )).toEqual({ pending: f.candidate });
+    expect(f.flow.getPending).toHaveBeenCalledWith(UID);
+    f.flow.getPending.mockResolvedValueOnce(null);
+    expect(await handleAuthorizationRequest(
+      request(actions[0]), auth.factory, f.factory,
+    )).toEqual({ pending: null });
+    expect(auth.factory).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('passes exact consent %s and returns only ok', async (postEnabled) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    expect(await handleAuthorizationRequest(request({
+      action: 'confirm', candidateId: f.candidate.candidateId, postEnabled,
+    }), auth.factory, f.factory)).toEqual({ ok: true });
+    expect(f.flow.confirm).toHaveBeenCalledWith(
+      UID, f.candidate.candidateId, postEnabled,
+    );
+    expect(f.flow.getPending).not.toHaveBeenCalled();
+    expect(auth.factory).not.toHaveBeenCalled();
+  });
+
+  it('discards with authenticated UID and returns only ok', async () => {
+    const auth = fixture();
+    const f = candidateFixture();
+    expect(await handleAuthorizationRequest(
+      request(actions[2]), auth.factory, f.factory,
+    )).toEqual({ ok: true });
+    expect(f.flow.discard).toHaveBeenCalledWith(UID, f.candidate.candidateId);
+    expect(auth.factory).not.toHaveBeenCalled();
+  });
+
+  it.each(actions)('authenticates before inspecting candidate payload %j', async (data) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    const req = { auth: undefined, get data(): unknown { throw new Error(PRIVATE); } };
+    await failure(handleAuthorizationRequest(req, auth.factory, f.factory),
+      'unauthenticated', 'ログインが必要です');
+    expect(auth.factory).not.toHaveBeenCalled();
+    expect(f.factory).not.toHaveBeenCalled();
+    await failure(handleAuthorizationRequest(
+      request(data, 'other/user'), auth.factory, f.factory,
+    ), 'unauthenticated', 'ログインが必要です');
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+
+  it.each(actions)('rejects all extra candidate fields before factories %j', async (data) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    const getter = jest.fn(() => PRIVATE);
+    const payloads = [
+      ...['uid', 'profile', 'username', 'token', 'postEnabledExtra'].map(
+        (key) => ({ ...data, [key]: PRIVATE }),
+      ),
+      Object.defineProperty({ ...data }, 'hidden', { value: PRIVATE }),
+      { ...data, [Symbol('hidden')]: PRIVATE },
+      Object.defineProperty({ ...data }, 'profile', { get: getter }),
+      Object.create(data),
+    ];
+    for (const payload of payloads) {
+      await failure(handleAuthorizationRequest(
+        request(payload), auth.factory, f.factory,
+      ), 'invalid-argument', 'Invalid X authorization request');
+    }
+    expect(getter).not.toHaveBeenCalled();
+    expect(auth.factory).not.toHaveBeenCalled();
+    expect(f.factory).not.toHaveBeenCalled();
+    for (const param of params) expect(param.value).not.toHaveBeenCalled();
+  });
+
+  it.each(['confirm', 'discard'])('rejects unsafe candidate IDs for %s before factories', async (action) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    for (const candidateId of [
+      undefined, null, 1, '', ' ', '.', '..', '__reserved__', 'a/b',
+      'a b', 'a\n', 'a\u007f', '\ud800', '雪', 'a'.repeat(1501),
+    ]) {
+      await failure(handleAuthorizationRequest(request({
+        action, candidateId, ...(action === 'confirm' ? { postEnabled: false } : {}),
+      }), auth.factory, f.factory),
+      'invalid-argument', 'Invalid X authorization request');
+    }
+    expect(auth.factory).not.toHaveBeenCalled();
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+
+  it.each<'confirm' | 'discard'>(['confirm', 'discard'])('accepts the exact candidate ID length boundary for %s', async (action) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    const candidateId = 'a'.repeat(1500);
+    expect(await handleAuthorizationRequest(request({
+      action, candidateId, ...(action === 'confirm' ? { postEnabled: false } : {}),
+    }), auth.factory, f.factory)).toEqual({ ok: true });
+    expect(f.flow[action]).toHaveBeenCalledWith(
+      UID, candidateId, ...(action === 'confirm' ? [false] : []),
+    );
+  });
+
+  it.each([undefined, null, 0, 1, '', 'false', {}, []])(
+    'rejects nonboolean consent %j before factories', async (postEnabled) => {
+      const auth = fixture();
+      const f = candidateFixture();
+      await failure(handleAuthorizationRequest(request({
+        action: 'confirm', candidateId: 'candidate', postEnabled,
+      }), auth.factory, f.factory),
+      'invalid-argument', 'Invalid X authorization request');
+      expect(auth.factory).not.toHaveBeenCalled();
+      expect(f.factory).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { action: 'pending', candidateId: 'candidate' },
+    { action: 'pending', postEnabled: true },
+    { action: 'confirm', candidateId: 'candidate' },
+    { action: 'discard' },
+    { action: 'discard', candidateId: 'candidate', postEnabled: false },
+    { action: 'other' },
+  ])('rejects missing/wrong action fields %j before factories', async (data) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    await failure(handleAuthorizationRequest(
+      request(data), auth.factory, f.factory,
+    ), 'invalid-argument', 'Invalid X authorization request');
+    expect(auth.factory).not.toHaveBeenCalled();
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+
+  it('keeps candidate factory lazy for begin and complete', async () => {
+    const auth = fixture();
+    const f = candidateFixture();
+    await handleAuthorizationRequest(request({ action: 'begin' }), auth.factory, f.factory);
+    await handleAuthorizationRequest(request({
+      action: 'complete', state: 'state', code: 'code',
+    }), auth.factory, f.factory);
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(createCandidateStore).not.toHaveBeenCalled();
+  });
+
+  it.each(actions)('redacts candidate operation and factory errors %j', async (data) => {
+    const auth = fixture();
+    const f = candidateFixture();
+    const secretError = new HttpsError('permission-denied', PRIVATE, { token: PRIVATE });
+    f.flow.getPending.mockRejectedValue(secretError);
+    f.flow.confirm.mockRejectedValue(secretError);
+    f.flow.discard.mockRejectedValue(secretError);
+    await failure(handleAuthorizationRequest(
+      request(data), auth.factory, f.factory,
+    ), 'internal', 'X authorization failed');
+    f.factory.mockRejectedValueOnce(new AuthorizationConfigError());
+    await failure(handleAuthorizationRequest(
+      request(data), auth.factory, f.factory,
+    ), 'failed-precondition', 'X authorization is not configured');
+    f.factory.mockRejectedValueOnce(secretError);
+    await failure(handleAuthorizationRequest(
+      request(data), auth.factory, f.factory,
+    ), 'internal', 'X authorization failed');
+    expect(auth.factory).not.toHaveBeenCalled();
+  });
+
+  it('lazily wires the default candidate flow to the production store', async () => {
+    const auth = fixture();
+    const get = jest.fn().mockResolvedValue(null);
+    jest.mocked(createCandidateStore).mockReturnValue({
+      get, attachProfile: jest.fn(), confirm: jest.fn(), discard: jest.fn(),
+    });
+    expect(await handleAuthorizationRequest(
+      request({ action: 'pending' }), auth.factory,
+    )).toEqual({ pending: null });
+    expect(get).toHaveBeenCalledWith(UID);
+    expect(ensureAdminApp).toHaveBeenCalledTimes(1);
+    expect(getFirestore).toHaveBeenCalledTimes(1);
+    const deps = jest.mocked(createCandidateStore).mock.calls[0][0];
+    expect(deps.encryptionKey).toBe(Buffer.alloc(32, 7).toString('base64'));
+    expect(Number.isSafeInteger(deps.now())).toBe(true);
+    expect(auth.factory).not.toHaveBeenCalled();
+    expect(createStateStore).not.toHaveBeenCalled();
+    expect(createTokenStore).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
+  });
 });

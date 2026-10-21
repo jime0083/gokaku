@@ -46,7 +46,8 @@
       "@react-native-firebase/auth",
       "expo-iap",
       "./plugins/withStoreKitConfig",
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

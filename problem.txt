@@ -1454,3 +1454,75 @@
 - 修正計画: Client ID/Secret/暗号鍵はdefineSecretのまま維持し、非秘密2設定だけをmanifestへ登録しないruntime環境読込へ変更。import時に値を読まず、未設定/不正値は呼出時failed-preconditionを維持。製品TTLやredirectのデフォルトは作らない。対象test/型/lint・独立review/securityとmanifest登録の隔離検証で確認する。
 
 - P-090最終確認(2026-10-20): 修正後Callable81件PASS、独立Callable/state142件PASS、全体npm run typecheck/対象lintPASS。synthetic SDK/processで秘密宣言3件・非秘密manifest登録0件・import時環境/値読取0件。非秘密設定未入力時は呼出時failed-precondition、TTL/redirectの製品既定値は設けていない。実X設定・実秘密値読取・本番接続なし。7-1aモック実装全体もreview/security PASS。
+
+## P-091 プロフィール取得テストの上限境界fixtureが16文字になっている
+- 発見日: 2026-10-20(7-1b profileTransportの初回Jest)
+- 状態: 解決済み(2026-10-21。対象検証・独立review/security PASS)
+- 再現: 対象79件中78PASS、正常系のA_12345678901234だけ失敗。実測文字数は16で、handle上限15のvalidatorが拒否している。16文字拒否の異常系は既に別caseでPASS。
+- 原因: 正常系の上限fixtureを手書きした際の文字数誤り。型/lintでは検出できないテストデータの不整合。
+- 修正計画: 実装担当に15文字であることを明示的に検証する境界fixtureへ差し戻す。16文字拒否のassertionと実validatorは維持する。また64KiB UTF8境界testは1byteずつ65536chunkをenqueueして約3.6秒を費やしているため、同じ総byte数とUTF8途中分割を明示する少数chunkにする。期待値・時間/容量上限・失敗条件を弱めず再検証し独立review/securityへ戻す。
+
+## P-092 確認待ちプロフィール保存案が画像なしの承認仕様と不整合
+- 発見日: 2026-10-20(7-1b candidateStoreの適用前確認)
+- 状態: 解決済み(2026-10-21。対象検証・独立review/security PASS)
+- 再現/調査: profileTransportはprofileImageUrlがnullの正常応答を返すが、candidateStore案のCandidateProfileとvalidatorはstring必須。画像なしは人型アイコンという承認済み仕様で、保存/再開/確定が拒否される設計になっている。コードは未適用で実データへの影響なし。
+- 原因: 分担時のプロフィール型の接続条件が揃っておらず、候補保存側が画像を必須としている。またusername上限と画像URLの検査条件もtransportとの整合確認が必要。
+- 修正計画: 実装担当が保存/再開/確定でnull画像を正常に扱い、username/画像URL検査をtransport契約に揃える。discardも応答喪失後の再試行では既に候補なしを安全なno-opにし、別candidateの削除は引き続き拒否する。旧有効credential/他state保持、false許可、transaction guardのテストは維持。適用後に対象検証・独立review/security確認する。
+
+## P-093 認証ブラウザ追加後のSE向けnative再ビルドが失敗
+- 発見日: 2026-10-20(7-1b native部品検証)
+- 状態: 調査中
+- 再現: expo-web-browser ~57.0.3の導入・pod install成功後、SE(iOS18.6)へのexpo run:ios --no-bundlerが非0で終了。2機種目と認証callback/取消の実行確認は未実施。
+- 調査方針: /tmp/gokaku-authbrowser-j4y9jV/build-0.logの最初のbuild errorを特定し、既存P-019/P-082/P-084等との関係を照合する。原因確定前に依存やnative sourceを変更しない。probeはbuild後に編集する計画だったため未変更、所有プロセスはrunnerで終了処理済み。
+
+- P-093再開調査(2026-10-21): 前回引継ぎ報告ではXcodeのBuild Succeeded・インストール後にExpo CLIのSystem EventsによるSimulator前面化が失敗した。現環境には当時の/tmpログが残っておらず再読できないため、ビルド成功と実行検証成功を区別し、現環境で再検証する。計画: 既存署名/entitlementsを維持したxcodebuildとsimctlを使い、OSのAutomation設定を変更せず2機種のlocal mock callback/取消を確認。依存/製品sourceの推測修正はしない。
+
+- P-091/P-092最終確認(2026-10-21): 独立reviewでcandidateStore108件・profileTransport79件と対象lint PASS。独立securityは認証ブラウザdriver82件も含め269件・アプリ/Functions型チェックPASS。null画像・上限15/16文字・64KiB途中UTF8・応答喪失時の再試行・旧credential保持を確認。実Emulator/画面/nativeは別検証のため7-1b全体は未完了。
+
+## P-094 認証ブラウザ検証runnerのMetro起動オプション競合
+- 発見日: 2026-10-21(7-1b/P-093再検証)
+- 状態: Metro起動確認済み(2026-10-21。P-096とは別事象)
+- 再現: /tmp/gokaku-p093-native-spike/run.py初回で署名付きbuild/権限検証は成功、その後MetroがSpecify at most one of: --offline, --host, --tunnel, --lan, --localhostで終了。端末boot/install・認証callbackは未実施。
+- 原因: 外部runnerがExpo CLIに--localhostと--offlineを同時指定した。製品コードの問題ではない。summaryのbuildScopeは予定文言であり、両端末install完了の証拠にならない。
+- 修正計画: 実装担当が外部runnerの競合オプションのみ整理し、EXPO_OFFLINE環境制御とlocalhost bindを確認。検証済みbuildを保持し2回目を上限に再実行する。summaryは実行済み工程を区別。repo source変更なし。
+
+- P-093再検証追記(2026-10-21): xcodebuildはBUILD SUCCEEDED、codesign検証・埋込entitlements/Simulated.xcent一致確認は成功。System Events操作は未使用。初回は別P-094によりMetro起動で停止したため2機種へのinstall・ブラウザ実動作は未確認。自分のPID残存0・検証入力の変更0。
+
+## P-095 X連携新規テストのJest mock引数型不整合
+- 発見日: 2026-10-21(7-1b候補取得/Callable拡張の型チェック)
+- 状態: 解決済み(2026-10-21。対象検証・独立review/security PASS)
+- 再現: 候補取得/Callable対象Jest124件PASS後、Functions tscがcandidateFlow.test.tsの引数なしmockとauthorizationCallable.test.tsのstring添字で失敗。
+- 原因: jest.fnの実装関数が引数なしのため空tupleと推論され、引数ありのCandidateStore/ProfileFetchのMocked型へ代入できない。it.eachのactionもstringに拡大しflow[action]を型安全に参照できない。
+- 修正計画: 実装担当がテストmockの引数/戻り値型とactionのliteral unionのみ明示。製品処理・assertion・データ・失敗条件を変えず対象Jest/Functions型/lintで再検証し独立review/securityへ戻す。
+
+## P-096 認証ブラウザ検証のスクリーンショット保存先がMaestro制約に違反
+- 発見日: 2026-10-21(7-1b native spike 2回目)
+- 状態: 原因特定・追加実行保留
+- 再現: SEで認証browser表示→local callback→P093-normal-PASS表示までは全て成功。その後takeScreenshotがabsolute path outside this run output folderで失敗しrunner停止。取消/ephemeral/ProMaxセッションは未実施。
+- 原因: 外部flowがtakeScreenshotに外部絶対pathを渡したが、現Maestroは実行用出力フォルダ内だけ許可する。browser処理失敗ではない。
+- 修正計画: 実装担当が証跡と相対保存先の修正案を確認し、全spikeの3回目は行わず残検証へ引き継ぐ。部品検証で確認できたSE正常callbackと、未確認取消/ephemeral/大型機種を明確に区別する。製品sourceは変更しない。
+
+- P-094再検証(2026-10-21): 競合する--offline引数削除後、localhost Metro起動成功、SE起動/認証browser/local callbackも成功。保存先制約は別P-096。製品source/期待assertion変更なし。独立review前のためP-094は最終解決判定待ち。
+
+## P-097 X連携画面テストが共通safe-area mockを消去する
+- 発見日: 2026-10-21(7-1b画面初回Jest)
+- 状態: 解決済み(2026-10-21。対象検証・独立review/security PASS)
+- 再現: 全10件がinsets.topの参照で停止。新規beforeEachはjest.resetAllMocksを使用し、jest.setup.tsの公式useSafeAreaInsets jest.fn実装を消去してundefinedを返す。
+- 原因: 全mockの実装リセットが共通環境mockへ波及。
+- 修正計画: 担当API/browser mockだけをresetし他の共通mock実装を保持。10件のassertion・操作・製品のsafe-area処理は維持し対象Jest/独立reviewで確認。
+
+## P-098 X連携ダイアログが現React NativeにないStyleSheet APIを参照
+- 発見日: 2026-10-21(7-1b全体型チェック)
+- 状態: 解決済み(2026-10-21。対象検証・独立review/security PASS)
+- 再現: src/app/x-link.tsxのStyleSheet.absoluteFillObjectがTS2551。導入済みRNの型はabsoluteFillを提供する。
+- 原因: 新規UIが以前のRN API名を使用し、導入済み版と不整合。
+- 修正計画: 実装担当がposition:absolute/top/right/bottom/left:0を明示し同じ全画面overlayにする。仕様や見た目を変えず型/lint/画面テスト・独立reviewで確認。
+
+## P-099 X連携連打テストがhost要素のonPressを直接参照して失敗
+- 発見日: 2026-10-21(P-097/P-098修正後)
+- 状態: 解決済み(2026-10-21。対象検証・独立review/security PASS)
+- 再現: 画面9件PASS、連打/アンマウント1件のみonPress is not a function。testIDで取得したhost要素のprops.onPressが存在しない。
+- 原因: React Native Pressableの内部host propsを公開コンポーネントのonPressと同一視した新規テスト実装。
+- 修正計画: 実装担当が導入済みRNTLのイベント/公開コンポーネント取得で同じハンドラへの連打を検証する。連打1回だけのbegin/browser、アンマウント後completeなしのassertionは維持。製品処理をテスト都合で変更しない。
+
+- 7-1b最終確認(2026-10-21): P-095は型宣言だけ、P-097/P-099は画面テストだけ、P-098は同じ全面overlayの明示指定へ修正。画面10/10・全体1418件・TZ268×2・全体型/lint PASS。独立review/securityは7-1b全体PASS。P-093/P-096に残るnative取消/ephemeral/ProMaxセッションと2機種E2Eは未確認のままPhase末へ引継ぎ。通常Debug署名ビルドへ戻してSE/ProMax双方へ反映し、NativeSyncBaseURL=localhost:5001/demo-gokakuを確認。停止済みmock URLの成果物は通常用へ置換、検証用Metro/所有PID残存なし。古いP-081/P-085/P-016等の状態・既存タスク順序は変更していない。

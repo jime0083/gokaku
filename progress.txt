@@ -794,7 +794,11 @@ Phase 7: X連携・0:00判定・自動投稿
     内容: OAuth 2.0 PKCE の開始(state・PKCE)→ Functions でトークン交換 → 暗号化して xTokens に保存。xTokens にクライアントから触れないルール
     完了条件: X のモックで、連携成功・state 不一致・交換失敗のテストと、ルールのテストが緑
 
-[ ] 7-1b X連携: 確認画面と投稿許可ダイアログ
+[x] 7-1b X連携: 確認画面と投稿許可ダイアログ
+    ※完了(2026-10-21): review/security双方が7-1b全体PASS(AGENTSの速いテストによる判定)。確認アカウント/画像なし人型・別アカウント・投稿許可/不許可・再開/取消/通信再試行・応答喪失時の同一confirmを接続。画面10件、アプリ全体82suite/1418件、TZ268件×2、XAuth560件PASS(実Emulator専用2件skip、既存実測済み)、全体型/lint成功。実candidate transaction22項目・rules311件成功。署名付きDebugビルドと2機種アプリ更新成功、通常demo-gokaku nativeSync設定に復元済み。SE認証正常callbackは実確認。native取消/ephemeral/ProMaxセッションと2機種E2EはP-093/P-096・Phase7末へ引継ぎ、成功扱いにしない。W7実設定・本番デプロイ/実X接続は未実施。課金画面からの遷移差替えは次の4-3で行う。目標数値の変更なし。
+    ※実Emulator確認(2026-10-21): candidateStoreはdemo-gokaku実Firestore SDKで22項目PASS。confirm(false)のuser/token同時commit、同一retry時の後続設定/新候補保持、stale候補拒否、削除marker/missing guardを確認。外部通信試行0・所有データ削除/プロセス終了済み。新規expo-web-browserの監査指摘は現JSONで検出されず、既存依存の74指摘は今回の追加によるものではない(過去73→74の全差分原因は未調査)。既存受入問題の状態は変更しない。
+    ※内部単位確認(2026-10-21): profileTransport79件・candidateStore108件・純粋認証ブラウザdriver82件が対象検証PASS、独立review/securityも内部単位PASS。P-091/P-092解消。確認待ちプロフィール取得・Callable/アプリ接続・画面・native検証は未完了で7-1bの完了扱いにしない。
+    ※再開(2026-10-21): 7-1aはcommit 5b09e2eに保存済み。7-1bは未完了。profileTransport・candidateStore・認証ブラウザdriverの実装済み内部単位を独立再検証し、確認待ちプロフィール取得とCallable接続を小単位で進める。前回の外部一時ログは現環境に残っていないためnative検証は再実施する。実X/本番操作なし。
     内容: 連携アカウント(アイコン・@ユーザー名)の確認画面、「別のアカウントにする」、投稿許可ダイアログ(requirements 4-5)
     完了条件: 画面テストで許可する/しない・別のアカウント。E2E 正常系(モック)が2機種で緑
 
