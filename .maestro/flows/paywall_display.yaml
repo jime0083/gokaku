@@ -1,0 +1,28 @@
+# P-022: CLI起動での商品取得成功は対象外。
+# 前提: 未ログイン、保留中のアカウント操作なし、テスト専用端末。
+appId: ${APP_ID}
+---
+- launchApp
+- openLink: ${DEV_CLIENT_URL}
+- tapOn:
+    text: "開く"
+    optional: true
+- tapOn:
+    text: "Open"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- openLink: "${APP_SCHEME}:///paywall"
+- extendedWaitUntil:
+    visible:
+      id: "paywall-error-text"
+    timeout: 8000
+- assertVisible:
+    id: "paywall-reload-button"
+    enabled: true
+- assertNotVisible:
+    id: "account-action-guard"
+- assertNotVisible:
+    id: "subscription-guard"
+- takeScreenshot: paywall_display

@@ -1602,3 +1602,24 @@
 - 修正計画: 承認済み仕様を優先し、rootの再開確認失敗は期限切れでも指定エラー/再試行を表示し遮断を継続。読込再試行成功後に最新契約が期限切れならpaywallへ進む。保護対象画面の操作や利用は許可しない。通常の期限切れロックとUID/owner/古い結果排除を保持する。impl限定修正→対象テスト→独立review/securityで検証。
 
 - 4-3最終確認(2026-10-21): P-100〜P-110は独立review/security PASS。P-106限定修正後1493件PASS、P-107読込失敗の捕捉/再試行を追加し、P-108/P-109のテスト取得不整合を修正。P-110の未承認課金例外を削除し、再試行成功まで遷移を遮断する承認仕様へ統一。最終87suite1507件PASS、対象49件PASS、独立security199件PASS、全体typecheck/lint/diffcheck PASS。過去P-099以前の状態・内容は変更していない。サーバー/ルール/native未変更、実課金・本番操作・E2Eなし。
+
+## P-111 push先のremote名をoriginと仮定して失敗
+- 発見日: 2026-10-21(4-3完了後push)
+- 状態: 解決済み(2026-10-21。設定済みremoteへのpush成功、remote ref一致を確認)
+- 再現: git push origin masterがorigin does not appear to be a git repositoryで終了。
+- 原因: mainがremote一覧取得とpushを同一呼出内で進め、結果を確認する前にoriginを指定した。実際の設定済みremote名はgokaku、URLは既存GitHubリポジトリ。
+- 対応計画: remote設定を変更せず、確認済みgokakuへmasterをpush。成功後にremote refとHEADの一致を読み取り確認する。アプリコード変更なし。
+
+- P-111確認: git push gokaku master成功(f2ed71a..b75a4b5)、git ls-remote gokaku refs/heads/masterはb75a4b5f0da5356867a09d63c98d18939284133b。remote設定変更なし。
+
+## P-112 一時SEのPhase末E2Eで初回画面のタイトル表示確認が失敗
+- 発見日: 2026-10-21(4-E2E実行)
+- 状態: 解決済み(2026-10-21。home限定2機種PASS・独立review PASS)
+- 再現: 一時専用SE/iOS18.6・署名済みdemo-gokaku buildで既存home_screenが24秒で「合格ウォッチ」visible assertionに失敗。直後の既存onboarding_exam_route_errorsは43秒でPASS。全体1回の実行は継続中。
+- 証跡: /tmp/gokaku-4e2e-8rm4psz2/execution.logとoutput/配下home_screenの画像/階層/commands。
+- 調査計画: 独立reviewが失敗時の実表示・guard状態・Metro読込を照合。初回bundle/テスト同期/アプリ処理のどれかを根拠なしに断定しない。既存画面・flow・過去problemは変更しない。
+
+- P-112原因確認: 独立reviewで19:48:52のClose未検出時はBundling66%、19:49:01の失敗画像ではタイトルが描画済みだがExpo開発メニューが前面。初回bundle完了前にoptional Closeが空振りし、後から表示されたメニューを閉じていない。4-3guard起因の証拠なし。
+- 修正計画: home_screenフローのみ、タイトルまたはCloseという準備完了のsurfaceが出るのを待ってから既存Close処理/タイトルassertionを実行。製品source・期待assertion・他flow・過去P-016/P-085状態は変更しない。全体1回の結果は保持し修正後は当該homeフローを2機種で限定再確認する。
+
+- P-112最終確認: homeのClose直前にタイトルまたはCloseの表示待機だけを追加。SE16秒/ProMax18秒で既存タイトルassertionまでPASS、メニューが覆わない画像を独立review確認。元fullrunのSE5/6・ProMax5/5は保持し、修正対象のみ2機種再検証。P-111も独立review PASS。製品source/他flow/過去問題の状態は変更なし。

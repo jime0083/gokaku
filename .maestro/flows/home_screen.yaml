@@ -14,6 +14,10 @@ appId: ${APP_ID}
 - tapOn:
     text: "Open"
     optional: true
+- extendedWaitUntil:
+    visible:
+      text: "合格ウォッチ|Close"
+    timeout: 60000
 - tapOn:
     text: "Close"
     optional: true
