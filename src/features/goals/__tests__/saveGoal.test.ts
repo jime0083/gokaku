@@ -139,3 +139,192 @@ describe('saveGoal', () => {
     expect(deps.clearOnboardingDraftCallCount).toBe(0);
   });
 });
+
+
+// 7-2-C: 初期化済みユーザーの初回登録。
+class HistoryTestTimestamp {
+  constructor(readonly seconds: number, readonly nanoseconds = 0) {}
+}
+
+function historyMetadata() {
+  return {
+    judgementHistoryStartedAt: new HistoryTestTimestamp(1),
+    judgementRevisions: { goal: 1, settings: 2, xLink: 3, subscription: 4 },
+  };
+}
+
+function historyDeps(
+  user: Record<string, unknown>,
+  options: { failPath?: string; retry?: boolean } = {},
+) {
+  const store = new Map<string, Record<string, unknown>>([['user', user]]);
+  const stamp = { serverTimestamp: true };
+  const createGoalDocRef = jest.fn(() => ({ ref: 'goal', id: 'goal' }));
+  const clearOnboardingDraft = jest.fn(async () => {});
+  const history = {
+    isTimestamp: (value: unknown) => value instanceof HistoryTestTimestamp,
+    getEntryDocRef: jest.fn((uid: string, revision: number) =>
+      `users/${uid}/judgementHistory/goal/entries/${revision}`),
+    serverTimestamp: jest.fn(() => stamp),
+  };
+  const base: SaveGoalDeps<string> = {
+    getUserDocRef: () => 'user',
+    createGoalDocRef,
+    clearOnboardingDraft,
+    runTransaction: async (body) => {
+      const attempt = async (commit: boolean) => {
+        const pending: [string, Record<string, unknown>][] = [];
+        const result = await body({
+          get: async (ref) => ({
+            exists: () => store.has(ref),
+            data: () => store.get(ref),
+          }),
+          set: (ref, data, setOptions) => {
+            if (ref === options.failPath) throw new Error('write rejected');
+            pending.push([ref, {
+              ...(setOptions?.merge ? store.get(ref) : {}),
+              ...data,
+            }]);
+          },
+        });
+        if (commit) pending.forEach(([ref, data]) => store.set(ref, data));
+        return result;
+      };
+      if (options.retry) await attempt(false);
+      return attempt(true);
+    },
+  };
+  return {
+    deps: Object.assign(base, { history }),
+    store, stamp, createGoalDocRef, clearOnboardingDraft,
+  };
+}
+
+describe('saveGoal judgement history: initial registration', () => {
+  it('goal・pointer・counter・最小entryを同じtransactionで保存する', async () => {
+    const metadata = historyMetadata();
+    const f = historyDeps(metadata);
+    const result = await saveGoal(f.deps, { uid: UID, draft: examDraft(), now: NOW });
+    const entryPath = `users/${UID}/judgementHistory/goal/entries/2`;
+    expect(f.store.size).toBe(3);
+    expect(f.store.get('goal')).toEqual(result.goal);
+    expect(f.store.get('user')).toEqual({
+      ...metadata,
+      activeGoalId: result.goalId,
+      judgementRevisions: { goal: 2, settings: 2, xLink: 3, subscription: 4 },
+    });
+    expect(f.store.get(entryPath)).toEqual({
+      schemaVersion: 1,
+      revision: 2,
+      committedAt: f.stamp,
+      before: null,
+      after: {
+        goalId: result.goalId,
+        startDate: result.goal.startDate,
+        examDate: result.goal.examDate,
+        minDailyMinutes: result.goal.minDailyMinutes,
+        goalDailyMinutes: result.goal.goalDailyMinutes,
+      },
+    });
+    expect(f.clearOnboardingDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('transaction retryでもgoal IDを作り直さない', async () => {
+    const f = historyDeps(historyMetadata(), { retry: true });
+    await saveGoal(f.deps, { uid: UID, draft: examDraft(), now: NOW });
+    expect(f.createGoalDocRef).toHaveBeenCalledTimes(1);
+    expect(f.store.size).toBe(3);
+    expect(f.clearOnboardingDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('initializedなのにhistory depsがなければ何も保存しない', async () => {
+    const f = historyDeps(historyMetadata());
+    const { history: omitted, ...deps } = f.deps;
+    expect(omitted).toBeDefined();
+    await expect(saveGoal(deps, {
+      uid: UID, draft: examDraft(), now: NOW,
+    })).rejects.toThrow();
+    expect(f.store.size).toBe(1);
+    expect(f.clearOnboardingDraft).not.toHaveBeenCalled();
+  });
+
+  const malformed: Record<string, unknown>[] = [
+    { judgementHistoryStartedAt: new HistoryTestTimestamp(1) },
+    { judgementRevisions: historyMetadata().judgementRevisions },
+    { ...historyMetadata(), judgementHistoryStartedAt: null },
+    { ...historyMetadata(), judgementHistoryStartedAt: { seconds: 1, nanoseconds: 0 } },
+    { ...historyMetadata(), judgementRevisions: null },
+    { ...historyMetadata(), judgementRevisions: { goal: 1, settings: 1, xLink: 1 } },
+    ...[0, -1, 1.5, '1', Number.NaN, Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1].map((goal) => ({
+      ...historyMetadata(),
+      judgementRevisions: { ...historyMetadata().judgementRevisions, goal },
+    })),
+    {
+      ...historyMetadata(),
+      judgementRevisions: {
+        ...historyMetadata().judgementRevisions,
+        subscription: 0,
+      },
+    },
+  ];
+
+  it.each(malformed)('部分metadata/型不正をlegacyへ落とさない: %#', async (user) => {
+    const f = historyDeps(user);
+    await expect(saveGoal(f.deps, {
+      uid: UID, draft: examDraft(), now: NOW,
+    })).rejects.toThrow();
+    expect(f.store.size).toBe(1);
+    expect(f.clearOnboardingDraft).not.toHaveBeenCalled();
+  });
+
+  it('goal counterのsafe integer overflowを拒否する', async () => {
+    const metadata = historyMetadata();
+    metadata.judgementRevisions.goal = Number.MAX_SAFE_INTEGER;
+    const f = historyDeps(metadata);
+    await expect(saveGoal(f.deps, {
+      uid: UID, draft: examDraft(), now: NOW,
+    })).rejects.toThrow();
+    expect(f.store.size).toBe(1);
+    expect(f.clearOnboardingDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(['', false, 0])('initializedの不正な旧pointerを拒否する: %p', async (activeGoalId) => {
+    const f = historyDeps({ ...historyMetadata(), activeGoalId });
+    await expect(saveGoal(f.deps, {
+      uid: UID, draft: examDraft(), now: NOW,
+    })).rejects.toThrow();
+    expect(f.store.size).toBe(1);
+    expect(f.clearOnboardingDraft).not.toHaveBeenCalled();
+  });
+
+  it('initializedでも既存activeGoalのguardを維持する', async () => {
+    const f = historyDeps({ ...historyMetadata(), activeGoalId: 'existing' });
+    await expect(saveGoal(f.deps, {
+      uid: UID, draft: examDraft(), now: NOW,
+    })).rejects.toBeInstanceOf(ActiveGoalAlreadyExistsError);
+    expect(f.store.size).toBe(1);
+    expect(f.clearOnboardingDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(['goal', 'user', `users/${UID}/judgementHistory/goal/entries/2`])(
+    '%s書込失敗で全書込を破棄しdraftを保持する',
+    async (failPath) => {
+      const f = historyDeps(historyMetadata(), { failPath });
+      await expect(saveGoal(f.deps, {
+        uid: UID, draft: examDraft(), now: NOW,
+      })).rejects.toThrow('write rejected');
+      expect(f.store.size).toBe(1);
+      expect(f.clearOnboardingDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it('両metadata absentならhistory depsがあってもlegacy動作を維持する', async () => {
+    const f = historyDeps({ createdAt: 0 });
+    await saveGoal(f.deps, { uid: UID, draft: examDraft(), now: NOW });
+    expect(f.store.size).toBe(2);
+    expect(f.deps.history.getEntryDocRef).not.toHaveBeenCalled();
+    expect(f.deps.history.serverTimestamp).not.toHaveBeenCalled();
+    expect(f.store.get('user')).toEqual({ createdAt: 0, activeGoalId: 'goal' });
+  });
+});

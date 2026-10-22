@@ -843,6 +843,13 @@ Phase 7: X連携・0:00判定・自動投稿
     ※履歴保存の後続分割計画(2026-10-22): C=初回goal+rules、D=goal数値編集+rules、E=goal置換+rules、F=settings+rules、G=Xconfirm、H=契約共通保存/verify、I=Apple通知結合、J=baseline初期化、K=保存経路の結合確認。各単位は変更画面0・新規依存0・公開Function1以下・完了条件5以下に限定して着手前に個別登録する。B/Kだけの合格で7-2全体を完了にしない。
     ※定時判定の後続分割計画: 時点入力取得→1人分の原子的確定保存→Scheduler接続/ページング→1,000人規模の結合検証。既存7-2の内容/完了条件/並び順を置き換えず内部単位として管理する。
 
+[x] 7-2-C 判定入力の履歴基盤: 初回目標登録とルール  【セキュリティ確認】
+    ※完了(2026-10-23): 独立review/security双方PASS。初期化済みの初回goal/pointer/counter/entryを原子保存、履歴省略・偽造等を拒否。対象unit49件、全体90suite1739件、TZ373件×2、型/lint PASS。実rules対象167件・全体8suite360件PASS/skip0。P-121ランナーとP-122評価重複を限定修正。画面接続/W13・baseline・他保存経路・Schedulerは未完了のまま。目標の入力範囲・計算式変更なし。
+    ※着手(2026-10-23): 7-2-Bはreview/security PASS・commit141e634。既存の初回登録だけを対象にし、編集/置換/設定/X/契約は後続単位とする。
+    内容: baseline初期化済みユーザーの初回目標登録で、goal作成・activeGoalId更新・goal revision増分・goal履歴createを同一transactionで保存する。serverTimestampを使い、ルールで保存漏れと偽造を拒否する。
+    完了条件: (1)初期化済みの初回登録が原子的に成功 (2)before=null/after最小snapshot・revision+1・serverTimestamp (3)履歴省略/偽造/巻戻し/他人/削除中をルールで拒否 (4)未初期化の既存登録動作を維持・壊れた部分metadataは拒否 (5)対象unit/実Emulator・型/lint・独立review/security PASS
+    ※粒度確認: 新規画面0・公開Function変更0・外部依存0・完了条件5。baselineの作成/有効化・定時判定は含めない。保存経路が全て揃うまで本番で履歴初期化を有効化しない。
+
 [ ] 7-2 0:00 の判定
     内容: Cloud Scheduler で毎日0:00(Asia/Tokyo)に全ユーザーの前日分を判定して dailyResults に書く(2-3 のロジックを使う)。1,000人規模で時間内に終わる作り
     完了条件: Emulator で時刻を注入し、達成/未達成/計測中/試験日以降/課金切れのユーザーが正しく判定される

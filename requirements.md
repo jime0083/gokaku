@@ -380,6 +380,7 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - goalのsnapshotはnull(目標なし)またはgoalId/startDate/examDate/minDailyMinutes/goalDailyMinutes。settingsはxPostEnabled、xLinkはxLinked、subscriptionはnull(未購入)またはexpiresAt(有限epochミリ秒またはnull)を持つ。
 - 初回登録・目標編集・目標置換・設定保存・X確認・契約確認/Apple通知の全保存経路を対応させる。X確認の成功済み同一receipt再送では履歴を増やさない。
 - クライアントのgoal/settings履歴は本人のcreateのみ許可する。変更前/後snapshotを元データのget/getAfterと照合し、counter+1、entry ID、committedAt==request.time、履歴と元データの同時保存を必須にする。履歴update/delete、他streamのcounter変更、xLink/subscription履歴のクライアント書込は禁止する。既存の入力検証・pointer整合・削除ガードを維持する。
+- 段階実装中の未初期化ユーザーは従来の保存経路を維持する。初期化済みかどうかはサーバー設定の開始時刻と4streamのcounterで判断し、一部だけ存在する壊れたmetadataを未初期化へ置き換えない。全保存経路の対応・結合確認が終わるまで本番のbaseline初期化と定時判定を有効化しない。
 - 全保存経路の対応後、サーバーが4streamのbaseline(before=afterの現在値)と開始時刻を同一commitで作成する。過去時刻へ戻さない。新規ユーザーも判定前に初期化する。
 - 判定対象日の翌0:00をcutoffとし、committedAt < cutoffの最新afterを復元する。同時刻はrevision順、Timestampの秒/ナノ秒精度を保持する。必要なのはcutoff時点の復元であり、baseline後の最初のcutoffから復元可能。丸一日分の変更履歴を新たな条件にはしない。
 - baseline開始時刻がcutoffと等しい場合もcutoff直前の証明には使わない。復元可能条件はjudgementHistoryStartedAt < cutoffであり、等しい/後なら導入前として推測判定しない。
@@ -389,6 +390,7 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - セッション時間・分切捨て・契約期限比較は既存sharedロジックを使う。判定済みdailyResultsは変更しない。
 - 履歴はusers配下に保存し、既存のrecursiveDelete(users/{uid})で本人データとともに削除する。
 - rulesの1操作10/全体20document access制限を満たすことを実装時にEmulatorで確認する。設計時の計数を実測の代用にしない。
+- 実装状況(2026-10-23): 7-2-Bの純粋helperと7-2-Cの初期化済み初回目標登録の保存/rulesは独立review/security PASS。画面接続・baseline初期化・他保存経路・Scheduler・7-2全体は未完了であり、本番有効化しない。
 
 ## 6. 外部サービス・API
 | サービス | 用途 | 無料枠・料金(確認日・出典) | 規約上の制約 | 秘密情報の置き場所 |

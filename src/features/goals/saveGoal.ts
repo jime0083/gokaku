@@ -1,3 +1,8 @@
+import {
+  isTimestampLike,
+  type JudgementSnapshots,
+} from '@shared/judgementHistory';
+
 import { buildGoalDocument } from './buildGoalDocument';
 import type { OnboardingDraft } from '../onboarding/types';
 import type { GoalDocument } from './types';
@@ -64,7 +69,20 @@ export type SaveGoalFirestoreDeps<Ref> = {
   runTransaction: <T>(updateFunction: (tx: SaveGoalTransaction<Ref>) => Promise<T>) => Promise<T>;
 };
 
+/**
+ * 初回登録だけで使う履歴操作。
+ * SDK固有のTimestamp検査とserverTimestampをadapterから注入する。
+ * 既存のSaveGoalFirestoreDepsを継承する置換経路には必須化しない。
+ */
+export type SaveGoalHistoryDeps<Ref> = {
+  isTimestamp: (value: unknown) => boolean;
+  getEntryDocRef: (uid: string, revision: number) => Ref;
+  serverTimestamp: () => unknown;
+};
+
 export type SaveGoalDeps<Ref> = SaveGoalFirestoreDeps<Ref> & {
+  /** legacyでは省略可能。metadataが存在する場合は必須 */
+  history?: SaveGoalHistoryDeps<Ref>;
   /** 保存に成功した後に一時保存(3-1)を消す(storage.ts の clearOnboardingDraft を渡す) */
   clearOnboardingDraft: () => Promise<void>;
 };
@@ -81,6 +99,43 @@ export type SaveGoalResult = {
   goal: GoalDocument;
 };
 
+const JUDGEMENT_STREAMS = ['goal', 'settings', 'xLink', 'subscription'] as const;
+
+/** 両metadata absentだけをlegacyとして扱う。壊れたmetadataは書込み前に拒否する。 */
+function initialGoalRevisions<Ref>(
+  user: Record<string, unknown>,
+  history: SaveGoalHistoryDeps<Ref> | undefined,
+): (Record<string, unknown> & { goal: number }) | null {
+  const hasStartedAt = Object.prototype.hasOwnProperty.call(user, 'judgementHistoryStartedAt');
+  const hasRevisions = Object.prototype.hasOwnProperty.call(user, 'judgementRevisions');
+  if (!hasStartedAt && !hasRevisions) return null;
+
+  const revisions = user.judgementRevisions;
+  if (
+    !hasStartedAt
+    || !hasRevisions
+    || !history
+    || !history.isTimestamp(user.judgementHistoryStartedAt)
+    || !isTimestampLike(user.judgementHistoryStartedAt)
+    || typeof revisions !== 'object'
+    || revisions === null
+    || Array.isArray(revisions)
+  ) {
+    throw new Error('判定履歴のmetadataまたは保存依存が不正です');
+  }
+  const counters = revisions as Record<string, unknown>;
+  for (const stream of JUDGEMENT_STREAMS) {
+    const revision = counters[stream];
+    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision <= 0) {
+      throw new Error('判定履歴のrevisionが不正です');
+    }
+  }
+  if (!Number.isSafeInteger((counters.goal as number) + 1)) {
+    throw new Error('判定履歴のrevisionが上限に達しています');
+  }
+  return counters as Record<string, unknown> & { goal: number };
+}
+
 /**
  * draft(受験・資格)から goals/{goalId} を作り、users/{uid} の activeGoalId を設定する(requirements 4-5, 5)。
  * - 既に有効な目標がある(users/{uid}.activeGoalId が設定済み)場合は何も書き込まず ActiveGoalAlreadyExistsError を投げる
@@ -95,21 +150,54 @@ export async function saveGoal<Ref>(
 ): Promise<SaveGoalResult> {
   const goal = buildGoalDocument(params.draft, params.now);
 
+  // Firestoreがcallbackを再試行しても、同じgoal参照を使う。
+  let goalDoc: { ref: Ref; id: string } | undefined;
   let goalId: string;
   try {
     goalId = await deps.runTransaction(async (tx) => {
       const userRef = deps.getUserDocRef(params.uid);
       const userSnapshot = await tx.get(userRef);
-      const existingActiveGoalId = userSnapshot.exists()
-        ? (userSnapshot.data()?.activeGoalId as string | null | undefined) ?? null
-        : null;
+      const user = userSnapshot.exists() ? userSnapshot.data() ?? {} : {};
+      const existingActiveGoalId = user.activeGoalId ?? null;
       if (existingActiveGoalId) {
         throw new ActiveGoalAlreadyExistsError();
       }
 
-      const { ref: goalRef, id } = deps.createGoalDocRef(params.uid);
-      tx.set(goalRef, goal);
-      tx.set(userRef, { activeGoalId: id }, { merge: true });
+      const revisions = initialGoalRevisions(user, deps.history);
+      if (revisions && existingActiveGoalId !== null) {
+        throw new Error('初回目標登録の旧pointerが不正です');
+      }
+
+      const { ref: goalRef, id } = goalDoc ??= deps.createGoalDocRef(params.uid);
+      if (revisions) {
+        // initialGoalRevisionsでhistoryの存在を検査済み。skipする分岐は設けない。
+        const history = deps.history!;
+        const revision = revisions.goal + 1;
+        const entryRef = history.getEntryDocRef(params.uid, revision);
+        const after: NonNullable<JudgementSnapshots['goal']> = {
+          goalId: id,
+          startDate: goal.startDate,
+          examDate: goal.examDate,
+          minDailyMinutes: goal.minDailyMinutes,
+          goalDailyMinutes: goal.goalDailyMinutes,
+        };
+        const entry = {
+          schemaVersion: 1,
+          revision,
+          committedAt: history.serverTimestamp(),
+          before: null,
+          after,
+        };
+        tx.set(goalRef, goal);
+        tx.set(userRef, {
+          activeGoalId: id,
+          judgementRevisions: { ...revisions, goal: revision },
+        }, { merge: true });
+        tx.set(entryRef, entry);
+      } else {
+        tx.set(goalRef, goal);
+        tx.set(userRef, { activeGoalId: id }, { merge: true });
+      }
       return id;
     });
   } catch (error) {

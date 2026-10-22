@@ -1663,7 +1663,7 @@
 
 ## P-118 7-2の0:00時点の判定入力を現行保存データだけでは復元できない
 - 発見日: 2026-10-22(7-2着手前調査)
-- 状態: 履歴保存の先行追加をユーザー承認(2026-10-22)・7-2-A設計PASS・7-2-B実装/レビューPASS・保存経路は未実装
+- 状態: 履歴保存の先行追加をユーザー承認(2026-10-22)・7-2-A/B/C完了・初回目標履歴のみ実装済み・他保存経路/初期化/定時判定は未実装
 - 内容: requirements 3-3およびshared/dailyJudgement.tsは0:00時点の目標値・投稿設定・連携・課金情報を判定入力とする。処理開始前にこれらが変わった場合、現在値だけを読む実装では当初仕様を保証できない。
 - 根拠: src/features/goals/editGoalRepository.tsのupdateDocは目標数値を上書き。replaceGoal.tsはactiveGoalIdと旧statusを更新。functions/src/applePurchase/verifyApplePurchase.tsのpersistSubscriptionはsubscriptionを丸ごと更新。現行データモデルにこれらの時点履歴は定義されていない。計測セッションのcutoff処理だけでは入力設定の時点を復元できない。
 - 対応案: 当初仕様を維持するため、判定に必要な変更履歴の保存を先行する小タスクへ分ける。保持対象・履歴のない既存データ・遅延/再実行の扱いを確定してから実装する。仕様を処理時点へ黙って変更しない。
@@ -1691,3 +1691,27 @@
 - 備考: 先行REDは未実装module not foundを期待どおり検出。これは意図したTDDであり、本問題とは別。
 
 - P-120完了確認(2026-10-23記録): 該当fixtureのafterをobject上でundefinedと明示した。期待assertion/timeoutは変更せず対象105件・独立review/security PASS。P-118は保存経路が未実装のため未解決のまま。
+
+
+## P-121 7-2-Cの隔離Emulatorランナーが相対テストパスを一時cwdから解決する
+- 発見日: 2026-10-23(7-2-C RED検証)
+- 状態: 解決済み(2026-10-23。対象/全体rules実行と独立review/security確認)
+- 再現/原因: /tmp/gokaku-7-2-c-rules-runner.pyはログをrepo外に出すためCLIを一時cwdで実行するが、Jest --runTestsByPathへtests/rules/goalHistory.test.tsを相対で渡したためNo tests found。0testのJSONは合格証拠ではない。CLI exit1、Emulator正常停止済み。
+- 修正計画: 実装担当にrepo絶対パスへの引数変換を依頼し、tests/rules配下の実在する.test.tsだけを許可する。ランナーのみ変更し、製品コード・テスト期待値・timeoutは変更しない。修正後RED対象が実行されたことを再確認、通常reviewでランナーと停止結果も検証する。
+
+- P-121追加調査(2026-10-23): 絶対testpathでテスト自体は検出されたが、Babel preset解決が一時cwd基準のためbabel-preset-expo未検出で0件停止。依存不足ではなく実行cwdの問題。次の限定対応はCLIのログcwdは一時領域のまま、子Jestのcwdだけrepoへ戻す。製品/依存/既存Jest設定は変更しない。2回の失敗ログは保持し、成功結果へ置き換えない。
+
+
+## P-122 初回目標の履歴付き登録がRules評価式1000上限で拒否される
+- 発見日: 2026-10-23(7-2-C実Emulator検証)
+- 状態: 解決済み(2026-10-23。限定修正attempt1でrules360件・独立review/security PASS)
+- 再現: unit49件/型/lintはPASSだが、rules対象93件中90PASS/3FAIL。初回履歴付きexam/certと正常3書込batchがUnable to evaluate ... maximum of 1000 expressionsで拒否。既存saveGoal/replaceGoalはPASS。
+- 証跡: /var/folders/j1/t5bh3_rn0mv2970mhs3v817m0000gn/T/gokaku-7-2-c-rules-twfj1z00/execution.log とtests.json。
+- 調査計画: 実装担当がuser/goal/entry各allowから同じpointer・履歴・4counter検査が繰り返される呼出経路を特定する。必要ならEmulator評価証跡で補強する。document access上限と評価式上限を混同しない。
+- 修正方針: 原因確定後、親pointerが実際に変更される同commitのuser更新で整合検査を一度担い、goal/entry側は親の変更を必須にする方式などを検討する。省略・偽造の拒否を緩めず、旧経路/テスト期待値/timeoutは変更しない。実装→通常/security再確認。
+
+- P-122原因確定/限定修正計画(2026-10-23): implの呼出経路確認で3つのallowから同一pointer/履歴/metadata検査を重複評価していた。初回だけ親user更新で履歴payload全体を検査し、goal/entry側は親のnull→新goalへの実変更とcanonical entry IDを必須として、同commitの親更新検査を強制する。変更後他counterはmap差分不変とgoal+1のsafe検査で保証。旧replacement/edit/settings・server時刻・snapshot一致・createonly条件は保持する。修正attempt1を適用し実Emulatorと独立両レビューで検証する。
+
+- P-121最終確認(2026-10-23): ランナーはテスト引数をrepo内rulesの絶対パスへ変換し、CLIのcwdは隔離領域、Jestのcwdだけrepoとする。対象49件RED実行後、製品修正を経て対象167件/全体360件GREEN・CLIexit0・Emulator停止を確認。初回2回の0件失敗は証跡に保持。独立review/security確認済み。
+
+- P-122最終確認(2026-10-23): 履歴payload検査を初回user更新へ集約し、goal/entryは親の実変更を必須化。正常exam/cert/batchが成功し、偽造拒否と旧経路回帰も維持。実rules167件/全体360件PASS、独立review/security PASS。P-118全体の解決ではない。
