@@ -865,8 +865,11 @@ Phase 7: X連携・0:00判定・自動投稿
       [x] 判定入力の履歴読取: (1)同一transactionの親/4stream読取 (2)Timestamp精度とcutoff前後の隣接revision照合 (3)既知不在/導入前/欠損と削除中を区別 (4)bounded query/indexの準備と時刻注入テスト (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。
       [x] 設定保存時の履歴: (1)設定2項目/settings counter/最小履歴を同一transactionで保存 (2)現在値からbefore/after・serverTimestamp・retry/UID確認 (3)rulesで省略/偽造/他counter/削除中を拒否 (4)未初期化経路・既存設定UIと確定後App Group反映を維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。
     ※上記2単位完了(2026-10-23): 独立review/security双方PASS。unit70件・全体90suite1845件・rules10suite546件・reader実Emulator61件PASS/skip0、型/lint PASS。置換coverage stmt98.76/branch96.92/func100/line100、reader stmt93.44/branch93.62/func100。P-124で証跡を再取得。設定履歴は別の進行中単位、7-2全体は未完了。
-      [ ] サーバー側の履歴生成共通処理: (1)現在userと更新patchからsettings/xLink/subscription最小before/afterを生成 (2)4counterとSDK Timestamp/削除中/不正snapshotを検証 (3)legacyは履歴生成せず部分metadataは拒否 (4)同一transactionに組込めるcounter patch/entryを返し時刻はserverTimestampで確定 (5)対象unit/型lint・両レビューPASS。画面0/公開Function0/依存0。既存X/課金経路への接続は次の単位で行う。
+      [x] サーバー側の履歴生成共通処理: (1)現在userと更新patchからsettings/xLink/subscription最小before/afterを生成 (2)4counterとSDK Timestamp/削除中/不正snapshotを検証 (3)legacyは履歴生成せず部分metadataは拒否 (4)同一transactionに組込めるcounter patch/entryを返し時刻はserverTimestampで確定 (5)対象unit/型lint・両レビューPASS。画面0/公開Function0/依存0。既存X/課金経路への接続は次の単位で行う。
     ※設定履歴完了(2026-10-23): 独立review/security双方PASS。自身review57件/対象52件、全体90suite1879件、実rules11suite604件(設定58含む)PASS/skip0、型/lint PASS。設定repository coverage stmt100/branch97.36/function100/line100。目標値・UI・計測中の開始時設定は変更なし。
+      [ ] X連携確定時の履歴接続: (1)新しい連携確定でuser/token/settings+xLink履歴/counterを同一transactionで確定 (2)共通処理へ保存時currentと実patchを渡す (3)成功receipt再送は後日の設定や履歴を変更しない (4)legacy/削除/不正metadata/失敗rollbackと旧連携維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function変更1(confirm)/依存0。
+    ※サーバー共通処理完了(2026-10-23): 独立review/security双方PASS。対象18件PASS/skip0、型/lint PASS、coverage stmt94.25/branch92.64/function100/line95。保存経路への接続は次の内部単位。
+    ※X接続内P-125修正: 製品のserverTimestamp仕様を維持し、異なる時刻fieldの誤った同値assertを原因確認後に修正する。履歴時刻同士と全4文書のupdateTimeの一致で原子保存の検証を維持し、対象/Emulator・型lint・両レビューで確認する。
     残る内部作業: X/契約の履歴保存→初期化・結合確認、セッション取得・1人分確定保存→Scheduler接続→1,000人検証。必要な履歴が未完成のまま本番有効化や7-2完了扱いはしない。
     内容: Cloud Scheduler で毎日0:00(Asia/Tokyo)に全ユーザーの前日分を判定して dailyResults に書く(2-3 のロジックを使う)。1,000人規模で時間内に終わる作り
     完了条件: Emulator で時刻を注入し、達成/未達成/計測中/試験日以降/課金切れのユーザーが正しく判定される
