@@ -1,14 +1,17 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { getCurrentUid } from '@/config/firebase';
 import { SettingsPopup } from '../SettingsPopup';
 import { loadSettings, updateSettings } from '../settingsRepository';
 import { openSettingsLink } from '../settingsLinks';
 jest.mock('../settingsRepository', () => ({ loadSettings: jest.fn(), updateSettings: jest.fn() }));
 jest.mock('../settingsLinks', () => ({ openSettingsLink: jest.fn() }));
+jest.mock('@/config/firebase', () => ({ getCurrentUid: jest.fn() }));
 const onCancel = jest.fn();
 const onSaved = jest.fn();
 const settings = { uid: 'owner', checkEnabled: false, xPostEnabled: true };
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(getCurrentUid).mockReturnValue('owner');
   jest.mocked(loadSettings).mockResolvedValue(settings);
   jest.mocked(updateSettings).mockResolvedValue(undefined);
   jest.mocked(openSettingsLink).mockResolvedValue(undefined);
@@ -81,4 +84,33 @@ it('disables unconfigured contact and prevents duplicate saves while pending', a
   expect(updateSettings).toHaveBeenCalledTimes(1);
   await act(async () => { finish(); });
   expect(onSaved).toHaveBeenCalledTimes(1);
+});
+
+it.each(['settings-check-toggle', 'settings-x-toggle'])('blocks relink for dirty %s and permits original value', async (id) => {
+  const onRelink = jest.fn();
+  await render(<SettingsPopup onCancel={onCancel} onSaved={onSaved} onRelink={onRelink} />);
+  await waitFor(() => expect(screen.getByTestId('settings-x-relink')).toBeEnabled());
+  const original = screen.getByTestId(id).props.value as boolean;
+  await fireEvent(screen.getByTestId(id), 'valueChange', !original);
+  await fireEvent.press(screen.getByTestId('settings-x-relink'));
+  expect(screen.getByTestId('settings-x-relink-dirty')).toHaveTextContent('未保存の設定があります。先に保存またはキャンセルしてください');
+  expect(onRelink).not.toHaveBeenCalled();
+  expect(updateSettings).not.toHaveBeenCalled();
+  expect(screen.getByTestId(id).props.value).toBe(!original);
+  await fireEvent(screen.getByTestId(id), 'valueChange', original);
+  await fireEvent.press(screen.getByTestId('settings-x-relink'));
+  expect(onRelink).toHaveBeenCalledTimes(1);
+  await fireEvent.press(screen.getByTestId('settings-x-relink'));
+  expect(onRelink).toHaveBeenCalledTimes(1);
+});
+
+it('does not enter relink for a stale loaded UID', async () => {
+  const onRelink = jest.fn();
+  await render(<SettingsPopup onCancel={onCancel} onSaved={onSaved} onRelink={onRelink} />);
+  await waitFor(() => expect(screen.getByTestId('settings-x-relink')).toBeEnabled());
+  jest.mocked(getCurrentUid).mockReturnValue('other-owner');
+  await fireEvent.press(screen.getByTestId('settings-x-relink'));
+  expect(onRelink).not.toHaveBeenCalled();
+  expect(screen.getByTestId('settings-error')).toBeTruthy();
+  expect(updateSettings).not.toHaveBeenCalled();
 });

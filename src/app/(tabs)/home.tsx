@@ -248,7 +248,11 @@ export default function HomeScreen() {
           </View>
         </View>
       </View> : null}
-      {settingsOpen ? <SettingsPopup onCancel={() => setSettingsOpen(false)} onSaved={() => setSettingsOpen(false)} /> : null}
+      {settingsOpen ? <SettingsPopup onCancel={() => setSettingsOpen(false)} onSaved={() => setSettingsOpen(false)}
+        onRelink={() => {
+          setSettingsOpen(false);
+          router.push({ pathname: '/x-link', params: { mode: 'relink' } });
+        }} /> : null}
       {editing ? <GoalEditPopup goalId={editing.goalId} goal={editing.goal} onCancel={() => setEditing(null)}
         onSaved={(patch) => {
           ++editRevision.current;

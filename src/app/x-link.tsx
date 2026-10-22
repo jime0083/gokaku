@@ -1,12 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { getCurrentUid } from '@/config/firebase';
 import { Card } from '@/components/Card';
 import { ErrorText } from '@/components/ErrorText';
 import { PrimaryButton } from '@/components/PrimaryButton';
+import { clearRelinkIntent, saveRelinkIntent } from '@/features/xLink/relinkIntentStorage';
 import { openXAuthorization } from '@/features/xLink/openXAuthorization';
 import { xLinkApi, type XLinkPending } from '@/features/xLink/xLinkApi';
 import { colors } from '@/theme/colors';
@@ -18,6 +20,7 @@ const COMMUNICATION_ERROR = '通信できませんでした。電波の良い場
 const POST_PERMISSION = '最低勉強時間に届かなかった日に、翌0:00にXへ自動投稿します。許可しますか？';
 
 type Action =
+  | { kind: 'home' }
   | { kind: 'pending' }
   | { kind: 'begin'; differentAccount: boolean }
   | { kind: 'discard'; candidateId: string }
@@ -25,6 +28,11 @@ type Action =
 
 export default function XLinkScreen() {
   const router = useRouter();
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const relink = mode === 'relink';
+  const [ownerUid] = useState(getCurrentUid);
+  const confirming = useRef(false);
+  const [isConfirming, setIsConfirming] = useState(false);
   const insets = useSafeAreaInsets();
   const [pending, setPending] = useState<XLinkPending | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -34,42 +42,82 @@ export default function XLinkScreen() {
   const busyRef = useRef(true);
   const mounted = useRef(false);
   const generation = useRef(0);
+  const intentSaved = useRef(false);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     mounted.current = true;
     generation.current += 1;
-    let active = true;
-    xLinkApi.getPending()
-      .then(({ pending: candidate }) => {
-        if (!active) return;
-        setPending(candidate);
-        setLoaded(true);
-      })
+    const currentGeneration = generation.current;
+    let focused = true;
+    const active = () => focused && mounted.current &&
+      generation.current === currentGeneration && !!ownerUid && getCurrentUid() === ownerUid;
+    intentSaved.current = false;
+    confirming.current = false;
+    setIsConfirming(false);
+    busyRef.current = true;
+    setBusy(true);
+    setLoaded(false);
+    setPending(null);
+    setDialog(false);
+    setFailedAction(null);
+    Promise.resolve().then(async () => {
+      if (!active() || !ownerUid) return;
+      if (relink) {
+        await saveRelinkIntent(ownerUid);
+        if (!active()) return;
+        intentSaved.current = true;
+      }
+      const { pending: candidate } = await xLinkApi.getPending();
+      if (!active()) return;
+      setPending(candidate);
+      setLoaded(true);
+    })
       .catch(() => {
-        if (active) setFailedAction({ kind: 'pending' });
+        if (active()) setFailedAction({ kind: 'pending' });
       })
       .finally(() => {
-        if (!active) return;
+        if (!active()) return;
         busyRef.current = false;
         setBusy(false);
       });
     return () => {
-      active = false;
+      focused = false;
       mounted.current = false;
+      generation.current += 1;
     };
-  }, []);
+  }, [ownerUid, relink]));
 
   async function run(action: Action) {
-    if (!mounted.current || busyRef.current) return;
+    if (!mounted.current || (busyRef.current && action.kind !== 'home')) return;
+    if (action.kind === 'home' && (!relink || confirming.current)) return;
+    if (!ownerUid || getCurrentUid() !== ownerUid) {
+      setFailedAction({ kind: 'pending' });
+      return;
+    }
+    // Home exit invalidates pending/browser continuations before awaiting storage.
+    if (action.kind === 'home') generation.current += 1;
     const currentGeneration = generation.current;
-    const active = () => mounted.current && generation.current === currentGeneration;
+    const active = () => mounted.current && generation.current === currentGeneration &&
+      getCurrentUid() === ownerUid;
     busyRef.current = true;
+    confirming.current = action.kind === 'confirm' || action.kind === 'home';
+    setIsConfirming(action.kind === 'confirm' || action.kind === 'home');
     setBusy(true);
     setFailedAction(null);
     let retryAction = action;
     let navigated = false;
     try {
-      if (action.kind === 'begin' || action.kind === 'discard') {
+      if (relink && action.kind !== 'home' && !intentSaved.current) {
+        await saveRelinkIntent(ownerUid);
+        if (!active()) return;
+        intentSaved.current = true;
+      }
+      if (action.kind === 'home') {
+        await clearRelinkIntent(ownerUid);
+        if (!active()) return;
+        router.replace('/(tabs)/home');
+        navigated = true;
+      } else if (action.kind === 'begin' || action.kind === 'discard') {
         const differentAccount = action.kind === 'discard' || action.differentAccount;
         if (action.kind === 'discard') {
           await xLinkApi.discard(action.candidateId);
@@ -102,6 +150,10 @@ export default function XLinkScreen() {
       } else {
         await xLinkApi.confirm(action.candidateId, action.postEnabled);
         if (!active()) return;
+        if (relink) {
+          await clearRelinkIntent(ownerUid);
+          if (!active()) return;
+        }
         router.replace('/(tabs)/home');
         navigated = true;
       }
@@ -109,12 +161,17 @@ export default function XLinkScreen() {
       if (active()) setFailedAction(retryAction);
     } finally {
       if (active() && !navigated) {
+        confirming.current = false;
+        setIsConfirming(false);
         busyRef.current = false;
         setBusy(false);
       }
     }
   }
 
+  const returnHome = () => { void run({ kind: 'home' }); };
+  const homeButton = relink ? <PrimaryButton title="ホームへ戻る" variant="secondary"
+    testID="x-link-home" disabled={busy && isConfirming} onPress={returnHome} /> : null;
   const disabled = busy || failedAction !== null;
   const feedback = <>
     {busy ? <Text testID="x-link-busy" style={styles.note}>読み込み中...</Text> : null}
@@ -151,8 +208,8 @@ export default function XLinkScreen() {
           testID="x-link-different-account" disabled={disabled || dialog}
           onPress={() => void run({ kind: 'discard', candidateId: pending.candidateId })} />
       </> : loaded ? <PrimaryButton title="Xと連携" testID="x-link-start"
-        disabled={disabled} onPress={() => void run({ kind: 'begin', differentAccount: false })} /> : null}
-      {!dialog ? feedback : null}
+        disabled={disabled} onPress={() => void run({ kind: 'begin', differentAccount: relink })} /> : null}
+      {!dialog ? <>{feedback}{homeButton}</> : null}
     </ScrollView>
     {dialog && pending ? <View style={[
       styles.backdrop,
@@ -171,6 +228,7 @@ export default function XLinkScreen() {
               kind: 'confirm', candidateId: pending.candidateId, postEnabled: false,
             })} />
           {feedback}
+          {homeButton}
         </View>
       </ScrollView>
     </View> : null}

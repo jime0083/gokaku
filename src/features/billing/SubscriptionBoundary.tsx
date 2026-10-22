@@ -18,13 +18,15 @@ import {
   loadSubscriptionSession, subscribeSubscriptionAuth,
 } from './subscriptionRepository';
 
+type LaunchResumeRoute = OnboardingRoute | '/x-link?mode=relink';
+
 export type SubscriptionAccess = Readonly<{
   afterPurchase: () => Promise<void>;
   reportLaunchInspection: (
     expectedUid: string | null,
     owner: ReturnType<typeof useAccountActions>,
     result: boolean | { phase: 'checking' | 'error'; retry: () => void },
-    replacementRoute?: OnboardingRoute,
+    replacementRoute?: LaunchResumeRoute,
   ) => void;
 }>;
 
@@ -39,12 +41,18 @@ export function useSubscriptionAccess(): SubscriptionAccess {
 
 type Session = Awaited<ReturnType<typeof loadSubscriptionSession>>;
 type AccountActions = ReturnType<typeof useAccountActions>;
-type Destination = '/home' | '/x-link' | '/paywall' | OnboardingRoute;
+type Destination = '/home' | '/x-link' | '/paywall' | LaunchResumeRoute;
+
+function permittedResumeRoute(route: LaunchResumeRoute | undefined, session: Session | null) {
+  if (route === '/x-link?mode=relink' &&
+      (!session?.registered || session.access !== 'allowed')) return undefined;
+  return route;
+}
 type LaunchInspection = {
   uid: string | null;
   owner: AccountActions;
   result: boolean | { phase: 'checking' | 'error'; retry: () => void };
-  replacementRoute?: OnboardingRoute;
+  replacementRoute?: LaunchResumeRoute;
 };
 type State = {
   phase: 'checking' | 'ready' | 'error';
@@ -102,7 +110,7 @@ export function SubscriptionBoundary({
     expectedUid: string | null,
     owner: AccountActions,
     result: boolean | { phase: 'checking' | 'error'; retry: () => void },
-    replacementRoute?: OnboardingRoute,
+    replacementRoute?: LaunchResumeRoute,
   ) => {
     const env = environment.current;
     if (!mounted.current || getCurrentUid() !== expectedUid ||
@@ -120,11 +128,12 @@ export function SubscriptionBoundary({
       return;
     }
     completedUid.current = expectedUid;
+    const resumeRoute = permittedResumeRoute(replacementRoute, snapshot.session);
     publish({
       ...snapshot,
       waitForLaunch: false,
       target: env.pathname === '/'
-        ? replacementRoute ?? (!result && snapshot.session?.registered &&
+        ? resumeRoute ?? (!result && snapshot.session?.registered &&
           snapshot.session.access === 'allowed'
           ? snapshot.session.xLinked ? '/home' : '/x-link'
           : null)
@@ -176,9 +185,11 @@ export function SubscriptionBoundary({
         typeof inspection.result === 'boolean';
       let target: Destination | null = null;
       let waitForLaunch = false;
-      if (path === '/' && inspected && inspection.replacementRoute &&
+      const resumeRoute = inspected
+        ? permittedResumeRoute(inspection.replacementRoute, session) : undefined;
+      if (path === '/' && resumeRoute &&
           !(session.registered && session.access === 'locked')) {
-        target = inspection.replacementRoute;
+        target = resumeRoute;
       } else if (session.registered) {
         if (session.access === 'locked') {
           target = '/paywall';
@@ -271,6 +282,7 @@ export function SubscriptionBoundary({
   const destination = state.session?.registered && state.session.access === 'locked'
     ? '/paywall'
     : state.target;
+  const destinationPath = destination?.split('?')[0];
   const currentInspection = inspection?.uid === getCurrentUid() &&
     inspection?.owner === accountActions ? inspection : null;
   const launchPending = pathname === '/' && getCurrentUid() !== null &&
@@ -283,18 +295,18 @@ export function SubscriptionBoundary({
 
   useEffect(() => {
     if (!ready) return;
-    if (destination && pathname !== destination) {
+    if (destination && pathname !== destinationPath) {
       router.replace(destination === '/home' ? '/(tabs)/home' : destination);
     } else if (state.target) {
       publish({ ...state, target: null });
     }
-  }, [destination, pathname, publish, ready, router, state]);
+  }, [destination, destinationPath, pathname, publish, ready, router, state]);
 
   const afterPurchase = useCallback(() => check('purchase'), [check]);
   // Contextの更新でLaunchScreenも最新UIDを観測する。
   // メソッド自体は安定しているため、canonical再読込ではlookupを再実行しない。
   const value = { afterPurchase, reportLaunchInspection };
-  const blocked = !ready || Boolean(destination && pathname !== destination);
+  const blocked = !ready || Boolean(destination && pathname !== destinationPath);
 
   // 子を確認中にアンマウントしない。タイマー・記録・nativeへの操作は行わない。
   // xLinkedは起動/購入の行き先だけに使うため、X連携完了→homeを古い値で戻さない。

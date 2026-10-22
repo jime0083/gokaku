@@ -2,6 +2,12 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react-native'
 
 import HomeScreen from '@/app/index';
 
+jest.mock('@/features/xLink/relinkIntentStorage', () => ({
+  loadRelinkIntent: jest.fn(async () => false),
+  saveRelinkIntent: jest.fn(async () => {}),
+  clearRelinkIntent: jest.fn(async () => {}),
+}));
+
 jest.mock('@/features/billing/SubscriptionBoundary', () => {
   const reportLaunchInspection = jest.fn();
   return {

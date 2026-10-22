@@ -43,6 +43,11 @@ jest.mock('../../../../modules/study-sync/src/StudySyncModule');
 jest.mock('@/features/deviceToken/useDeviceTokenSync', () => ({
   useDeviceTokenSync: jest.fn(),
 }));
+const mockGetXPending = jest.fn(async () => ({ pending: null }));
+jest.mock('@/features/xLink/xLinkApi', () => ({
+  xLinkApi: { getPending: mockGetXPending, begin: jest.fn(), complete: jest.fn(),
+    confirm: jest.fn(), discard: jest.fn() },
+}));
 const mockLoadSettings = jest.fn();
 const mockUpdateSettings = jest.fn();
 jest.mock('@/features/settings/settingsRepository', () => ({ loadSettings: mockLoadSettings, updateSettings: mockUpdateSettings }));
@@ -492,6 +497,32 @@ describe('6-2a goal edit popup through real tabs', () => {
     await fireEvent.press(screen.getByTestId('home-edit-button'));
     await fireEvent.press(screen.getByTestId('home-edit-numbers'));
   }
+
+
+  it('7-1c A: settings dirty blocks relink; cancel/reopen enters relink and explicitly returns home', async () => {
+    mockLoadSettings.mockResolvedValue({ uid: 'home-test-user', checkEnabled: true, xPostEnabled: false });
+    jest.mocked(firebaseConfig.getCurrentUid).mockReturnValue('home-test-user');
+    await renderHomeRouter();
+    await waitFor(() => screen.getByTestId('home-percent-text'));
+    await fireEvent.press(screen.getByTestId('home-edit-button'));
+    await fireEvent.press(screen.getByTestId('home-edit-settings'));
+    await waitFor(() => expect(screen.getByTestId('settings-x-relink')).toBeEnabled());
+    await fireEvent(screen.getByTestId('settings-check-toggle'), 'valueChange', false);
+    await fireEvent.press(screen.getByTestId('settings-x-relink'));
+    expect(screen.getByTestId('settings-x-relink-dirty')).toBeTruthy();
+    expect(mockGetXPending).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByTestId('settings-cancel'));
+    await fireEvent.press(screen.getByTestId('home-edit-button'));
+    await fireEvent.press(screen.getByTestId('home-edit-settings'));
+    await waitFor(() => expect(screen.getByTestId('settings-x-relink')).toBeEnabled());
+    await fireEvent.press(screen.getByTestId('settings-x-relink'));
+    await waitFor(() => expect(screen.getByTestId('x-link-home')).toBeTruthy());
+    expect(screen.queryByTestId('settings-popup')).toBeNull();
+    expect(mockGetXPending).toHaveBeenCalledTimes(1);
+    await fireEvent.press(screen.getByTestId('x-link-home'));
+    await waitFor(() => expect(screen.getByTestId('home-screen')).toBeTruthy());
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
 
   it('prefills all fields; cancel discards and reopens original values', async () => {
     await openEdit();

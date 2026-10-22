@@ -1,3 +1,4 @@
+import { relinkIntentKey, RELINK_INTENT_PREFIX } from '../../xLink/relinkIntentData';
 import {
   parseLocalAccountData, inspectLocalAccountData, cleanupLocalAccountData,
   type LocalAccountStore, type RawEntry,
@@ -310,4 +311,99 @@ it('reads subscription cache entries during inspection without reading unrelated
   expect(h.store.getItem.mock.calls).toEqual([[targetKey], [otherKey]]);
   expect(h.store.removeItem).not.toHaveBeenCalled();
   expect(h.store.setItem).not.toHaveBeenCalled();
+});
+
+it('removes only the own relink intent and preserves the foreign raw bytes', async () => {
+  const uid = 'owner/a:% 日本';
+  const ownKey = relinkIntentKey(uid);
+  const foreignKey = relinkIntentKey(OTHER);
+  const foreignRaw = JSON.stringify({ version: 1, uid: OTHER }, null, 2);
+  const h = harness([
+    entry(ownKey, { version: 1, uid }),
+    [foreignKey, foreignRaw],
+    ['unrelated', '{'],
+  ]);
+  expect(await inspectLocalAccountData(uid, h.store, h.guard)).toEqual({
+    ownership: 'known', measuring: false, pendingRecords: false, unknownKeys: [],
+  });
+  expect(h.store.getItem.mock.calls).toEqual([[ownKey], [foreignKey]]);
+  await cleanupLocalAccountData(uid, h.store, h.guard);
+  expect([...h.data]).toEqual([[foreignKey, foreignRaw], ['unrelated', '{']]);
+  expect(h.store.removeItem.mock.calls).toEqual([[ownKey]]);
+  expect(h.store.setItem).not.toHaveBeenCalled();
+  await cleanupLocalAccountData(uid, h.store, h.guard);
+  expect(h.store.removeItem).toHaveBeenCalledTimes(1);
+});
+
+it('treats only absent relink intent as absent', async () => {
+  const key = relinkIntentKey(UID);
+  expect(parseLocalAccountData(UID, [[key, null]]).ownership).toBe('known');
+  const h = harness([[key, null]]);
+  await cleanupLocalAccountData(UID, h.store, h.guard);
+  expect(h.store.removeItem).not.toHaveBeenCalled();
+});
+
+it('blocks all cleanup for unknown relink payloads for either UID', async () => {
+  for (const owner of [UID, OTHER]) {
+    const key = relinkIntentKey(owner);
+    for (const raw of [
+      '', '{', 'null', '[]', '{}',
+      JSON.stringify({ version: 1 }),
+      JSON.stringify({ version: 1, uid: '' }),
+      JSON.stringify({ version: 1, uid: ' ' }),
+      JSON.stringify({ version: 2, uid: owner }),
+      JSON.stringify({ version: 1, uid: owner, token: 'forbidden' }),
+      JSON.stringify({ version: 1, uid: owner, profile: null }),
+      JSON.stringify({ version: 1, uid: owner, url: null }),
+    ]) {
+      const h = harness([entry(META, { uid: UID, expiresAt: 500 }), [key, raw]]);
+      const before = [...h.data];
+      expect(await inspectLocalAccountData(UID, h.store, h.guard)).toMatchObject({
+        ownership: 'unknown', unknownKeys: [key],
+      });
+      await expect(cleanupLocalAccountData(UID, h.store, h.guard))
+        .rejects.toThrow('local-account-data-unknown');
+      expect([...h.data]).toEqual(before);
+      expect(h.store.removeItem).not.toHaveBeenCalled();
+      expect(h.store.setItem).not.toHaveBeenCalled();
+    }
+  }
+});
+
+it('blocks cleanup for mismatched or noncanonical relink keys', async () => {
+  for (const [key, owner] of [
+    [relinkIntentKey(UID), OTHER],
+    [relinkIntentKey(OTHER), UID],
+    [RELINK_INTENT_PREFIX, UID],
+    [RELINK_INTENT_PREFIX + '%ZZ', UID],
+    [RELINK_INTENT_PREFIX + 'owner%2Da', UID],
+  ]) {
+    const h = harness([
+      entry(META, { uid: UID, expiresAt: 500 }),
+      entry(key, { version: 1, uid: owner }),
+    ]);
+    const before = [...h.data];
+    await expect(cleanupLocalAccountData(UID, h.store, h.guard))
+      .rejects.toThrow('local-account-data-unknown');
+    expect([...h.data]).toEqual(before);
+    expect(h.store.removeItem).not.toHaveBeenCalled();
+    expect(h.store.setItem).not.toHaveBeenCalled();
+  }
+});
+
+it('propagates relink cleanup read and delete failures without changing foreign data', async () => {
+  for (const port of ['getItem', 'removeItem'] as const) {
+    const foreignKey = relinkIntentKey(OTHER);
+    const foreignRaw = JSON.stringify({ version: 1, uid: OTHER }, null, 2);
+    const h = harness([
+      entry(relinkIntentKey(UID), { version: 1, uid: UID }),
+      [foreignKey, foreignRaw],
+    ]);
+    h.store[port].mockRejectedValueOnce(new Error('relink-storage-failed'));
+    await expect(cleanupLocalAccountData(UID, h.store, h.guard))
+      .rejects.toThrow('relink-storage-failed');
+    expect(h.data.get(foreignKey)).toBe(foreignRaw);
+    await cleanupLocalAccountData(UID, h.store, h.guard);
+    expect([...h.data]).toEqual([[foreignKey, foreignRaw]]);
+  }
 });

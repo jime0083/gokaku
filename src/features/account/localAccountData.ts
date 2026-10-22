@@ -1,4 +1,5 @@
 import type { AsyncStorageStatic } from '@react-native-async-storage/async-storage';
+import { parseRelinkIntent, RELINK_INTENT_PREFIX } from '../xLink/relinkIntentData';
 import { parseSubscriptionCache, SUBSCRIPTION_CACHE_PREFIX } from '../billing/subscriptionCache';
 import { DEVICE_TOKEN_META_STORAGE_KEY } from '../deviceToken/deviceTokenStorage';
 import { ONBOARDING_DRAFT_STORAGE_KEY } from '../onboarding/storage';
@@ -73,7 +74,8 @@ function validReplacement(key: string, value: RecordValue): boolean {
 }
 function managedKey(key: string): boolean {
   return ARRAY_KEYS.includes(key) || SINGLE_KEYS.includes(key) ||
-    key.startsWith(REPLACEMENT_PREFIX) || key.startsWith(SUBSCRIPTION_CACHE_PREFIX);
+    key.startsWith(REPLACEMENT_PREFIX) || key.startsWith(SUBSCRIPTION_CACHE_PREFIX) ||
+    key.startsWith(RELINK_INTENT_PREFIX);
 }
 function requireUid(uid: string): void {
   if (!uidString(uid)) throw new Error('local-account-invalid-uid');
@@ -115,7 +117,9 @@ function analyze(uid: string, entries: readonly RawEntry[]): {
       }
       if (!object(value) || !uidString(value.uid)) { unknownKeys.add(key); continue; }
       let valid: boolean;
-      if (key.startsWith(SUBSCRIPTION_CACHE_PREFIX)) {
+      if (key.startsWith(RELINK_INTENT_PREFIX)) {
+        valid = parseRelinkIntent(key, raw) !== null;
+      } else if (key.startsWith(SUBSCRIPTION_CACHE_PREFIX)) {
         valid = parseSubscriptionCache(key, raw) !== null;
       } else if (key === DEVICE_TOKEN_META_STORAGE_KEY) {
         valid = finite(value.expiresAt);

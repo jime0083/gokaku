@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { ErrorText } from '@/components/ErrorText';
 import { PrimaryButton } from '@/components/PrimaryButton';
+import { getCurrentUid } from '@/config/firebase';
 import { CONTACT_URL } from '@/config/legalLinks';
 import { colors } from '@/theme/colors';
 import { radius } from '@/theme/radius';
@@ -14,8 +15,14 @@ import { loadSettings, updateSettings } from './settingsRepository';
 
 type Action = 'load' | 'save' | SettingsLink;
 
-export function SettingsPopup({ onCancel, onSaved }: { onCancel: () => void; onSaved: () => void }) {
+export function SettingsPopup({ onCancel, onSaved, onRelink }: {
+  onCancel: () => void;
+  onSaved: () => void;
+  onRelink?: () => void;
+}) {
   const [draft, setDraft] = useState<LoadedSettings | null>(null);
+  const [initialDraft, setInitialDraft] = useState<LoadedSettings | null>(null);
+  const [relinkBlocked, setRelinkBlocked] = useState(false);
   const [busy, setBusy] = useState(true);
   const busyRef = useRef(false);
   const mounted = useRef(true);
@@ -29,7 +36,7 @@ export function SettingsPopup({ onCancel, onSaved }: { onCancel: () => void; onS
     try {
       if (action === 'load') {
         const loaded = await loadSettings();
-        if (mounted.current) setDraft(loaded);
+        if (mounted.current) { setInitialDraft(loaded); setDraft(loaded); }
       } else if (action === 'save') {
         if (!draft) return;
         await updateSettings(draft.uid, { checkEnabled: draft.checkEnabled, xPostEnabled: draft.xPostEnabled });
@@ -52,7 +59,7 @@ export function SettingsPopup({ onCancel, onSaved }: { onCancel: () => void; onS
     const load = async () => {
       try {
         const loaded = await loadSettings();
-        if (mounted.current) setDraft(loaded);
+        if (mounted.current) { setInitialDraft(loaded); setDraft(loaded); }
       } catch {
         if (mounted.current) setFailedAction('load');
       } finally {
@@ -63,6 +70,25 @@ export function SettingsPopup({ onCancel, onSaved }: { onCancel: () => void; onS
     void load();
     return () => { mounted.current = false; };
   }, []);
+
+  const dirty = draft !== null && initialDraft !== null &&
+    (draft.checkEnabled !== initialDraft.checkEnabled ||
+     draft.xPostEnabled !== initialDraft.xPostEnabled);
+
+  const relink = () => {
+    if (!mounted.current || busyRef.current || !draft || !onRelink) return;
+    if (getCurrentUid() !== draft.uid) {
+      setFailedAction('load');
+      return;
+    }
+    if (dirty) {
+      setRelinkBlocked(true);
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    onRelink();
+  };
 
   return <View testID="settings-popup" style={settingsPopupStyles.backdrop}>
     <View style={settingsPopupStyles.popup} accessibilityViewIsModal>
@@ -81,6 +107,10 @@ export function SettingsPopup({ onCancel, onSaved }: { onCancel: () => void; onS
               disabled={busy} onValueChange={(xPostEnabled) => setDraft({ ...draft, xPostEnabled })} />
           </View>
         </> : busy ? <Text style={settingsPopupStyles.label}>読み込み中...</Text> : null}
+        <PrimaryButton title="Xアカウントを変更" variant="secondary" testID="settings-x-relink"
+          disabled={busy || !draft || !onRelink || failedAction !== null} onPress={relink} />
+        {relinkBlocked && dirty ? <ErrorText testID="settings-x-relink-dirty"
+          message="未保存の設定があります。先に保存またはキャンセルしてください" /> : null}
         <PrimaryButton title="サブスクリプションの管理" variant="secondary" testID="settings-subscription"
           disabled={busy} onPress={() => void run('subscription')} />
         <PrimaryButton title="利用規約" variant="secondary" testID="settings-terms"

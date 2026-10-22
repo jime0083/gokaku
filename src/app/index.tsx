@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getCurrentUid } from '@/config/firebase';
 import { useAccountActions } from '@/features/account/AccountActionBoundary';
 import { useSubscriptionAccess } from '@/features/billing/SubscriptionBoundary';
+import { loadRelinkIntent } from '@/features/xLink/relinkIntentStorage';
 import { loadGoalReplacement } from '@/features/onboarding/replacementStorage';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -48,11 +49,13 @@ export default function LaunchScreen() {
       try {
         const record = uid ? await loadGoalReplacement(uid) : null;
         if (!valid() || generation !== token) return;
+        const relinkIntent = !record && uid ? await loadRelinkIntent(uid) : false;
+        if (!valid() || generation !== token) return;
         const route = record
           ? record.committedGoalId ? '/onboarding/pace' : resolveOnboardingResumeRoute(record.draft, Date.now())
-          : undefined;
+          : relinkIntent ? '/x-link?mode=relink' : undefined;
         completed = true;
-        reportLaunchInspection(uid, accountActions, Boolean(record), route);
+        reportLaunchInspection(uid, accountActions, Boolean(record || relinkIntent), route);
         setCheckedAccountActions({ owner: accountActions, uid });
       } catch {
         if (valid() && generation === token) {

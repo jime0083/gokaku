@@ -1,12 +1,15 @@
 import {
   act, cleanup, fireEvent, renderRouter, screen, waitFor,
 } from 'expo-router/testing-library';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState, type ReactNode } from 'react';
 import { AppState, Pressable, Text, TextInput, type AppStateStatus } from 'react-native';
 
 import RootLayout from '@/app/_layout';
 import LaunchScreen from '@/app/index';
+import XLinkScreen from '@/app/x-link';
+import { loadRelinkIntent, saveRelinkIntent } from '@/features/xLink/relinkIntentStorage';
+import { xLinkApi, type XLinkPending } from '@/features/xLink/xLinkApi';
 import * as PrimaryButtonModule from '@/components/PrimaryButton';
 import { getCurrentUid } from '@/config/firebase';
 import { loadGoalReplacement } from '@/features/onboarding/replacementStorage';
@@ -17,6 +20,17 @@ import { useSubscriptionAccess } from '../SubscriptionBoundary';
 import {
   loadSubscriptionSession, subscribeSubscriptionAuth,
 } from '../subscriptionRepository';
+
+jest.mock('@/features/xLink/xLinkApi', () => ({
+  xLinkApi: { getPending: jest.fn() },
+}));
+jest.mock('@/features/xLink/openXAuthorization', () => ({ openXAuthorization: jest.fn() }));
+jest.mock('@expo/vector-icons', () => ({ Ionicons: 'MockIonicons' }));
+jest.mock('@/features/xLink/relinkIntentStorage', () => ({
+  loadRelinkIntent: jest.fn(async () => false),
+  saveRelinkIntent: jest.fn(async () => {}),
+  clearRelinkIntent: jest.fn(async () => {}),
+}));
 
 jest.mock('@/config/firebase', () => ({ getCurrentUid: jest.fn() }));
 jest.mock('@/features/deviceToken/useDeviceTokenSync', () => ({ useDeviceTokenSync: jest.fn() }));
@@ -80,7 +94,12 @@ function Timer() {
   return <TextInput testID="timer-input" value={value} onChangeText={setValue} />;
 }
 
-async function open(url = '/') {
+function RelinkMode() {
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  return <Text testID="relink-mode">{mode ?? 'initial'}</Text>;
+}
+
+async function open(url = '/', realX = false) {
   await act(async () => {
     result = renderRouter({
       _layout: RootLayout,
@@ -88,7 +107,7 @@ async function open(url = '/') {
       '(tabs)/home': () => <Text>home</Text>,
       timer: Timer,
       paywall: Paywall,
-      'x-link': () => <Pressable testID="x-completed" onPress={() => {
+      'x-link': realX ? () => <><RelinkMode /><XLinkScreen /></> : () => <Pressable testID="x-completed" onPress={() => {
         router.replace('/(tabs)/home');
       }}><Text>x-link</Text></Pressable>,
       'onboarding/index': () => <Text>onboarding</Text>,
@@ -119,6 +138,9 @@ async function accountReady(ready: boolean) {
 
 beforeEach(() => {
   result = undefined;
+  jest.mocked(loadRelinkIntent).mockReset().mockResolvedValue(false);
+  jest.mocked(saveRelinkIntent).mockReset().mockResolvedValue(undefined);
+  jest.mocked(xLinkApi.getPending).mockReset().mockResolvedValue({ pending: null });
   mockReady = true;
   mockAccount = { ready: true, isReady: () => mockReady, request: jest.fn() };
   mockAccountListeners.clear();
@@ -597,5 +619,114 @@ it('P107 unmount前の同UID/ownerの成功応答も新しい試行に混ぜな�
   expect(result?.getPathname()).toBe('/');
   expect(screen.getByTestId('subscription-guard')).toBeTruthy();
   await act(async () => { current.resolve(null); });
+  await settled('/home');
+});
+
+it.each([
+  { registered: true, access: 'allowed' as const, destination: '/x-link' },
+  { registered: true, access: 'locked' as const, destination: '/paywall' },
+  { registered: false, access: 'allowed' as const, destination: '/' },
+  { registered: false, access: 'locked' as const, destination: '/' },
+])('B2 intent filter registered=$registered access=$access', async ({ registered, access, destination }) => {
+  jest.mocked(loadRelinkIntent).mockResolvedValue(true);
+  jest.mocked(loadSubscriptionSession).mockResolvedValue(session({ registered, access }));
+  jest.mocked(recoverStartupPurchases).mockResolvedValue(undefined);
+  await open('/', true);
+  await settled(destination);
+  expect(loadRelinkIntent).toHaveBeenCalledTimes(1);
+  expect(loadRelinkIntent).toHaveBeenCalledWith(UID);
+  if (destination === '/x-link') {
+    expect(screen.getByTestId('relink-mode')).toHaveTextContent('relink');
+    await waitFor(() => expect(screen.getByTestId('x-link-start')).toBeEnabled());
+    expect(saveRelinkIntent).toHaveBeenCalledWith(UID);
+  } else {
+    expect(xLinkApi.getPending).not.toHaveBeenCalled();
+  }
+});
+
+it.each([true, false])('B2 real Launch restores relink pending=$hasPending', async (hasPending) => {
+  const pending: XLinkPending = {
+    candidateId: 'relink-candidate', expiresAt: NOW + 60000,
+    profile: { id: 'x-user', username: 'resume_account', profileImageUrl: null },
+  };
+  jest.mocked(loadRelinkIntent).mockResolvedValue(true);
+  jest.mocked(xLinkApi.getPending).mockResolvedValue({ pending: hasPending ? pending : null });
+  await open('/', true);
+  await settled('/x-link');
+  expect(screen.getByTestId('relink-mode')).toHaveTextContent('relink');
+  await waitFor(() => expect(screen.getByTestId(
+    hasPending ? 'x-link-use-account' : 'x-link-start',
+  )).toBeEnabled());
+  if (hasPending) expect(screen.getByText('@resume_account')).toBeTruthy();
+  expect(loadGoalReplacement).toHaveBeenCalledTimes(1);
+  expect(loadRelinkIntent).toHaveBeenCalledTimes(1);
+  expect(xLinkApi.getPending).toHaveBeenCalledTimes(1);
+});
+
+it('B2 goal replacement takes priority without reading relink intent', async () => {
+  jest.mocked(loadRelinkIntent).mockResolvedValue(true);
+  jest.mocked(loadGoalReplacement).mockResolvedValue({
+    uid: UID, expectedGoalId: 'old', committedGoalId: 'new', draft: INITIAL_ONBOARDING_DRAFT,
+  });
+  await open('/', true);
+  await settled('/onboarding/pace');
+  expect(loadRelinkIntent).not.toHaveBeenCalled();
+  expect(xLinkApi.getPending).not.toHaveBeenCalled();
+});
+
+it('B2 no intent never queries server pending at root', async () => {
+  await open('/', true);
+  await settled('/home');
+  expect(loadRelinkIntent).toHaveBeenCalledTimes(1);
+  expect(xLinkApi.getPending).not.toHaveBeenCalled();
+});
+
+it('B2 logged-out Launch does not read intent', async () => {
+  jest.mocked(getCurrentUid).mockReturnValue(null);
+  await open('/', true);
+  await settled('/');
+  expect(loadRelinkIntent).not.toHaveBeenCalled();
+  expect(xLinkApi.getPending).not.toHaveBeenCalled();
+});
+
+it.each(['allowed', 'locked'] as const)('B2 intent failure blocks %s until successful retry', async (access) => {
+  jest.mocked(loadSubscriptionSession).mockResolvedValue(session({ access }));
+  jest.mocked(loadRelinkIntent).mockRejectedValueOnce(new Error('unknown-data'));
+  await open('/', true);
+  await waitFor(() => expect(screen.getByTestId('launch-inspection-retry')).toBeTruthy());
+  expect(result?.getPathname()).toBe('/');
+  expect(screen.getByTestId('subscription-guard')).toBeTruthy();
+  expect(xLinkApi.getPending).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByTestId('launch-inspection-retry'));
+  await settled(access === 'allowed' ? '/home' : '/paywall');
+  expect(loadRelinkIntent).toHaveBeenCalledTimes(2);
+});
+
+it.each(['uid', 'owner', 'unmount'] as const)('B2 stale %s intent lookup cannot publish resume', async (change) => {
+  const stale = deferred<boolean>();
+  const current = deferred<boolean>();
+  jest.mocked(loadRelinkIntent).mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+  await open('/', true);
+  await waitFor(() => expect(loadRelinkIntent).toHaveBeenCalledTimes(1));
+  if (change === 'uid') {
+    jest.mocked(loadSubscriptionSession).mockResolvedValue(session({ uid: 'next-user' }));
+    await act(async () => {
+      jest.mocked(getCurrentUid).mockReturnValue('next-user');
+      for (const listener of authListeners) listener('next-user');
+    });
+  } else if (change === 'owner') {
+    await accountReady(false);
+    await accountReady(true);
+  } else {
+    await act(async () => { router.replace('/timer'); });
+    await waitFor(() => expect(result?.getPathname()).toBe('/timer'));
+    await act(async () => { router.replace('/'); });
+  }
+  await waitFor(() => expect(loadRelinkIntent).toHaveBeenCalledTimes(2));
+  await act(async () => { stale.resolve(true); });
+  expect(result?.getPathname()).toBe('/');
+  expect(screen.getByTestId('subscription-guard')).toBeTruthy();
+  expect(xLinkApi.getPending).not.toHaveBeenCalled();
+  await act(async () => { current.resolve(false); });
   await settled('/home');
 });

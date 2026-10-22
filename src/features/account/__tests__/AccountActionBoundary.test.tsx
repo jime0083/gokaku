@@ -14,6 +14,12 @@ import { openSettingsLink } from '@/features/settings/settingsLinks';
 
 import { accountActionService } from '../accountActionService';
 
+jest.mock('@/features/xLink/relinkIntentStorage', () => ({
+  loadRelinkIntent: jest.fn(async () => false),
+  saveRelinkIntent: jest.fn(async () => {}),
+  clearRelinkIntent: jest.fn(async () => {}),
+}));
+
 jest.mock('@/features/billing/subscriptionRepository', () => ({
   loadSubscriptionSession: jest.fn(async (uid: string) => ({
     uid, registered: true, xLinked: true, access: 'allowed' as const,
