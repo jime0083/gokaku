@@ -113,6 +113,8 @@
   - 判定日の 0:00 時点で課金切れの場合は、その日を判定しない(dailyResults を作らず、達成日数・経過日数にも数えない)(2026-10-07 決定)
   - 判定に使う勉強時間は、その目標(goalId)で計測したセッションだけ。目標を変更した日は、変更後の目標で測った分だけを新しい目標の判定に使う。
     目標変更日は新しい目標の開始日なので、未達成でも X に投稿しない(2026-10-07 決定)
+- 判定入力の履歴保存(2026-10-22 ユーザー承認): 処理が0:00より遅れても、その間の目標変更・設定変更・再購入によって判定が変わらないよう、判定に必要な変更履歴の保存を先行する小タスクとして追加する。0:00時点を使う当初仕様は変更しない。履歴開始前などの未定義な動作は設計時に確認する。
+- 履歴開始前・欠損時(2026-10-22 ユーザー承認): 履歴保存の導入前で0:00時点の状態を復元できない過去日は、推測して判定・投稿しない。必要な履歴が揃った日から判定する。導入後の履歴欠損は課金切れ等とみなさず、エラーとして記録し再試行する。
 - 毎日0:00(日本時間)に前日分を判定する
   - 最低勉強時間達成: その日の勉強時間 ≥ 1日の最低勉強時間
   - 努力目標達成: その日の勉強時間 ≥ 1日の努力目標勉強時間
@@ -370,6 +372,23 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - 入力チェックはクライアントとセキュリティルール/Functions の両方で行う
 
 **アクセス権限方針:** 本人は自分の `users/{uid}` 配下のみ読み取り可。書き込みは、設定と目標は本人が行う。セッション(sessions・sessionEvents)はサーバーだけが書き込む(時刻の補正をサーバーで行うため。2026-10-10 変更)。課金状態・判定結果・Xトークンはサーバーだけが書き込む。`xTokens`・`deviceTokens`・`appleSubscriptions` はクライアントから一切アクセスできない。
+
+### 5-1. 0:00判定入力の履歴設計(7-2-A / 2026-10-22)
+- 元データと履歴を同一transactionで保存する。非同期triggerだけの履歴作成は採用しない。
+- users/{uid}にjudgementRevisions(goal/settings/xLink/subscriptionの整数counter)、judgementHistoryStartedAt(サーバー設定のTimestamp)を保持する。
+- users/{uid}/judgementHistory/{stream}/entries/{revision文字列}にschemaVersion=1、revision、committedAt(serverTimestamp)、before、afterを保存する。snapshotは判定に必要な値に限定し、秘密token・暗号化token・JWSを保存しない。
+- goalのsnapshotはnull(目標なし)またはgoalId/startDate/examDate/minDailyMinutes/goalDailyMinutes。settingsはxPostEnabled、xLinkはxLinked、subscriptionはnull(未購入)またはexpiresAt(有限epochミリ秒またはnull)を持つ。
+- 初回登録・目標編集・目標置換・設定保存・X確認・契約確認/Apple通知の全保存経路を対応させる。X確認の成功済み同一receipt再送では履歴を増やさない。
+- クライアントのgoal/settings履歴は本人のcreateのみ許可する。変更前/後snapshotを元データのget/getAfterと照合し、counter+1、entry ID、committedAt==request.time、履歴と元データの同時保存を必須にする。履歴update/delete、他streamのcounter変更、xLink/subscription履歴のクライアント書込は禁止する。既存の入力検証・pointer整合・削除ガードを維持する。
+- 全保存経路の対応後、サーバーが4streamのbaseline(before=afterの現在値)と開始時刻を同一commitで作成する。過去時刻へ戻さない。新規ユーザーも判定前に初期化する。
+- 判定対象日の翌0:00をcutoffとし、committedAt < cutoffの最新afterを復元する。同時刻はrevision順、Timestampの秒/ナノ秒精度を保持する。必要なのはcutoff時点の復元であり、baseline後の最初のcutoffから復元可能。丸一日分の変更履歴を新たな条件にはしない。
+- baseline開始時刻がcutoffと等しい場合もcutoff直前の証明には使わない。復元可能条件はjudgementHistoryStartedAt < cutoffであり、等しい/後なら導入前として推測判定しない。
+- 親counterと対象履歴は同一transactionの整合した読取で取得する。cutoff前の最大entryをrとし、cutoff以降の最初のentryがある場合はそのrevision==r+1、r.after==後続.before、後続revision<=親counterを要求する。後続がない場合は親counter==rを要求する。不一致はエラー・再試行とし、別々の読取による同時更新を欠損と誤認しない。
+- snapshotのnullは確認済みの目標なし/未購入を表す。必要フィールドの欠落や不正型はnullへ変換しない。
+- 履歴の欠落・不正値・counterや前後snapshotの不整合を正常な未購入等に置き換えない。cutoff前後の隣接revisionと親counterを照合し、直近entry欠落を古い値のまま見逃さない。
+- セッション時間・分切捨て・契約期限比較は既存sharedロジックを使う。判定済みdailyResultsは変更しない。
+- 履歴はusers配下に保存し、既存のrecursiveDelete(users/{uid})で本人データとともに削除する。
+- rulesの1操作10/全体20document access制限を満たすことを実装時にEmulatorで確認する。設計時の計数を実測の代用にしない。
 
 ## 6. 外部サービス・API
 | サービス | 用途 | 無料枠・料金(確認日・出典) | 規約上の制約 | 秘密情報の置き場所 |

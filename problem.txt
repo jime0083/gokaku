@@ -1659,3 +1659,35 @@
 - 対応: P-115/P-116を原因/計画とともに再記録し、書込を1回に限定。書込後に追加3IDの存在と既存prefix一致を確認してから製品/test修正へ進む。
 
 - 7-1c最終確認(2026-10-22): P-113は追加期待文言全文化、P-114は描画値state移行とイベント内ref維持、P-115は新規テストの中間待機1行のみ修正。P-117文書復旧も独立review確認。全体1608件・backend実Emulator273件・rules実Emulator311件・TZ268×2・型/lint/diffcheck PASS。P-116は旧経路の未修正残件として保持し、今回のテスト修正で解決済みにはしていない。既存P-112以前の記録/タスク順序/製品の当該旧ガード条件は変更していない。
+
+
+## P-118 7-2の0:00時点の判定入力を現行保存データだけでは復元できない
+- 発見日: 2026-10-22(7-2着手前調査)
+- 状態: 履歴保存の先行追加をユーザー承認(2026-10-22)・7-2-A設計PASS・7-2-B実装/レビューPASS・保存経路は未実装
+- 内容: requirements 3-3およびshared/dailyJudgement.tsは0:00時点の目標値・投稿設定・連携・課金情報を判定入力とする。処理開始前にこれらが変わった場合、現在値だけを読む実装では当初仕様を保証できない。
+- 根拠: src/features/goals/editGoalRepository.tsのupdateDocは目標数値を上書き。replaceGoal.tsはactiveGoalIdと旧statusを更新。functions/src/applePurchase/verifyApplePurchase.tsのpersistSubscriptionはsubscriptionを丸ごと更新。現行データモデルにこれらの時点履歴は定義されていない。計測セッションのcutoff処理だけでは入力設定の時点を復元できない。
+- 対応案: 当初仕様を維持するため、判定に必要な変更履歴の保存を先行する小タスクへ分ける。保持対象・履歴のない既存データ・遅延/再実行の扱いを確定してから実装する。仕様を処理時点へ黙って変更しない。
+- 対応境界: 先行追加と欠損時方針はユーザー承認済み。承認範囲の履歴基盤だけを小単位で追加し、既存タスクの過去の完了判定と他のproblemは変更しない。7-2は未完了のまま。
+
+- P-118対応承認(2026-10-22): 当初の0:00時点仕様を維持し、必要な履歴保存を小タスクに分け先行追加する回答を受領。7-2-Aを設計・検証タスクとして追加。過去タスクの完了判定・既存問題の状態は変更しない。
+
+- P-118欠損時方針の承認(2026-10-22): 導入前の過去日は推測判定/投稿せず、必要な履歴が揃った日から判定する。導入後の履歴欠損は課金切れ等へ置き換えずエラー記録・再試行する。requirements 3-3へ反映済み。
+
+
+## P-119 7-2-A履歴設計のreadiness確認で境界・整合条件が未明文化
+- 発見日: 2026-10-22(設計の独立review)
+- 状態: 解決済み(2026-10-22。設計readinessの独立review/security PASS。製品実装は別タスク)
+- 内容/原因: 最初の設計依頼文ではsnapshotが一部projection未確定、履歴と親counterを同一の整合した読取で取得する条件、baseline開始時刻とcutoffの等号境界の説明が不足。コードは未着手。
+- 修正計画: snapshot型を最小固定型へ統一済みのrequirements 5-1を基準に、startedAt < cutoffのみ復元可能、同一transaction読取、cutoff前後の厳密な隣接revisionとsnapshot一致、後続なしの場合の親counter一致を追記する。設計review/securityへ再確認し、境界テストを後続helperで実装する。
+
+- P-118設計確認(2026-10-22): 7-2-Aの設計readinessが独立review/security PASS。必要な履歴保存はまだ実装していないため、本件は未解決のまま7-2-B以降へ継続する。
+
+
+## P-120 履歴helperの不正値テストがdefault引数で正常値へ変換される
+- 発見日: 2026-10-22(7-2-B tests-first差分の確認)
+- 状態: 解決済み(2026-10-23記録。限定fixture修正・対象105件・独立review/security PASS)
+- 原因/再現: テストfactory entryのafter=before defaultに対してentry(1, START, null, undefined)を渡すと、afterはundefinedでなくnullになる。不正subscription snapshotの検査意図とfixtureの実値が一致していない。
+- 修正計画: 実装担当が該当fixtureだけをobject spread後のafter:undefined明示へ変更する。期待値・timeout・他のassertionは変えず、不正入力を実際に検査する。既存テスト/製品コードには触れない。
+- 備考: 先行REDは未実装module not foundを期待どおり検出。これは意図したTDDであり、本問題とは別。
+
+- P-120完了確認(2026-10-23記録): 該当fixtureのafterをobject上でundefinedと明示した。期待assertion/timeoutは変更せず対象105件・独立review/security PASS。P-118は保存経路が未実装のため未解決のまま。
