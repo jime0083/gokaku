@@ -382,7 +382,56 @@ service cloud.firestore {
           : isGoalReplacementWithParentUpdate(uid));
     }
 
-    // 初回・置換・設定の既存枝を維持。数値編集の親更新はcounterだけ。
+    // 7-2内部作業: 設定履歴のfull検査は親user更新で一度だけ行う(P-122)。
+    function isSettingsCounterChange() {
+      let before = resource.data.get('judgementRevisions', null);
+      let after = request.resource.data.get('judgementRevisions', null);
+      return before is map && after is map
+        && before.get('settings', null) != after.get('settings', null);
+    }
+
+    function isValidSettingsHistory(uid) {
+      let beforeUser = resource.data;
+      let afterUser = request.resource.data;
+      let revision = beforeUser.judgementRevisions.settings + 1;
+      let entryPath = /databases/$(database)/documents/users/$(uid)/judgementHistory/settings/entries/$(string(revision));
+      let entry = getAfter(entryPath).data;
+      return isGoalHistoryInitialized(beforeUser)
+        && beforeUser.xPostEnabled is bool
+        && afterUser.checkEnabled is bool
+        && afterUser.xPostEnabled is bool
+        && afterUser.judgementHistoryStartedAt == beforeUser.judgementHistoryStartedAt
+        && isPositiveSafeRevision(afterUser.judgementRevisions.settings)
+        && afterUser.judgementRevisions.settings == revision
+        && afterUser.judgementRevisions.diff(beforeUser.judgementRevisions)
+          .affectedKeys().hasOnly(['settings'])
+        && !exists(entryPath)
+        && entry.keys().hasOnly(['schemaVersion', 'revision', 'committedAt', 'before', 'after'])
+        && entry.schemaVersion == 1
+        && entry.revision is int && entry.revision == revision
+        && entry.committedAt == request.time
+        && entry.before == {'xPostEnabled': beforeUser.xPostEnabled}
+        && entry.after == {'xPostEnabled': afterUser.xPostEnabled};
+    }
+
+    function isValidSettingsUpdate(uid, changed) {
+      return hasNoGoalHistoryMetadata(resource.data)
+        ? changed.hasOnly(['checkEnabled', 'xPostEnabled'])
+        : (changed.hasOnly(['checkEnabled', 'xPostEnabled', 'judgementRevisions'])
+          && isValidSettingsHistory(uid));
+    }
+
+    // 親settings counterの実変更を強制し、同commitの親allowにfull検査を委ねる。
+    function isSettingsHistoryEntryWithParentUpdate(uid, entryId) {
+      let beforeUser = get(/databases/$(database)/documents/users/$(uid)).data;
+      let afterUser = getAfter(/databases/$(database)/documents/users/$(uid)).data;
+      return beforeUser.judgementRevisions.settings is int
+        && afterUser.judgementRevisions.settings is int
+        && afterUser.judgementRevisions.settings == beforeUser.judgementRevisions.settings + 1
+        && entryId == string(afterUser.judgementRevisions.settings);
+    }
+
+    // 初回・置換・数値編集の枝を維持し、設定だけ履歴付き更新へ分岐する。
     function isValidUsersUpdate(uid) {
       let after = request.resource.data;
       let changed = after.diff(resource.data).affectedKeys();
@@ -393,8 +442,10 @@ service cloud.firestore {
           : (changed.hasAny(['activeGoalId'])
             ? isValidGoalReplacementRegistration(uid, after.get('activeGoalId', null), changed)
             : (changed.hasAny(['judgementRevisions'])
-              ? (changed.hasOnly(['judgementRevisions']) && isValidGoalEditHistory(uid))
-              : changed.hasOnly(['checkEnabled', 'xPostEnabled']))))
+              ? (isSettingsCounterChange()
+                ? isValidSettingsUpdate(uid, changed)
+                : (changed.hasOnly(['judgementRevisions']) && isValidGoalEditHistory(uid)))
+              : isValidSettingsUpdate(uid, changed))))
         && (!('checkEnabled' in after) || after.checkEnabled is bool)
         && (!('xPostEnabled' in after) || after.xPostEnabled is bool);
     }
@@ -408,12 +459,15 @@ service cloud.firestore {
         allow read: if isOwner(uid);
       }
 
-      // 初回登録・数値編集・置換のgoal履歴createのみ。update/deleteと他streamは許可しない。
+      // goal/settings履歴のcreateのみ。update/deleteとサーバー専用streamは禁止。
       match /judgementHistory/{stream}/entries/{entryId} {
-        allow create: if stream == 'goal' && canWriteUserData(uid)
-          && (isInitialGoalHistoryEntryWithParentUpdate(uid, entryId)
-            || isEditedGoalHistoryEntryWithParentUpdate(uid, entryId)
-            || isReplacedGoalHistoryEntryWithParentUpdate(uid, entryId));
+        allow create: if canWriteUserData(uid)
+          && ((stream == 'goal'
+            && (isInitialGoalHistoryEntryWithParentUpdate(uid, entryId)
+              || isEditedGoalHistoryEntryWithParentUpdate(uid, entryId)
+              || isReplacedGoalHistoryEntryWithParentUpdate(uid, entryId)))
+            || (stream == 'settings'
+              && isSettingsHistoryEntryWithParentUpdate(uid, entryId)));
       }
 
       // 目標の新規作成(requirements 4-5, 5。数値変更での上書き・目標変更での新規作成は Phase 6)
