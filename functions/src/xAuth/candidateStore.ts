@@ -6,6 +6,7 @@
 import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 
 import { getWritableAccount } from '../account/accountWriteGuard';
+import { buildServerHistory } from '../dailyJudgement/serverHistory';
 import { decrypt } from './crypto';
 import type { ProfileResult } from './profileTransport';
 
@@ -215,7 +216,7 @@ export function createCandidateStore(deps: CandidateStoreDeps): CandidateStore {
       const userRef = deps.firestore.doc('users/' + uid);
       const tokenRef = deps.firestore.doc('xTokens/' + uid);
       await deps.firestore.runTransaction(async (tx) => {
-        await getWritableAccount(tx, userRef);
+        const current = (await getWritableAccount(tx, userRef)).data()!;
         const data = (await tx.get(tokenRef)).data();
         requireValue(data !== undefined);
         if (Object.hasOwn(data, 'confirmedLink')) {
@@ -238,6 +239,12 @@ export function createCandidateStore(deps: CandidateStoreDeps): CandidateStore {
           pending.profile !== undefined,
         );
         const trustedProfile = pending.profile;
+        const userUpdatePatch = {
+          xLinked: true,
+          xUsername: trustedProfile.username,
+          xPostEnabled: postEnabled,
+        };
+        const history = buildServerHistory(current, userUpdatePatch);
         tx.update(tokenRef, {
           encryptedAccessToken: pending.encryptedAccessToken,
           encryptedRefreshToken: pending.encryptedRefreshToken,
@@ -248,10 +255,16 @@ export function createCandidateStore(deps: CandidateStoreDeps): CandidateStore {
           confirmedLink: { candidateId, postEnabled },
         });
         tx.update(userRef, {
-          xLinked: true,
-          xUsername: trustedProfile.username,
-          xPostEnabled: postEnabled,
+          ...userUpdatePatch,
+          ...history.counterPatch,
         });
+        for (const entry of history.entries) {
+          const entryRef = deps.firestore.doc(
+            userRef.path + '/judgementHistory/' + entry.stream +
+            '/entries/' + entry.revisionId,
+          );
+          tx.create(entryRef, entry.data);
+        }
       });
     }),
 

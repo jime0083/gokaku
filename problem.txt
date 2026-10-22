@@ -1737,3 +1737,14 @@
 - P-124完了確認: 同一SHAの製品に対し全体1845件・rules546件・reader61件および型/lintを再検証。新security担当がworkspace内SHA照合と主担当抽出のJSON集計を確認し両単位PASS。製品コードやassertionを変更する回避なし。P-118と7-2全体は未完了のまま。
 
 - P-118対応継続(2026-10-23): 7-2内の目標置換履歴・判定入力履歴読取・設定保存履歴が独立review/security PASS。X/契約の保存・baseline初期化・定時判定は未完了であり、本件は未解決のまま。過去の完了判定は変更しない。
+
+
+## P-125 X履歴の結合テストがserverTimestampと文書updateTimeの完全一致で失敗する
+- 発見日: 2026-10-23(7-2内のX連携履歴接続)
+- 状態: 解決済み(2026-10-23。新integrationの比較対象限定修正・実Emulator146件PASS・独立review/security PASS)
+- 再現: 隔離Emulatorで4suite146件中144件PASS、連携確定の正常系2件でhistory.committedAtとuser.updateTimeのナノ秒値が不一致。例: 同じ秒で279000000ns対298430000ns。履歴内容・counter・旧再連携・rollback等は通過。
+- 調査方針: serverTimestampのREQUEST_TIMEと文書updateTimeのSDK/サーバー仕様を確認し、正しい原子保存の検証方法を特定する。製品の時刻仕様は変えず、原因確認前に期待値を弱めない。
+
+- P-125原因/修正計画: Google公式write.protoのREQUEST_TIMEはサーバー処理時刻(ミリ秒精度)で同一transactionの変換field同士は同値。WriteResult.update_timeは別の文書更新時刻であり、両者の同値は契約されていない。履歴committedAtのTimestamp型と履歴同士の一致、およびuser/token/settings履歴/xLink履歴のupdateTime一致を別々に確認する。原子性のassertionを残し、製品コード/値/timeoutは変更しない。根拠: https://raw.githubusercontent.com/googleapis/googleapis/master/google/firestore/v1/write.proto (L74-77, L161-166)。
+
+- P-125完了確認: 期待payload/counter/tokenの厳密比較と4文書のupdateTime一致を維持し、履歴committedAt同士のSDK Timestamp型・相互一致を確認した。製品のserverTimestamp仕様・timeout・丸めは変更なし。修正後の4suite146件/型lintと両レビューPASS。

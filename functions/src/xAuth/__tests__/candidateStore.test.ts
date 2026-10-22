@@ -69,7 +69,7 @@ function fixture(key = KEY) {
         const observed = new Map<string, number>();
         const snapshot = new Map([...rows].map(([path, data]) => [path, copy(data)]));
         const snapshotVersions = new Map(versions);
-        const writes: { path: string; data: Data }[] = [];
+        const writes: { path: string; data: Data; create?: boolean }[] = [];
         const tx = {
           get: async (ref: { path: string }) => {
             if (writes.length) throw new Error('read after write');
@@ -85,6 +85,10 @@ function fixture(key = KEY) {
             writes.push({ path: ref.path, data: copy(data) });
             return tx;
           },
+          create: (ref: { path: string }, data: Data) => {
+            writes.push({ path: ref.path, data: copy(data), create: true });
+            return tx;
+          },
         };
         const result = await callback(tx as unknown as Transaction);
         const beforeCommit = hook;
@@ -96,14 +100,23 @@ function fixture(key = KEY) {
         if (rejectCommit) throw new Error('private backend detail');
         // Validate all preconditions before applying ANY write.
         for (const write of writes) {
-          if (!rows.has(write.path)) throw new Error('missing update target');
+          if (write.create) {
+            if (rows.has(write.path)) throw new Error('occupied create target');
+          } else if (!rows.has(write.path)) {
+            throw new Error('missing update target');
+          }
         }
         const staged = new Map<string, Data>();
         for (const write of writes) {
           const next = { ...(staged.get(write.path) ?? read(write.path)) };
           for (const [field, value] of Object.entries(write.data)) {
             if (value instanceof FieldValue && value.isEqual(deletion)) delete next[field];
-            else next[field] = copy(value);
+            else if (field.startsWith('judgementRevisions.')) {
+              const stream = field.slice('judgementRevisions.'.length);
+              next.judgementRevisions = {
+                ...(next.judgementRevisions as Data), [stream]: copy(value),
+              };
+            } else next[field] = copy(value);
           }
           staged.set(write.path, next);
         }
@@ -638,6 +651,66 @@ describe('candidateStore discard and universal account/path guards', () => {
     f.committed.length = 0;
     await expect(f.store.confirm(UID, ID, false)).resolves.toBeUndefined();
     expect(f.read(USER)!.xPostEnabled).toBe(true);
+    expect(f.committed).toEqual([]);
+  });
+});
+
+
+describe('candidateStore confirmation history transaction retries', () => {
+  function initialize(f: Fixture): void {
+    f.seed(USER, {
+      ...f.read(USER),
+      subscription: null,
+      judgementHistoryStartedAt: Timestamp.fromMillis(NOW - 1000),
+      judgementRevisions: { goal: 1, settings: 1, xLink: 1, subscription: 1 },
+    });
+  }
+
+  function entry(stream: string, revision: number): string {
+    return `${USER}/judgementHistory/${stream}/entries/${revision}`;
+  }
+
+  it('recomputes before snapshots and revisions from the retried user read', async () => {
+    const f = fixture();
+    initialize(f);
+    await attach(f);
+    f.committed.length = 0;
+    const attempts = f.attempts;
+    f.conflict(() => f.seed(USER, {
+      ...f.read(USER),
+      xLinked: true,
+      xPostEnabled: true,
+      judgementRevisions: { goal: 1, settings: 4, xLink: 6, subscription: 1 },
+    }));
+    await f.store.confirm(UID, ID, false);
+    expect(f.attempts - attempts).toBe(2);
+    expect(f.read(entry('settings', 5))).toMatchObject({
+      revision: 5, before: { xPostEnabled: true }, after: { xPostEnabled: false },
+    });
+    expect(f.read(entry('xLink', 7))).toMatchObject({
+      revision: 7, before: { xLinked: true }, after: { xLinked: true },
+    });
+    expect(f.read(entry('settings', 2))).toBeUndefined();
+    expect(f.read(entry('xLink', 2))).toBeUndefined();
+    expect(f.read(USER)!.judgementRevisions).toEqual({
+      goal: 1, settings: 5, xLink: 7, subscription: 1,
+    });
+    expect(f.committed).toHaveLength(4);
+  });
+
+  it('preserves old token/user and creates no entries on commit failure', async () => {
+    const f = fixture();
+    initialize(f);
+    await attach(f);
+    const token = f.read();
+    const user = f.read(USER);
+    f.committed.length = 0;
+    f.failCommit();
+    await failure(f.store.confirm(UID, ID, true));
+    expect(f.read()).toEqual(token);
+    expect(f.read(USER)).toEqual(user);
+    expect(f.read(entry('settings', 2))).toBeUndefined();
+    expect(f.read(entry('xLink', 2))).toBeUndefined();
     expect(f.committed).toEqual([]);
   });
 });
