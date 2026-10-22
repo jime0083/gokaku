@@ -858,6 +858,14 @@ Phase 7: X連携・0:00判定・自動投稿
     ※粒度確認: 変更画面0・公開Function0・外部依存0・完了条件5。目標置換/設定/課金/初期化/定時判定は含めない。P-122を踏まえ、同一履歴検査を各allowで重複させず実Emulatorで上限内の正常保存を確認する。
 
 [ ] 7-2 0:00 の判定
+    ※着手(2026-10-23): ユーザー指示により正式タスク7-2として進行。以下は独立した次タスク名ではなく、承認済み履歴保存計画と定時判定の内部作業。7-2本体の完了条件は変更しない。
+    ※再開時確認: P-124により一時検証証跡を再取得し、利用上限で中断した独立review/securityを新担当で実施する。
+    内部作業(変更範囲を分離・各単位でimpl→review/security):
+      [x] 目標変更時の履歴保存: (1)旧/new/pointer/counter/履歴の原子切替 (2)保存時のbefore/afterとserver時刻・retry (3)rulesで省略/偽造/他counter/削除中を拒否 (4)旧初回/数値編集/未初期化経路維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。
+      [x] 判定入力の履歴読取: (1)同一transactionの親/4stream読取 (2)Timestamp精度とcutoff前後の隣接revision照合 (3)既知不在/導入前/欠損と削除中を区別 (4)bounded query/indexの準備と時刻注入テスト (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。
+      [ ] 設定保存時の履歴: (1)設定2項目/settings counter/最小履歴を同一transactionで保存 (2)現在値からbefore/after・serverTimestamp・retry/UID確認 (3)rulesで省略/偽造/他counter/削除中を拒否 (4)未初期化経路・既存設定UIと確定後App Group反映を維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。
+    ※上記2単位完了(2026-10-23): 独立review/security双方PASS。unit70件・全体90suite1845件・rules10suite546件・reader実Emulator61件PASS/skip0、型/lint PASS。置換coverage stmt98.76/branch96.92/func100/line100、reader stmt93.44/branch93.62/func100。P-124で証跡を再取得。設定履歴は別の進行中単位、7-2全体は未完了。
+    残る内部作業: 設定/X/契約の履歴保存→初期化・結合確認、セッション取得・1人分確定保存→Scheduler接続→1,000人検証。必要な履歴が未完成のまま本番有効化や7-2完了扱いはしない。
     内容: Cloud Scheduler で毎日0:00(Asia/Tokyo)に全ユーザーの前日分を判定して dailyResults に書く(2-3 のロジックを使う)。1,000人規模で時間内に終わる作り
     完了条件: Emulator で時刻を注入し、達成/未達成/計測中/試験日以降/課金切れのユーザーが正しく判定される
 

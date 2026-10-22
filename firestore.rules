@@ -225,12 +225,13 @@ service cloud.firestore {
     }
 
     function isValidGoalCreation(uid, goalId) {
-      let oldId = get(/databases/$(database)/documents/users/$(uid)).data.get('activeGoalId', null);
+      let parent = get(/databases/$(database)/documents/users/$(uid)).data;
+      let oldId = parent.get('activeGoalId', null);
       return getAfter(/databases/$(database)/documents/users/$(uid)).data.activeGoalId == goalId
-        // 初回はnullからこのgoalIdへの親更新を必須とする。
-        // 親updateのallowがpointer・履歴整合を検査する。
-        // 既存pointerがあるreplacement枝は従来の検査を維持する。
-        && (oldId == null || isValidGoalPointerTransition(uid, goalId));
+        // 初回の親allowは従来どおり。初期化済み置換は実pointer/counter変更を強制する。
+        && (oldId == null || (hasNoGoalHistoryMetadata(parent)
+          ? isValidGoalPointerTransition(uid, goalId)
+          : isGoalReplacementWithParentUpdate(uid)));
     }
 
     // entry自身のcanonical IDと親の実変更だけを検査する。
@@ -314,13 +315,71 @@ service cloud.firestore {
         && entryId == string(afterUser.judgementRevisions.goal);
     }
 
+
+    // 7-2内部作業: 置換のfull検査は親user更新で一度だけ実施する(P-122)。
+    // pointer整合・旧statusのみ変更・新goalの不存在は呼出側で検査済み。
+    function isValidGoalReplacementHistory(uid, newId) {
+      let beforeUser = resource.data;
+      let afterUser = request.resource.data;
+      let oldId = beforeUser.activeGoalId;
+      let revision = beforeUser.judgementRevisions.goal + 1;
+      let oldGoal = get(/databases/$(database)/documents/users/$(uid)/goals/$(oldId)).data;
+      let newGoal = getAfter(/databases/$(database)/documents/users/$(uid)/goals/$(newId)).data;
+      let entryPath = /databases/$(database)/documents/users/$(uid)/judgementHistory/goal/entries/$(string(revision));
+      let entry = getAfter(entryPath).data;
+      return afterUser.judgementHistoryStartedAt == beforeUser.judgementHistoryStartedAt
+        && isPositiveSafeRevision(afterUser.judgementRevisions.goal)
+        && afterUser.judgementRevisions.goal == revision
+        && afterUser.judgementRevisions.diff(beforeUser.judgementRevisions)
+          .affectedKeys().hasOnly(['goal'])
+        && !exists(entryPath)
+        && entry.keys().hasOnly(['schemaVersion', 'revision', 'committedAt', 'before', 'after'])
+        && entry.schemaVersion == 1
+        && entry.revision is int && entry.revision == revision
+        && entry.committedAt == request.time
+        && entry.before == goalHistoryProjection(oldId, oldGoal)
+        && entry.after == goalHistoryProjection(newId, newGoal);
+    }
+
+    function isValidGoalReplacementRegistration(uid, newId, changed) {
+      return isValidGoalPointerTransition(uid, newId)
+        && (hasNoGoalHistoryMetadata(resource.data)
+          ? changed.hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
+          : (isGoalHistoryInitialized(resource.data)
+            && changed.hasOnly(['activeGoalId', 'judgementRevisions'])
+            && isValidGoalReplacementHistory(uid, newId)));
+    }
+
+    // 新/旧goal側は親の実pointer/counter変更を必須化する。
+    // 同commitの親allowがcanonical entryを含む全体整合を担う。
+    function isGoalReplacementWithParentUpdate(uid) {
+      let beforeUser = get(/databases/$(database)/documents/users/$(uid)).data;
+      let afterUser = getAfter(/databases/$(database)/documents/users/$(uid)).data;
+      let oldId = beforeUser.get('activeGoalId', null);
+      let newId = afterUser.get('activeGoalId', null);
+      return oldId is string && oldId.size() > 0
+        && newId is string && newId.size() > 0 && newId != oldId
+        && beforeUser.judgementRevisions.goal is int
+        && afterUser.judgementRevisions.goal is int
+        && afterUser.judgementRevisions.goal == beforeUser.judgementRevisions.goal + 1;
+    }
+
+    function isReplacedGoalHistoryEntryWithParentUpdate(uid, entryId) {
+      let afterUser = getAfter(/databases/$(database)/documents/users/$(uid)).data;
+      return isGoalReplacementWithParentUpdate(uid)
+        && entryId == string(afterUser.judgementRevisions.goal);
+    }
+
     function isValidGoalReplacement(uid, goalId) {
+      let parent = get(/databases/$(database)/documents/users/$(uid)).data;
       let nextId = getAfter(/databases/$(database)/documents/users/$(uid)).data.get('activeGoalId', null);
       return resource.data.status == 'active'
-        && get(/databases/$(database)/documents/users/$(uid)).data.activeGoalId == goalId
+        && parent.activeGoalId == goalId
         && request.resource.data.status == 'replaced'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-        && isValidGoalPointerTransition(uid, nextId);
+        && (hasNoGoalHistoryMetadata(parent)
+          ? isValidGoalPointerTransition(uid, nextId)
+          : isGoalReplacementWithParentUpdate(uid));
     }
 
     // 初回・置換・設定の既存枝を維持。数値編集の親更新はcounterだけ。
@@ -331,11 +390,11 @@ service cloud.firestore {
         && resource.data.get('activeGoalId', null) == null;
       return (initial
           ? isValidInitialGoalRegistration(uid, after.get('activeGoalId', null), changed)
-          : (changed.hasAny(['judgementRevisions'])
-            ? (changed.hasOnly(['judgementRevisions']) && isValidGoalEditHistory(uid))
-            : (changed.hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
-              && (!changed.hasAny(['activeGoalId'])
-                || isValidGoalPointerTransition(uid, after.get('activeGoalId', null))))))
+          : (changed.hasAny(['activeGoalId'])
+            ? isValidGoalReplacementRegistration(uid, after.get('activeGoalId', null), changed)
+            : (changed.hasAny(['judgementRevisions'])
+              ? (changed.hasOnly(['judgementRevisions']) && isValidGoalEditHistory(uid))
+              : changed.hasOnly(['checkEnabled', 'xPostEnabled']))))
         && (!('checkEnabled' in after) || after.checkEnabled is bool)
         && (!('xPostEnabled' in after) || after.xPostEnabled is bool);
     }
@@ -349,11 +408,12 @@ service cloud.firestore {
         allow read: if isOwner(uid);
       }
 
-      // 初回登録と数値編集のgoal履歴createのみ。update/deleteと他streamは許可しない。
+      // 初回登録・数値編集・置換のgoal履歴createのみ。update/deleteと他streamは許可しない。
       match /judgementHistory/{stream}/entries/{entryId} {
         allow create: if stream == 'goal' && canWriteUserData(uid)
           && (isInitialGoalHistoryEntryWithParentUpdate(uid, entryId)
-            || isEditedGoalHistoryEntryWithParentUpdate(uid, entryId));
+            || isEditedGoalHistoryEntryWithParentUpdate(uid, entryId)
+            || isReplacedGoalHistoryEntryWithParentUpdate(uid, entryId));
       }
 
       // 目標の新規作成(requirements 4-5, 5。数値変更での上書き・目標変更での新規作成は Phase 6)

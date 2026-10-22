@@ -390,7 +390,7 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - セッション時間・分切捨て・契約期限比較は既存sharedロジックを使う。判定済みdailyResultsは変更しない。
 - 履歴はusers配下に保存し、既存のrecursiveDelete(users/{uid})で本人データとともに削除する。
 - rulesの1操作10/全体20document access制限を満たすことを実装時にEmulatorで確認する。設計時の計数を実測の代用にしない。
-- 実装状況(2026-10-23): 7-2-Bの純粋helper・7-2-Cの初期化済み初回目標登録・7-2-Dの数値編集の保存/rulesは独立review/security PASS。数値編集は保存時の現在値からbefore/afterを作り、数値変更・counter・履歴を同一transactionで保存する。入力範囲・計算式・UIは変更しない。初回登録の画面接続・baseline初期化・他保存経路・Scheduler・7-2全体は未完了であり、本番有効化しない。
+- 実装状況(2026-10-23): 7-2-Bの純粋helper・7-2-Cの初期化済み初回目標登録・7-2-Dの数値編集の保存/rulesは独立review/security PASS。数値編集は保存時の現在値からbefore/afterを作り、数値変更・counter・履歴を同一transactionで保存する。入力範囲・計算式・UIは変更しない。加えて7-2内の目標置換履歴保存と同一transactionでの判定入力履歴読取が独立review/security PASS。目標置換も保存時の現在値から最小snapshotを作成し、旧/new/pointer/counter/entryを原子的に保存する。初回登録の画面接続・baseline初期化・他保存経路・Scheduler・7-2全体は未完了であり、本番有効化しない。
 
 ## 6. 外部サービス・API
 | サービス | 用途 | 無料枠・料金(確認日・出典) | 規約上の制約 | 秘密情報の置き場所 |
