@@ -5,6 +5,7 @@ import { APIError, APIException, type JWSTransactionDecodedPayload } from '@appl
 
 import { getWritableAccount } from '../account/accountWriteGuard';
 import { FUNCTIONS_REGION } from '../config';
+import { buildServerHistory } from '../dailyJudgement/serverHistory';
 import { deriveAppAccountToken, isKnownAppleIapProductId } from '../domain';
 import { ensureAdminApp } from '../firebaseAdmin';
 import { enforceRateLimit, RateLimitExceededError } from '../rateLimit';
@@ -192,8 +193,15 @@ export async function fetchAndApplyLatestSubscriptionStatus(params: {
   const db = getFirestore();
   const userRef = db.doc(`users/${uid}`);
   await db.runTransaction(async (tx) => {
-    await getWritableAccount(tx, userRef);
-    tx.update(userRef, { subscription: { status, productId, expiresAt, originalTransactionId, environment } });
+    const snapshot = await getWritableAccount(tx, userRef);
+    const current = snapshot.data()!;
+    const patch = { subscription: { status, productId, expiresAt, originalTransactionId, environment } };
+    const history = buildServerHistory(current, patch);
+    tx.update(userRef, { ...patch, ...history.counterPatch });
+    for (const entry of history.entries) {
+      const entryRef = userRef.collection(`judgementHistory/${entry.stream}/entries`).doc(entry.revisionId);
+      tx.create(entryRef, entry.data);
+    }
   });
 
   return { status, expiresAt };

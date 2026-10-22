@@ -870,9 +870,12 @@ Phase 7: X連携・0:00判定・自動投稿
       [x] X連携確定時の履歴接続: (1)新しい連携確定でuser/token/settings+xLink履歴/counterを同一transactionで確定 (2)共通処理へ保存時currentと実patchを渡す (3)成功receipt再送は後日の設定や履歴を変更しない (4)legacy/削除/不正metadata/失敗rollbackと旧連携維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function変更1(confirm)/依存0。
     ※サーバー共通処理完了(2026-10-23): 独立review/security双方PASS。対象18件PASS/skip0、型/lint PASS、coverage stmt94.25/branch92.64/function100/line95。保存経路への接続は次の内部単位。
     ※X接続内P-125修正: 製品のserverTimestamp仕様を維持し、異なる時刻fieldの誤った同値assertを原因確認後に修正する。履歴時刻同士と全4文書のupdateTimeの一致で原子保存の検証を維持し、対象/Emulator・型lint・両レビューで確認する。
-      [ ] 契約状態の共通保存への履歴接続: (1)既存fetchAndApplyLatestSubscriptionStatusでsubscription/counter/entryを同一transaction保存 (2)現在値/実patchから最小snapshot・serverTimestamp (3)legacy維持/不正metadata・削除中・occupiedentry時全rollback (4)既存Apple検証/期限・返金・所有者の仕様を維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function変更0(共通処理1)/依存0。通知からの結合検証は別単位。
+      [x] 契約状態の共通保存への履歴接続: (1)既存fetchAndApplyLatestSubscriptionStatusでsubscription/counter/entryを同一transaction保存 (2)現在値/実patchから最小snapshot・serverTimestamp (3)legacy維持/不正metadata・削除中・occupiedentry時全rollback (4)既存Apple検証/期限・返金・所有者の仕様を維持 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function変更0(共通処理1)/依存0。通知からの結合検証は別単位。
     ※X履歴接続完了(2026-10-23): 独立review/security双方PASS。実Emulator4suite146件PASS/skip0(通常review自身unit110件)、型/lint PASS、candidateStore coverage stmt100/branch98.08/function100。P-125は新integrationの時刻比較のみ限定修正し、原子保存・rollbackの検証を維持。
-    残る内部作業: 契約の履歴保存→初期化・結合確認、セッション取得・1人分確定保存→Scheduler接続→1,000人検証。必要な履歴が未完成のまま本番有効化や7-2完了扱いはしない。
+    ※契約接続内P-126修正: main隔離ランナーを既存REST helperの構成へ合わせ、新testのloopback guardを限定修正して本来REDを再取得する。既存テストと製品仕様は変更しない。
+      [ ] Apple通知からの契約履歴結合検証: (1)既存通知処理から共通保存を呼びsubscription/counter/entryを原子保存 (2)重複通知で履歴を増やさず後日の設定を保持 (3)不正履歴/削除中/署名失敗等でuserと履歴を変更しない (4)既存通知の最新契約取得・署名・所有者・再試行仕様を維持 (5)実Emulator/既存通知回帰・型lint・両レビューPASS。新規画面0/公開Function変更0/依存0。予定変更は結合テストのみ。
+    ※契約共通保存完了(2026-10-23): 独立review/security双方PASS。実Emulator3suite51件(新12/既存購入21/helper18)PASS・skip0、型/lint PASS。新しい保存部の全statementに実ヒット。P-126の接続先/guard限定修正後に本来RED9件を確認してから実装。Apple通知結合とbaseline/定時判定は未完了。
+    残る内部作業: Apple通知結合・初期化・結合確認→初期化・結合確認、セッション取得・1人分確定保存→Scheduler接続→1,000人検証。必要な履歴が未完成のまま本番有効化や7-2完了扱いはしない。
     内容: Cloud Scheduler で毎日0:00(Asia/Tokyo)に全ユーザーの前日分を判定して dailyResults に書く(2-3 のロジックを使う)。1,000人規模で時間内に終わる作り
     完了条件: Emulator で時刻を注入し、達成/未達成/計測中/試験日以降/課金切れのユーザーが正しく判定される
 
