@@ -1663,7 +1663,7 @@
 
 ## P-118 7-2の0:00時点の判定入力を現行保存データだけでは復元できない
 - 発見日: 2026-10-22(7-2着手前調査)
-- 状態: 履歴保存の先行追加をユーザー承認(2026-10-22)・7-2-A/B/C完了・初回目標履歴のみ実装済み・他保存経路/初期化/定時判定は未実装
+- 状態: 履歴保存の先行追加をユーザー承認(2026-10-22)・7-2-A/B/C/D完了・初回目標/数値編集履歴を実装済み・他保存経路/初期化/定時判定は未実装
 - 内容: requirements 3-3およびshared/dailyJudgement.tsは0:00時点の目標値・投稿設定・連携・課金情報を判定入力とする。処理開始前にこれらが変わった場合、現在値だけを読む実装では当初仕様を保証できない。
 - 根拠: src/features/goals/editGoalRepository.tsのupdateDocは目標数値を上書き。replaceGoal.tsはactiveGoalIdと旧statusを更新。functions/src/applePurchase/verifyApplePurchase.tsのpersistSubscriptionはsubscriptionを丸ごと更新。現行データモデルにこれらの時点履歴は定義されていない。計測セッションのcutoff処理だけでは入力設定の時点を復元できない。
 - 対応案: 当初仕様を維持するため、判定に必要な変更履歴の保存を先行する小タスクへ分ける。保持対象・履歴のない既存データ・遅延/再実行の扱いを確定してから実装する。仕様を処理時点へ黙って変更しない。
@@ -1715,3 +1715,12 @@
 - P-121最終確認(2026-10-23): ランナーはテスト引数をrepo内rulesの絶対パスへ変換し、CLIのcwdは隔離領域、Jestのcwdだけrepoとする。対象49件RED実行後、製品修正を経て対象167件/全体360件GREEN・CLIexit0・Emulator停止を確認。初回2回の0件失敗は証跡に保持。独立review/security確認済み。
 
 - P-122最終確認(2026-10-23): 履歴payload検査を初回user更新へ集約し、goal/entryは親の実変更を必須化。正常exam/cert/batchが成功し、偽造拒否と旧経路回帰も維持。実rules167件/全体360件PASS、独立review/security PASS。P-118全体の解決ではない。
+
+
+## P-123 目標編集履歴テストのTimestamp mockがJest hoist変換で停止する
+- 発見日: 2026-10-23(7-2-D tests-first)
+- 状態: 解決済み(2026-10-23。mock限定修正後の実RED/GREEN・独立review/security PASS)
+- 再現/原因: jest.mock内Timestamp classのTypeScript parameter property constructor(public seconds, public nanoseconds)をBabel hoistがscope外参照と判定し、テスト本体を実行できない。既存editGoal36件はPASSだが新adapterテストは未実行。
+- 修正計画: 実装担当がmock classを明示したフィールドと通常constructor代入へ変更する。Timestampの構造/instanceof・テスト期待値・timeout・製品コードは変更しない。修正後に新テストの本来のREDを確認してから製品実装を適用する。
+
+- P-123完了確認(2026-10-23): mock classを明示fieldと通常constructor代入へ変更した。Timestamp構造/instanceof・期待値・timeoutは変更しない。本来のunit RED(46PASS/55FAIL)確認後、製品実装で対象101件GREEN、独立review/security PASS。P-118全体は引き続き未解決。

@@ -134,8 +134,9 @@ service cloud.firestore {
     function isValidGoalNumericUpdate(uid, goalId) {
       let after = request.resource.data;
       let changed = after.diff(resource.data).affectedKeys();
+      let parent = get(/databases/$(database)/documents/users/$(uid)).data;
       return resource.data.status == 'active'
-        && get(/databases/$(database)/documents/users/$(uid)).data.activeGoalId == goalId
+        && parent.activeGoalId == goalId
         && changed.hasOnly(resource.data.type == 'exam'
           ? ['targetHours', 'examDate', 'minDailyMinutes', 'goalDailyMinutes', 'targetDeviation', 'currentDeviation', 'subjectCount']
           : ['targetHours', 'examDate', 'minDailyMinutes', 'goalDailyMinutes'])
@@ -145,7 +146,9 @@ service cloud.firestore {
         && after.goalDailyMinutes >= after.minDailyMinutes
         && ((resource.data.type == 'cert') || (resource.data.type == 'exam'
           && isValidEditDeviation(after.targetDeviation) && isValidEditDeviation(after.currentDeviation)
-          && after.subjectCount is int && after.subjectCount >= 1 && after.subjectCount <= 8));
+          && after.subjectCount is int && after.subjectCount >= 1 && after.subjectCount <= 8))
+        && (hasNoGoalHistoryMetadata(parent)
+          || isGoalEditWithParentCounterUpdate(uid, goalId));
     }
 
     // 6-3a: A pointer change always designates a brand-new active goal in this commit.
@@ -245,6 +248,72 @@ service cloud.firestore {
         && entryId == string(afterUser.judgementRevisions.goal);
     }
 
+    // 7-2-D: full payload検査は親counter更新のallowだけで実行する。
+    function goalHistoryProjection(goalId, goal) {
+      return {
+        'goalId': goalId,
+        'startDate': goal.startDate,
+        'examDate': goal.examDate,
+        'minDailyMinutes': goal.minDailyMinutes,
+        'goalDailyMinutes': goal.goalDailyMinutes
+      };
+    }
+
+    function isValidGoalEditHistory(uid) {
+      let beforeUser = resource.data;
+      let afterUser = request.resource.data;
+      let goalId = beforeUser.get('activeGoalId', null);
+      let revision = beforeUser.judgementRevisions.goal + 1;
+      let beforeGoal = get(/databases/$(database)/documents/users/$(uid)/goals/$(goalId)).data;
+      let afterGoal = getAfter(/databases/$(database)/documents/users/$(uid)/goals/$(goalId)).data;
+      let entryPath = /databases/$(database)/documents/users/$(uid)/judgementHistory/goal/entries/$(string(revision));
+      let entry = getAfter(entryPath).data;
+      return isGoalHistoryInitialized(beforeUser)
+        && goalId is string && goalId.size() > 0
+        && afterUser.get('activeGoalId', null) == goalId
+        && beforeGoal.status == 'active' && afterGoal.status == 'active'
+        && (beforeGoal.type == 'exam' || beforeGoal.type == 'cert')
+        && afterGoal.type == beforeGoal.type
+        && afterUser.judgementHistoryStartedAt == beforeUser.judgementHistoryStartedAt
+        && isPositiveSafeRevision(afterUser.judgementRevisions.goal)
+        && afterUser.judgementRevisions.goal == revision
+        && afterUser.judgementRevisions.diff(beforeUser.judgementRevisions)
+          .affectedKeys().hasOnly(['goal'])
+        && !exists(entryPath)
+        && entry.keys().hasOnly(['schemaVersion', 'revision', 'committedAt', 'before', 'after'])
+        && entry.schemaVersion == 1
+        && entry.revision is int && entry.revision == revision
+        && entry.committedAt == request.time
+        && entry.before == goalHistoryProjection(goalId, beforeGoal)
+        && entry.after == goalHistoryProjection(goalId, afterGoal);
+    }
+
+    // counterの実変更により親updateのallow通過を必須にする。
+    // canonical entryの存在だけを確認し、payload全体の検査は重複しない。
+    function isGoalEditWithParentCounterUpdate(uid, goalId) {
+      let beforeUser = get(/databases/$(database)/documents/users/$(uid)).data;
+      let afterUser = getAfter(/databases/$(database)/documents/users/$(uid)).data;
+      return beforeUser.get('activeGoalId', null) == goalId
+        && afterUser.get('activeGoalId', null) == goalId
+        && beforeUser.judgementRevisions.goal is int
+        && afterUser.judgementRevisions.goal is int
+        && afterUser.judgementRevisions.goal == beforeUser.judgementRevisions.goal + 1
+        && getAfter(/databases/$(database)/documents/users/$(uid)/judgementHistory/goal/entries/$(string(afterUser.judgementRevisions.goal))).data.revision
+          == afterUser.judgementRevisions.goal;
+    }
+
+    function isEditedGoalHistoryEntryWithParentUpdate(uid, entryId) {
+      let beforeUser = get(/databases/$(database)/documents/users/$(uid)).data;
+      let afterUser = getAfter(/databases/$(database)/documents/users/$(uid)).data;
+      return beforeUser.get('activeGoalId', null) is string
+        && beforeUser.activeGoalId.size() > 0
+        && afterUser.get('activeGoalId', null) == beforeUser.activeGoalId
+        && beforeUser.judgementRevisions.goal is int
+        && afterUser.judgementRevisions.goal is int
+        && afterUser.judgementRevisions.goal == beforeUser.judgementRevisions.goal + 1
+        && entryId == string(afterUser.judgementRevisions.goal);
+    }
+
     function isValidGoalReplacement(uid, goalId) {
       let nextId = getAfter(/databases/$(database)/documents/users/$(uid)).data.get('activeGoalId', null);
       return resource.data.status == 'active'
@@ -254,7 +323,7 @@ service cloud.firestore {
         && isValidGoalPointerTransition(uid, nextId);
     }
 
-    // Settings retain their 6-2b path when the pointer is unchanged.
+    // 初回・置換・設定の既存枝を維持。数値編集の親更新はcounterだけ。
     function isValidUsersUpdate(uid) {
       let after = request.resource.data;
       let changed = after.diff(resource.data).affectedKeys();
@@ -262,9 +331,11 @@ service cloud.firestore {
         && resource.data.get('activeGoalId', null) == null;
       return (initial
           ? isValidInitialGoalRegistration(uid, after.get('activeGoalId', null), changed)
-          : (changed.hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
-            && (!changed.hasAny(['activeGoalId'])
-              || isValidGoalPointerTransition(uid, after.get('activeGoalId', null)))))
+          : (changed.hasAny(['judgementRevisions'])
+            ? (changed.hasOnly(['judgementRevisions']) && isValidGoalEditHistory(uid))
+            : (changed.hasOnly(['activeGoalId', 'checkEnabled', 'xPostEnabled'])
+              && (!changed.hasAny(['activeGoalId'])
+                || isValidGoalPointerTransition(uid, after.get('activeGoalId', null))))))
         && (!('checkEnabled' in after) || after.checkEnabled is bool)
         && (!('xPostEnabled' in after) || after.xPostEnabled is bool);
     }
@@ -278,10 +349,11 @@ service cloud.firestore {
         allow read: if isOwner(uid);
       }
 
-      // 7-2-C: 本人による初回goal履歴createのみ。update/deleteと他streamは許可しない。
+      // 初回登録と数値編集のgoal履歴createのみ。update/deleteと他streamは許可しない。
       match /judgementHistory/{stream}/entries/{entryId} {
         allow create: if stream == 'goal' && canWriteUserData(uid)
-          && isInitialGoalHistoryEntryWithParentUpdate(uid, entryId);
+          && (isInitialGoalHistoryEntryWithParentUpdate(uid, entryId)
+            || isEditedGoalHistoryEntryWithParentUpdate(uid, entryId));
       }
 
       // 目標の新規作成(requirements 4-5, 5。数値変更での上書き・目標変更での新規作成は Phase 6)
