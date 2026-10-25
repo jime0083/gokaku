@@ -1779,8 +1779,18 @@
 
 ## P-129 セッション取得の設計報告に正常なconfirmations欠落の読取変換が不足した
 - 発見日: 2026-10-25(7-2内の取得方式design review)
-- 状態: 設計補足の独立review/security PASS(2026-10-25)・判定コアでの実装検証待ち
+- 状態: 解決済み(2026-10-25。正常省略と不正sessionを分離し、実Emulator・独立review/security PASS)
 - 原因: 正常なstart直後・未応答のsessionsはstopAtとconfirmationsを保存しない。調査報告がstopAtのnull変換だけを明記していたため、その記述だけでsharedへ渡すとconfirmations.forEachでTypeErrorになる。writerの省略は既存仕様であり、製品不具合ではない。
 - 修正計画: 読取境界でstopAt欠落/nullをnull、confirmations欠落だけを[]へ変換すると明記。不正型・不正要素は正常値に丸めず、不正sessionのみ除外・記録する。必要な他の値もshared入力契約どおり検証する。writer/既存データ/既存helperは変更しない。設計の再レビュー後、取得処理のテストで正常欠落と不正型を分けて確認する。
 
 - P-129設計確認(2026-10-25): 正常省略stopAt/confirmationsの変換と不正型/必須値の検証をrequirements 5-1へ明記。両レビューがreadiness PASS。製品コードは未実装であり、実Emulator検証まで本件は継続する。
+
+
+## P-130 履歴初期化テストでserverTimestampと文書updateTimeを誤比較した
+- 発見日: 2026-10-25(7-2内の履歴初期化コア)
+- 状態: 解決済み(2026-10-25。テスト限定修正後199件PASS・独立review/security PASS)
+- 再現: 実Firestore Emulatorで4suite199件中198件PASS。initializeHistory.test.tsの103行だけ、開始serverTimestampと親文書updateTimeの完全一致を要求して失敗。日次判定60件・既存reader/helperはPASS。
+- 原因: P-125で確認済みのREQUEST_TIMEと文書updateTimeの違いを、新規テスト作成時に反映しなかった。既存テストには既に4履歴committedAtと開始時刻の一致、および親と4履歴のupdateTime一致の検証があり、製品の原子保存不具合ではない。
+- 修正計画: 実装担当が異なる種類の時刻同士の誤比較だけを除き、同種時刻の相互一致・payload/counter・rollbackの検証を維持する。製品コード・timeout変更なし。対象実Emulatorと独立review/securityで確認する。
+
+- P-129/P-130完了確認(2026-10-25): 判定コア60件を含む199件PASS・skip0、型/lintおよび各コアの独立review/security PASS。正常なstopAt/confirmations省略だけを変換し、不正保存値を補完せず除外。初期化testのREQUEST_TIME/updateTime誤比較だけを修正し、親と4履歴の原子保存assertは維持した。7-2全体/P-118は未完了。
