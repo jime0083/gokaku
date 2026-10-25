@@ -1779,6 +1779,8 @@
 
 ## P-129 セッション取得の設計報告に正常なconfirmations欠落の読取変換が不足した
 - 発見日: 2026-10-25(7-2内の取得方式design review)
-- 状態: 原因特定済み・設計補足の再レビュー待ち
+- 状態: 設計補足の独立review/security PASS(2026-10-25)・判定コアでの実装検証待ち
 - 原因: 正常なstart直後・未応答のsessionsはstopAtとconfirmationsを保存しない。調査報告がstopAtのnull変換だけを明記していたため、その記述だけでsharedへ渡すとconfirmations.forEachでTypeErrorになる。writerの省略は既存仕様であり、製品不具合ではない。
 - 修正計画: 読取境界でstopAt欠落/nullをnull、confirmations欠落だけを[]へ変換すると明記。不正型・不正要素は正常値に丸めず、不正sessionのみ除外・記録する。必要な他の値もshared入力契約どおり検証する。writer/既存データ/既存helperは変更しない。設計の再レビュー後、取得処理のテストで正常欠落と不正型を分けて確認する。
+
+- P-129設計確認(2026-10-25): 正常省略stopAt/confirmationsの変換と不正型/必須値の検証をrequirements 5-1へ明記。両レビューがreadiness PASS。製品コードは未実装であり、実Emulator検証まで本件は継続する。

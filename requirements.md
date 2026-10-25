@@ -382,12 +382,14 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - クライアントのgoal/settings履歴は本人のcreateのみ許可する。変更前/後snapshotを元データのget/getAfterと照合し、counter+1、entry ID、committedAt==request.time、履歴と元データの同時保存を必須にする。履歴update/delete、他streamのcounter変更、xLink/subscription履歴のクライアント書込は禁止する。既存の入力検証・pointer整合・削除ガードを維持する。
 - 段階実装中の未初期化ユーザーは従来の保存経路を維持する。初期化済みかどうかはサーバー設定の開始時刻と4streamのcounterで判断し、一部だけ存在する壊れたmetadataを未初期化へ置き換えない。全保存経路の対応・結合確認が終わるまで本番のbaseline初期化と定時判定を有効化しない。
 - 全保存経路の対応後、サーバーが4streamのbaseline(before=afterの現在値)と開始時刻を同一commitで作成する。過去時刻へ戻さない。新規ユーザーも判定前に初期化する。
+- baseline初期値(2026-10-25 ユーザー決定): 初期化前に投稿設定・X連携状態・契約情報が未保存の場合は、投稿OFF(xPostEnabled=false)・X未連携(xLinked=false)・未購入(subscription=null)を保存してからbaselineを作成する。保存済みの正常値は保持する。初期化後の欠落や不正値、および初期化前でも保存済みの不正値は正常な初期値へ補完せずエラーにする。初期値・baseline・開始時刻は同一transactionで確定する。
 - 判定対象日の翌0:00をcutoffとし、committedAt < cutoffの最新afterを復元する。同時刻はrevision順、Timestampの秒/ナノ秒精度を保持する。必要なのはcutoff時点の復元であり、baseline後の最初のcutoffから復元可能。丸一日分の変更履歴を新たな条件にはしない。
 - baseline開始時刻がcutoffと等しい場合もcutoff直前の証明には使わない。復元可能条件はjudgementHistoryStartedAt < cutoffであり、等しい/後なら導入前として推測判定しない。
 - 親counterと対象履歴は同一transactionの整合した読取で取得する。cutoff前の最大entryをrとし、cutoff以降の最初のentryがある場合はそのrevision==r+1、r.after==後続.before、後続revision<=親counterを要求する。後続がない場合は親counter==rを要求する。不一致はエラー・再試行とし、別々の読取による同時更新を欠損と誤認しない。
 - snapshotのnullは確認済みの目標なし/未購入を表す。必要フィールドの欠落や不正型はnullへ変換しない。
 - 履歴の欠落・不正値・counterや前後snapshotの不整合を正常な未購入等に置き換えない。cutoff前後の隣接revisionと親counterを照合し、直近entry欠落を古い値のまま見逃さない。
 - セッション時間・分切捨て・契約期限比較は既存sharedロジックを使う。判定済みdailyResultsは変更しない。
+- 判定処理の読取境界(2026-10-25 設計readiness): 同一Admin read-write transactionで親・履歴・復元したgoalIdの全sessions・既存結果を読み、書込み前に読取を完了する。正常省略のstopAt欠落/nullはnull、confirmations欠落だけは[]へ変換し、その他の不正型・不正要素・必須値欠落は該当sessionだけ除外して記録する。checkEnabled欠落をOFFへ補完しない。固定cutoffで既存sharedを呼び、結果はcreateのみ。全件取得の性能適合は1,000人の結合検証で確認する。
 - 履歴はusers配下に保存し、既存のrecursiveDelete(users/{uid})で本人データとともに削除する。
 - rulesの1操作10/全体20document access制限を満たすことを実装時にEmulatorで確認する。設計時の計数を実測の代用にしない。
 - 実装状況(2026-10-23): 7-2-Bの純粋helper・7-2-Cの初期化済み初回目標登録・7-2-Dの数値編集の保存/rulesは独立review/security PASS。数値編集は保存時の現在値からbefore/afterを作り、数値変更・counter・履歴を同一transactionで保存する。入力範囲・計算式・UIは変更しない。加えて7-2内の目標置換履歴保存と同一transactionでの判定入力履歴読取が独立review/security PASS。設定保存時のsettings履歴も独立review/security PASSであり、設定2項目・settings counter・最小履歴を同一transactionで保存する。X連携確定時もuser/token/settings・xLink履歴/counterを同一transactionで確定し、成功receipt再送は履歴生成前に終了する。X履歴接続は独立review/security PASS。契約状態の共通保存もsubscription/counter/entryを同一transactionに接続し独立review/security PASS。Apple通知からの結合検証も独立review/security PASS(2026-10-25)。再送時も最新契約を取り直す当初仕様を維持し、履歴の連続性と原子的保存を確認した。目標置換も保存時の現在値から最小snapshotを作成し、旧/new/pointer/counter/entryを原子的に保存する。初回登録の画面接続・baseline初期化・他保存経路・Scheduler・7-2全体は未完了であり、本番有効化しない。

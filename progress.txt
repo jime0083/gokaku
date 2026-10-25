@@ -876,10 +876,13 @@ Phase 7: X連携・0:00判定・自動投稿
       [x] Apple通知からの契約履歴結合検証: (1)既存通知処理から共通保存を呼びsubscription/counter/entryを原子保存 (2)再送でも既存仕様どおり最新状態を取り直し履歴保存・後日の設定を保持 (3)不正履歴/削除中/署名失敗等でuserと履歴を変更しない (4)既存通知の最新契約取得・署名・所有者・再試行仕様を維持 (5)実Emulator/既存通知回帰・型lint・両レビューPASS。新規画面0/公開Function変更0/依存0。予定変更は結合テストのみ。
     ※契約共通保存完了(2026-10-23): 独立review/security双方PASS。実Emulator3suite51件(新12/既存購入21/helper18)PASS・skip0、型/lint PASS。新しい保存部の全statementに実ヒット。P-126の接続先/guard限定修正後に本来RED9件を確認してから実装。Apple通知結合とbaseline/定時判定は未完了。
     ※Apple通知結合の条件訂正(P-127): X専用receipt早期returnをApple通知へ広げたmainの内部条件を、requirements 3-4/5-1の当初仕様へ戻した。製品・既存通知仕様は変更しない。
-      [ ] セッション取得方式の限定調査: (1)既存sessionsをgoalIdで同一Admin transaction読取する整合性を公式仕様で確認 (2)長期OFF・跨日・新規挿入競合の扱いを整理 (3)1,000人検証で使う負荷条件を示す (4)既存形式のまま進められる最小案と限界を提示 (5)製品変更なしで調査結果を報告。画面0/公開Function0/依存0・調査のみ。
+      [x] セッション取得方式の限定調査: (1)既存sessionsをgoalIdで同一Admin transaction読取する整合性を公式仕様で確認 (2)長期OFF・跨日・新規挿入競合の扱いを整理 (3)1,000人検証で使う負荷条件を示す (4)既存形式のまま進められる最小案と限界を提示 (5)製品変更なしで調査結果を報告。画面0/公開Function0/依存0・調査のみ。
     ※通知結合内P-128: 新10件を含むcore55件PASS、既存HTTP3件のFunctions Emulator起動漏れを修正して58件を再確認する。製品・既存testの期待値は変更しない。
     ※Apple通知結合完了(2026-10-25): 新10件/既存通知15件/契約12件/購入21件の4suite58件PASS・skip0、型/lint PASS、独立review/security双方PASS。P-127は当初仕様に条件訂正、P-128は合成設定の隔離Functions/Firestore起動とsource相対pathで修正。製品コード/既存test変更なし。
     ※セッション取得調査はP-129の正常なconfirmations欠落の扱いを補足して再レビューする。実装/性能は未合格。
+    ※取得方式の調査完了(2026-10-25): P-129の正常省略と不正型を分けるデコーダ契約を補足し、独立review/securityがdesign-readiness PASS。同一transactionで既存形式の全goal sessionsを読む最小案。実装/競合/1,000人性能は未合格。
+      [ ] 履歴の初期化コア: (1)現在user/goalと未保存初期値・4baseline/counter/開始時刻の原子保存 (2)before=after・serverTimestamp・過去へ戻さない (3)完備済みは冪等、部分metadata/不正/孤立履歴を修復せず拒否 (4)missing/deleting/並行変更で親再作成や値の消失なし (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。公開入口/アプリ接続は次の単位。
+      [ ] 1人1日分の原子的判定コア: (1)既存結果/親/履歴/対象goal sessionsを同一transaction読取・結果create (2)固定cutoff/既存shared使用 (3)正常省略と不正sessionの除外を分離・想定外例外伝播 (4)既存結果不変/二重起動/記録との競合/欠損履歴を検証 (5)対象unit/実Emulator・型lint・両レビューPASS。画面0/公開Function0/依存0。初期化/スケジューラ/1,000人性能は別単位。
     残る内部作業: 初期化・保存経路結合確認、セッション取得・1人分確定保存→Scheduler接続→1,000人検証。必要な履歴が未完成のまま本番有効化や7-2完了扱いはしない。
     内容: Cloud Scheduler で毎日0:00(Asia/Tokyo)に全ユーザーの前日分を判定して dailyResults に書く(2-3 のロジックを使う)。1,000人規模で時間内に終わる作り
     完了条件: Emulator で時刻を注入し、達成/未達成/計測中/試験日以降/課金切れのユーザーが正しく判定される
