@@ -1757,3 +1757,28 @@
 - 原因/計画: 新testは同じloopbackの127.0.0.1も許可しdemo-gokaku/port検証を保持する。既存helperの構成契約は変更せず、mainの契約検証ランナーをrootの8080に合わせ、空き確認後に隔離起動する。製品/既存assertion/timeout変更なし。本来のRED確認後に保存処理を実装し両レビューで検証する。
 
 - P-126完了確認: 新testのloopbackguardのみ127.0.0.1を追加し、既存REST helperに合わせた8080の隔離runnerで実行した。既存verify21件/helper18件PASS・新test9件REDを確認後、保存部の実装で全51件GREEN。既存helper/assertion/timeout/製品の課金仕様は変更せず両レビューPASS。
+
+
+## P-127 Apple通知の内部検証条件へX専用の再送制御を混入した
+- 発見日: 2026-10-23(7-2内のApple通知結合検証・着手前確認)
+- 状態: 解決済み(2026-10-25。当初仕様に沿う新10件と既存回帰・独立review/security PASS)
+- 原因: mainが新規作成した内部条件に「重複通知で履歴を増やさない」を含めたが、requirements 5-1の同一receipt早期returnはX確認専用。requirements 3-4はApple通知ごとに最新状態を取り直す仕様であり、既存共通保存も同値再確認を履歴として保存する。Apple通知へ未承認の重複排除を追加する根拠はない。implが着手前に矛盾を検出し、製品/テスト未変更で停止した。
+- 訂正計画: 今回mainが追加した7-2内部条件だけを「再送時も最新状態を取り直して保存し、後日の設定を保持する」へ訂正する。既存仕様・通知処理・過去タスク/過去問題の完了判定は変更しない。通常/セキュリティレビューで当初仕様との一致と結合検証を確認する。
+
+
+## P-128 通知回帰テストのHTTP入口に必要なFunctions Emulatorを起動していなかった
+- 発見日: 2026-10-25(7-2内Apple通知の結合検証)
+- 状態: 解決済み(2026-10-25。Functions/Firestore隔離起動後の58件と両レビューPASS)
+- 再現/原因: mainがFirestore-onlyランナーへ既存appleServerNotification.test.ts全体を渡したため、HTTP3件が127.0.0.1:5001へ接続できず失敗。新integration10件と既存core/契約/購入等の55件はPASS。製品の不具合ではなく、検証対象に必要なサーバーの起動漏れ。
+- 修正計画: FunctionsとFirestoreを隔離Emulatorで起動する。ビルド済みコードを一時領域へ配置し、秘密は合成fixtureだけを渡す。本番設定・既存test/assertionを変更せず、同じ58件と型lint・独立review/securityを確認する。テスト除外で完了扱いにしない。
+
+- P-128追加調査(2026-10-25): Functionsのsourceに一時領域の絶対pathを渡すとCLIがconfigルートと二重結合し、関数を読み込まず404になった。Firestore-onlyの修正後初回58件は56PASS/2FAILで未合格。sourceをconfig配下の相対functionsへ限定して再検証する。製品/既存assertion変更なし。
+
+- P-127/P-128完了確認(2026-10-25): Apple通知の再送時も最新契約を再取得して履歴を保存する当初仕様を検証した。Functions+Firestoreの合成設定stagingでHTTP3件を除外せず58/58PASS・skip0・正常shutdown、型/lintと独立review/security PASS。CLIは対象node22指定に対しhost node24で動作しており、本番runtime22の実接続確認を意味しない。製品/既存assertionを変更していない。
+
+
+## P-129 セッション取得の設計報告に正常なconfirmations欠落の読取変換が不足した
+- 発見日: 2026-10-25(7-2内の取得方式design review)
+- 状態: 原因特定済み・設計補足の再レビュー待ち
+- 原因: 正常なstart直後・未応答のsessionsはstopAtとconfirmationsを保存しない。調査報告がstopAtのnull変換だけを明記していたため、その記述だけでsharedへ渡すとconfirmations.forEachでTypeErrorになる。writerの省略は既存仕様であり、製品不具合ではない。
+- 修正計画: 読取境界でstopAt欠落/nullをnull、confirmations欠落だけを[]へ変換すると明記。不正型・不正要素は正常値に丸めず、不正sessionのみ除外・記録する。必要な他の値もshared入力契約どおり検証する。writer/既存データ/既存helperは変更しない。設計の再レビュー後、取得処理のテストで正常欠落と不正型を分けて確認する。
