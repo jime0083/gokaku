@@ -86,14 +86,29 @@ function isRevisions(
     );
 }
 
-async function readStream<S extends JudgementStream>(
+export type JudgementStreamPoint<S extends JudgementStream> = {
+  snapshot: JudgementSnapshots[S];
+  revision: number;
+  committedAt: Timestamp;
+};
+
+/**
+ * 既存のbounded queryとshared selectorで検証したcutoff直前の点を返す。
+ * 親counter・開始時刻は呼出側が同じtxで取得する。
+ * revisionとSDK Timestampは検証済みbeforeDocから返す。
+ */
+export async function readJudgementStreamPoint<S extends JudgementStream>(
   tx: Transaction,
   userRef: DocumentReference,
   stream: S,
   parentRevision: number,
   coverageStart: Timestamp,
   cutoff: Timestamp,
-): Promise<JudgementSnapshots[S]> {
+): Promise<JudgementStreamPoint<S>> {
+  requireUserReference(userRef);
+  if (!isSdkTimestamp(coverageStart) || !isSdkTimestamp(cutoff)) {
+    throw new JudgementHistoryReadError();
+  }
   const collection = userRef.collection('judgementHistory')
     .doc(stream).collection('entries');
   const beforeQuery = collection.where('committedAt', '<', cutoff)
@@ -128,7 +143,36 @@ async function readStream<S extends JudgementStream>(
     entries: candidates,
   });
   if (selected.status !== 'available') throw new JudgementHistoryReadError();
-  return selected.snapshot;
+  const point = candidates[0];
+  if (
+    before.docs.length !== 1
+    || !point
+    || typeof point.revision !== 'number'
+    || !isSdkTimestamp(point.committedAt)
+    || compareTimestamps(point.committedAt, cutoff) >= 0
+  ) {
+    throw new JudgementHistoryReadError();
+  }
+  return {
+    snapshot: selected.snapshot,
+    revision: point.revision,
+    committedAt: point.committedAt,
+  };
+}
+
+/** 旧呼出側には従来どおりsnapshotだけを返す。 */
+async function readStream<S extends JudgementStream>(
+  tx: Transaction,
+  userRef: DocumentReference,
+  stream: S,
+  parentRevision: number,
+  coverageStart: Timestamp,
+  cutoff: Timestamp,
+): Promise<JudgementSnapshots[S]> {
+  const point = await readJudgementStreamPoint(
+    tx, userRef, stream, parentRevision, coverageStart, cutoff,
+  );
+  return point.snapshot;
 }
 
 /**

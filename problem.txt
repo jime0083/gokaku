@@ -1864,13 +1864,36 @@
 
 ## P-139 active認証Storeの新テストfixtureが既存history helperの必須subscriptionを欠く
 - 発見日: 2026-10-26(7-3b active Storeテストの適用前確認)
-- 状態: 正常fixture修正済み・Store実装後の検証待ち
+- 状態: 解決済み(2026-10-26。対象Emulator74件/型lint・独立review/security PASS)
 - 原因: 初期化済みを表す4counter/開始時刻のある正常fixtureにsubscriptionがなく、実CandidateStore.confirmを通すケースでbuildServerHistoryが欠損を拒否する。既存契約の正しい拒否であり、製品不具合ではない。
 - 修正計画: 正常fixtureへsubscription:nullを明示する1項目だけの修正を担当へ依頼。欠損拒否を弱めず、既存製品/期待値/timeoutを維持したまま未実装RED→Store実装→実Emulator/型lint・両レビューで確認する。
 
 
 ## P-140 再開後に旧一時Emulatorランナーが存在せずactive Storeテストを実行できない
 - 発見日: 2026-10-26(7-3b active Store実装前確認)
-- 状態: ランナー再作成・demo Emulator起動/正常停止と未実装REDを確認済み・Store実装検証待ち
+- 状態: 解決済み(2026-10-26。対象Emulator74件/型lint・独立review/security PASS)
 - 原因: mainが/tmpの旧7-2ランナーを再利用したが既に存在せず、存在確認の失敗後にも依存コマンドを実行してしまった。テスト本体は未実行で製品不具合ではない。P-124と同じく一時領域の永続性を仮定できない。
 - 修正計画: 明示demo-gokaku/loopback/空きport検査の専用ランナーを再作成し、作成成功を確認してからテストを実行する。秘密・本番設定をコピーせず、終了時は自身のEmulatorを正常停止する。製品や期待値は変更しない。
+
+
+## P-141 active認証Storeの初回Emulator検証で異常値・再連携の2ケースが失敗
+- 発見日: 2026-10-26(7-3b active認証Store)
+- 状態: 解決済み(2026-10-26。対象Emulator74件/型lint・独立review/security PASS)
+- 再現: active新24件のうち03/17が失敗、旧tokenStore49件はPASS。03は不正metadataのpatchの一つで拒否されず、17は同じUIDで2回目の実CandidateStore.confirmが失敗。型/lintはPASS。
+- 調査/計画: 実装担当が保存前後のTimestamp精度と03の各patchを調査し、17は親documentをresetしても子履歴が残る影響を確認する。原因確定前に製品や期待値を変更しない。必要な限定修正を記録後に適用し、対象Emulator/型lint・独立review/securityで確認する。
+
+- 原因確定/限定修正計画: 03は先頭7patchの検証後、1nsのTimestampで失敗。Firestore同梱document.protoは保存時にマイクロ秒未満を切捨てるため、不正値が保存後は正常値になっていた。1000nsへ変更し、保存後も値が保持されることを追加検証する。17は同一UIDの2巡目で履歴entries/2が既存となり衝突。it.eachで新UIDをシナリオごとに作成する。製品/拒否条件/既存期待値/timeoutは変更しない。
+
+
+## P-142 投稿前consent readerの新Emulator fixtureが保存可能な日時精度を超える
+- 発見日: 2026-10-26(7-3b consent reader実装前確認)
+- 状態: 解決済み(2026-10-26。fixture精度分離後85件/型lint・独立review/security PASS)
+- 原因: 新テストの共通cutoff=500001ns/justAfter=500002nsを実Firestoreへ保存するとマイクロ秒未満が切り捨てられ、いずれも500000nsとなる。OFF/再連携/開始時刻の境界がcutoff前へ移動して期待条件を表さない。同梱document.protoの保存精度契約とP-141で確認。製品は未実装。
+- 修正計画: 実Emulator describe内だけ保存可能なマイクロ秒境界の時刻を定義し、保存後の境界一致も検証する。mock describeの1ns差/変換禁止の検証と既存history61件は維持する。担当の限定修正適用→未実装RED確認→製品実装→新旧Emulator/型lint・独立review/securityで確認する。
+
+
+## P-143 対象限定TypeScriptコマンドが現行tscの明示config規定で停止
+- 発見日: 2026-10-26(7-3b active Storeの対象型チェック)
+- 状態: 解決済み(2026-10-26。対象Emulator74件/型lint・独立review/security PASS)
+- 原因: tsconfigのあるfunctionsディレクトリでファイルを明示したため、現行tscがTS5112としてconfig無視の明示を要求した。製品の型エラーは未検出。
+- 修正計画: 元と同じcompiler flags・対象ファイルに--ignoreConfigだけを追加して再実行する。別単位の未実装testを含めない対象グラフの検証であり、統合時の既定typecheckは省略しない。

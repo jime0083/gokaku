@@ -915,7 +915,15 @@ Phase 7: X連携・0:00判定・自動投稿
       [x] token更新HTTP結果の安全な分類: (1)既存requestTokensの契約を維持 (2)新しい内部APIで成功/明確なOAuth拒否/制限/成否不明を定型値だけで返す (3)10秒/64KB/秘密非露出とrefresh fallback維持 (4)新旧mock回帰を確認 (5)型lint・review/security PASS。画面0/公開Function0/依存0。
     ※P-139適用前修正: 正常fixtureに既存helper必須のsubscription:nullを明示し、初期化後の欠損拒否の契約を維持する。
     ※HTTP2単位完了(2026-10-26): 各単位の独立review/security双方PASS。投稿25/新token分類19/旧token82の126件PASS・skip0、型lint PASS。coverage(post statement/branch/function/line)100/97.82/100/100%、token99.2/96.07/100/100%。P-138はテスト型/表記2か所だけ修正。単発送信・neutral分類・秘密非露出と旧認証契約を維持。active Store/投稿job/正式7-3b全体は未完了。
-      [ ] active認証情報の更新排他・比較保存: (1)既存active/連携世代を読取 (2)同じ認証情報のrefreshを永続claimで直列化・期限切れ未確定を再使用しない (3)更新tokenはAAD付き暗号化して比較保存し、pendingLink等を保持 (4)再連携/古いclaim/削除競合で上書き・親再作成を拒否 (5)実Emulator対象test/型lint・review/security PASS。画面0/公開Function0/依存0。refresh HTTPとユーザー通知は別単位。
+      ※P-143: 対象型チェックのconfig無視を明示し、既定の統合型チェックも別途維持する。
+      ※P-141: Timestamp保存精度と履歴fixtureの分離を限定修正し、対象Emulator/両レビューで再確認する。
+      [x] active認証情報の更新排他・比較保存: (1)既存active/連携世代を読取 (2)同じ認証情報のrefreshを永続claimで直列化・期限切れ未確定を再使用しない (3)更新tokenはAAD付き暗号化して比較保存し、pendingLink等を保持 (4)再連携/古いclaim/削除競合で上書き・親再作成を拒否 (5)実Emulator対象test/型lint・review/security PASS。画面0/公開Function0/依存0。refresh HTTPとユーザー通知は別単位。
+      ※active Store完了(2026-10-26): 新25/旧49の74件PASS・skip0、対象tsc/lint PASS、coverage statement99.43/branch97.36/function100/line100%。独立review/security双方PASS。P-139/140/141/143解決。正式7-3bは未完了。
+      ※P-142: 実Emulatorの境界fixtureだけを保存可能精度へ分離し、mockの1ns検証は維持する。
+      [x] 送信前の投稿OFF・再連携検知: (1)既存のcutoff履歴検証を再利用してsettings/xLinkのrevisionを取得 (2)cutoff以降のOFFを検知し、再ONでも旧待機を復活させない (3)true→trueの再連携を世代変更として検知 (4)欠損/不正履歴は推測せず拒否・導入前/削除中は送信不可 (5)新旧実Emulator/型lint・review/security PASS。画面0/公開Function0/依存0。履歴schemaや既存判定結果の形は変更しない。
+      ※consent reader完了(2026-10-26): 新24/既存履歴61の85件PASS・skip0、Functions全体型/対象lint PASS、独立review/security双方PASS。既存履歴schema/公開戻り値/確定結果は維持。P-142解決。
+      [ ] 投稿用tokenの安全な取得・更新接続: (1)active Storeの永続claimをcached token使用前にも確認 (2)期限内ならHTTPなし・期限切れ/明示更新なら既存transportを1回だけ使用 (3)成功は比較保存し保存済み認証を再読取、保存応答不明の再試行は同一結果のDB保存だけに限定 (4)不明/invalid_grantは同世代を再更新せず、明確な拒否のみclaim解放・秘密非露出の内部結果を返す (5)mock対象test/型lint・review/security PASS。画面0/公開Function0/依存0。投稿/回数/通知UI/設定読込は含めない。
+      [ ] 投稿jobの状態遷移コア: (1)確定した本文/画像ID/N・Mを保持し送信途中で作り直さない (2)送信前claimと送信開始を分離し旧claimの送信を拒否 (3)合計3回・5分間隔と終端状態を管理 (4)送信開始後の期限切れ/成否不明を自動再送せず、送信前の取消だけを許可 (5)副作用なしの対象test/型lint・review/security PASS。画面0/公開Function0/依存0。Firestore保存/HTTP/通知UIは後続接続で検証する。
     後続の分割計画: active認証情報のclaim/比較保存→更新処理接続→cutoff以降のOFF/再連携検知→初回本文固定job作成→job状態遷移→1job送信→永続再開Schedulerとmock結合。各単位は画面0/公開Function1以下/依存0/完了条件5以下、着手前に個別条件を登録する。7-3cの通知UIは含めない。
     内容: 投稿が必要な結果(pending)だけを X に投稿、最大3回の再試行、二重投稿の防止、アクセストークンの更新
     完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れ・二重投稿なしのテストが緑
