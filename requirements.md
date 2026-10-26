@@ -370,6 +370,7 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 | `users/{uid}/sessions/{sessionId}` | goalId, startAt, stopAt, source(app/lockscreen), checkEnabled, confirmations[], endReason(manual/check_timeout) | 計測セッション(サーバーのみ書き込み。startAt・stopAt は epoch ミリ秒。2026-10-10 追記) |
 | `users/{uid}/sessionEvents/{idempotencyKey}` | sessionId, action, processedAt | 同じ操作の二重記録を防ぐ処理済みの印(サーバーのみ書き込み。2026-10-10 追加)。アプリ(recordStudyEvent)とロック画面(nativeSync)の両方で使う |
 | `users/{uid}/dailyResults/{YYYY-MM-DD}` | goalId, studiedMinutes, metMin, metGoal, postStatus(none=投稿不要(達成)/pending=投稿待ち/posted/failed/skipped=未達成だが投稿しない), postSkipReasons | 0:00 判定結果(サーバーのみ書き込み) |
+| `users/{uid}/postJobs/{YYYY-MM-DD}` | goalId, date, linkRevision, createdAt, post{text, mediaIds, counts}, attempt, status, nextAt/claim等 | サーバーのみ書込む投稿処理の記録。本文/N・Mを初回作成で固定し、送信準備と送信開始を分離して二重投稿を防ぐ。認証情報や生の外部エラーは保存しない(2026-10-26、7-3bの実装構成) |
 | `deviceTokens/{uid}` | tokenHash, issuedAt, expiresAt | ロック画面からの操作(nativeSync)に使うデバイストークンのハッシュ。有効期限30日、1人1つ(常に上書き)。サーバーのみ読み書き可(2026-10-10 追加) |
 | `xTokens/{uid}` | 暗号化した access/refresh token, expiresAt | サーバー(Cloud Functions)のみ読み書き可 |
 
