@@ -1901,6 +1901,13 @@
 
 ## P-144 投稿job状態遷移の新テストの正常境界が上限を超えるleaseを使う
 - 発見日: 2026-10-26(7-3b 状態遷移コアの適用前確認)
-- 状態: 原因確認・限定修正待ち
+- 状態: 解決済み(2026-10-26。38件/型lint・独立review/security PASS)
 - 原因: SDK時刻上限の10ms前に対し、正常境界の検証が共通helperの60,000ms leaseを使い成功を期待している。計算結果は上限+59,990msとなり、同じテスト内の上限超過拒否と矛盾する。製品は未実装。
 - 修正計画: 担当が当該正常ケースだけleaseMs10を明示し、期限が上限と一致することを検証する。11msの拒否・製品/他の期待値は変更しない。未実装RED→製品→対象test/型lint・独立review/securityを維持する。
+
+
+## P-145 本文固定jobテストのSDK障害注入が自動再試行で時間切れになる
+- 発見日: 2026-10-26(7-3b 初回本文固定jobの実Emulator検証)
+- 状態: 解決済み(2026-10-26。障害注入2件のみSDK単発化後46件/型lint・独立review/security PASS)
+- 再現/原因: 新22件のうちcode14を注入する2件だけ5秒timeout、既存consent24件と他20件はPASS。実SDK transaction.jsはUNAVAILABLE(14)を再試行し、maxAttempts未指定でbackoffを行う。テスト終了後も処理が残り、afterAllのclient終了と競合した。型/lintはPASS。
+- 修正計画: SDK例外の同一性とrollbackを検査する当該2ケースだけ、実transactionをmaxAttempts1にする。code14・assertion・timeout・製品処理は維持し、成功時競合/別callback replay検証も維持する。対象Emulatorと型lint・独立review/securityで確認する。
