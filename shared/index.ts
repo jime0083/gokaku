@@ -19,6 +19,7 @@ export * from './displayNumber';
 export * from './estimatedHours';
 export * from './functionsRegion';
 export * from './homeSummary';
+export * from './missedStudyPost';
 export * from './pace';
 export * from './studyCheck';
 export * from './studyTime';
