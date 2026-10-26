@@ -907,7 +907,16 @@ Phase 7: X連携・0:00判定・自動投稿
     完了条件: 月またぎ・目標変更後の数え直し・投稿しなかった未達成日を含むユニットテストが緑
 
 [ ] 7-3b 自動投稿と再試行
+    ※着手前確認(2026-10-26): W8完了。ユーザーが初回込み合計3回/5分間隔・成否不明は再送しない・待機中OFF/再連携は送信前検知で中止・token更新結果不明は更新を繰り返さず再連携案内を確定。既存crypto/refresh grant/履歴を再利用し、実APIはmock。
+    内部単位(既存の7-3b内容/完了条件は変更しない):
+      [x] X投稿HTTP部品: (1)固定の公式endpointへ注入fetchで1回送信 (2)201のpostId/非201のstatus/成否不明を秘密非露出の型で区別 (3)10秒・64KB・redirect拒否・reader後始末 (4)設定/永続化/再試行方針を持たず本文とmediaを分離 (5)mock対象test/型lint・独立review/security PASS。画面0/公開Function0/依存0。送信回数・不明時の再送・キャンセル判断は後続のユーザー確定仕様に従う。
     ※開始前確認: manual-work W8(投稿文承認)完了必須
+    ※P-138限定修正: 新テストの同期throw mock型推論と配列表記だけを現行型/lint規則に合わせ、126件の期待値を維持する。
+      [x] token更新HTTP結果の安全な分類: (1)既存requestTokensの契約を維持 (2)新しい内部APIで成功/明確なOAuth拒否/制限/成否不明を定型値だけで返す (3)10秒/64KB/秘密非露出とrefresh fallback維持 (4)新旧mock回帰を確認 (5)型lint・review/security PASS。画面0/公開Function0/依存0。
+    ※P-139適用前修正: 正常fixtureに既存helper必須のsubscription:nullを明示し、初期化後の欠損拒否の契約を維持する。
+    ※HTTP2単位完了(2026-10-26): 各単位の独立review/security双方PASS。投稿25/新token分類19/旧token82の126件PASS・skip0、型lint PASS。coverage(post statement/branch/function/line)100/97.82/100/100%、token99.2/96.07/100/100%。P-138はテスト型/表記2か所だけ修正。単発送信・neutral分類・秘密非露出と旧認証契約を維持。active Store/投稿job/正式7-3b全体は未完了。
+      [ ] active認証情報の更新排他・比較保存: (1)既存active/連携世代を読取 (2)同じ認証情報のrefreshを永続claimで直列化・期限切れ未確定を再使用しない (3)更新tokenはAAD付き暗号化して比較保存し、pendingLink等を保持 (4)再連携/古いclaim/削除競合で上書き・親再作成を拒否 (5)実Emulator対象test/型lint・review/security PASS。画面0/公開Function0/依存0。refresh HTTPとユーザー通知は別単位。
+    後続の分割計画: active認証情報のclaim/比較保存→更新処理接続→cutoff以降のOFF/再連携検知→初回本文固定job作成→job状態遷移→1job送信→永続再開Schedulerとmock結合。各単位は画面0/公開Function1以下/依存0/完了条件5以下、着手前に個別条件を登録する。7-3cの通知UIは含めない。
     内容: 投稿が必要な結果(pending)だけを X に投稿、最大3回の再試行、二重投稿の防止、アクセストークンの更新
     完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れ・二重投稿なしのテストが緑
 

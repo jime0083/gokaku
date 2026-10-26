@@ -1853,3 +1853,24 @@
 - 確定/対応計画: ユーザーがNは月内で旧目標分も引継ぎ、Mだけ新目標で数え直すと回答。要件とmokuhyoへ先に反映し、新担当が下書きの期待値を修正→未実装RED→製品実装→独立reviewで確認する。過去タスクや既存問題の完了判定は変更しない。
 
 - P-137解決確認(2026-10-26): Nは旧goal分も月内で引継ぎ、Mだけ対象goalで数え直す確定仕様を実装。N3/M1を含む20件・全体1921件・TZ393件×2・型lint PASS、対象coverage全4指標100%。独立reviewが要件/mokuhyo/実装の一致を確認してPASS。
+
+
+## P-138 token結果分類の新テストにmock型と配列表記の検証エラーがある
+- 発見日: 2026-10-26(7-3b HTTP部品)
+- 状態: 解決済み(2026-10-26。テスト2か所限定修正後126件/型lint・独立review/security PASS)
+- 再現/原因: mock126件はPASS。新tokenTransportOutcome.test.ts:305の同期throwするjest.fnが引数なしnever型と推論されTokenFetch型に不一致(TS2322)。198行のArray<T>表記は既存ESLint配列ルールで警告となりwarnings0条件に失敗。製品エラーは未確認。
+- 修正計画: 実装担当がmockにReturnType/Parametersの2型引数を明示し、配列型をT[]へ変更する2か所だけ限定修正。製品/期待値/timeout変更なし。対象mock/型lint・独立review/securityで確認する。
+
+
+## P-139 active認証Storeの新テストfixtureが既存history helperの必須subscriptionを欠く
+- 発見日: 2026-10-26(7-3b active Storeテストの適用前確認)
+- 状態: 正常fixture修正済み・Store実装後の検証待ち
+- 原因: 初期化済みを表す4counter/開始時刻のある正常fixtureにsubscriptionがなく、実CandidateStore.confirmを通すケースでbuildServerHistoryが欠損を拒否する。既存契約の正しい拒否であり、製品不具合ではない。
+- 修正計画: 正常fixtureへsubscription:nullを明示する1項目だけの修正を担当へ依頼。欠損拒否を弱めず、既存製品/期待値/timeoutを維持したまま未実装RED→Store実装→実Emulator/型lint・両レビューで確認する。
+
+
+## P-140 再開後に旧一時Emulatorランナーが存在せずactive Storeテストを実行できない
+- 発見日: 2026-10-26(7-3b active Store実装前確認)
+- 状態: ランナー再作成・demo Emulator起動/正常停止と未実装REDを確認済み・Store実装検証待ち
+- 原因: mainが/tmpの旧7-2ランナーを再利用したが既に存在せず、存在確認の失敗後にも依存コマンドを実行してしまった。テスト本体は未実行で製品不具合ではない。P-124と同じく一時領域の永続性を仮定できない。
+- 修正計画: 明示demo-gokaku/loopback/空きport検査の専用ランナーを再作成し、作成成功を確認してからテストを実行する。秘密・本番設定をコピーせず、終了時は自身のEmulatorを正常停止する。製品や期待値は変更しない。

@@ -13,6 +13,17 @@ const REQUIRED_SCOPES = [
   'users.read',
   'offline.access',
 ] as const;
+const KNOWN_OAUTH_ERRORS = [
+  'invalid_grant',
+  'invalid_client',
+  'unauthorized_client',
+  'invalid_request',
+  'unsupported_grant_type',
+  'invalid_scope',
+  'access_denied',
+  'server_error',
+  'temporarily_unavailable',
+] as const;
 
 export const TOKEN_TIMEOUT_MS = 10_000;
 export const TOKEN_RESPONSE_MAX_BYTES = 64 * 1024;
@@ -59,6 +70,25 @@ export interface TokenResult {
   readonly refreshToken: string;
   readonly scope: string;
 }
+
+export type TokenOAuthError = typeof KNOWN_OAUTH_ERRORS[number];
+
+export type TokenOutcome =
+  | { readonly kind: 'tokens'; readonly tokens: TokenResult }
+  | {
+      readonly kind: 'oauth_error';
+      readonly status: number;
+      readonly error: TokenOAuthError;
+    }
+  | {
+      readonly kind: 'http_error';
+      readonly status: number;
+      readonly retryAfterSeconds?: number;
+    }
+  | {
+      readonly kind: 'unknown';
+      readonly reason: 'network' | 'timeout' | 'invalid_response';
+    };
 
 function requireValue(condition: boolean): asserts condition {
   if (!condition) throw new Error(FAILURE);
@@ -142,6 +172,16 @@ function validateResponse(value: unknown, grant: TokenGrant): TokenResult {
   };
 }
 
+/** Return a constant allowlist member, never arbitrary provider text. */
+function knownOAuthError(value: unknown): TokenOAuthError | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const data = value as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(data, 'error')) return undefined;
+  return KNOWN_OAUTH_ERRORS.find((error) => error === data.error);
+}
+
 /** Cleanup must neither leak a raw error nor extend the request deadline. */
 function discard(operation: () => Promise<unknown>): void {
   try {
@@ -151,15 +191,18 @@ function discard(operation: () => Promise<unknown>): void {
   }
 }
 
-export async function requestTokens(
+async function execute(
   fetch: TokenFetch,
   credentials: TokenCredentials,
   grant: TokenGrant,
-): Promise<TokenResult> {
+  parseNon200: boolean,
+): Promise<TokenOutcome> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const controller = new AbortController();
   let completed = false;
+  let timedOut = false;
+  let failureReason: 'network' | 'invalid_response' = 'invalid_response';
   try {
     requireText(credentials.clientId);
     requireText(credentials.clientSecret);
@@ -170,13 +213,15 @@ export async function requestTokens(
     ).toString('base64');
 
     // Race also bounds an injected fetch/reader that ignores AbortSignal.
-    const deadline = new Promise<never>((_resolve, reject) => {
+    const deadline = new Promise<TokenOutcome>((resolve) => {
       timer = setTimeout(() => {
-        reject(new Error(FAILURE));
+        timedOut = true;
+        resolve({ kind: 'unknown', reason: 'timeout' });
         controller.abort();
       }, TOKEN_TIMEOUT_MS);
     });
-    const operation = async (): Promise<TokenResult> => {
+    const operation = async (): Promise<TokenOutcome> => {
+      failureReason = 'network';
       const response = await fetch(TOKEN_ENDPOINT, {
         method: 'POST',
         headers: {
@@ -191,33 +236,64 @@ export async function requestTokens(
       if (controller.signal.aborted) {
         const lateBody = response.body;
         if (lateBody) discard(() => lateBody.cancel());
-        throw new Error(FAILURE);
+        return { kind: 'unknown', reason: 'timeout' };
       }
+
+      failureReason = 'invalid_response';
+      const status = response.status;
       reader = response.body?.getReader();
-      requireValue(response.status === 200 && reader !== undefined);
+      requireValue(Number.isInteger(status) && status >= 100 && status <= 599);
+      const invalidBody: TokenOutcome = status === 200
+        ? { kind: 'unknown', reason: 'invalid_response' }
+        : { kind: 'http_error', status };
+
+      // Legacy callers reject non-200 without reading the body.
+      // Leave completed false so finally cancels and releases the reader.
+      if (status !== 200 && !parseNon200) return invalidBody;
+      if (reader === undefined) return invalidBody;
+
       const chunks: Uint8Array[] = [];
       let size = 0;
       while (true) {
+        failureReason = 'network';
         const chunk = await reader.read();
-        requireValue(!controller.signal.aborted);
+        if (controller.signal.aborted) {
+          return { kind: 'unknown', reason: 'timeout' };
+        }
+        failureReason = 'invalid_response';
         if (chunk.done) break;
-        requireValue(chunk.value instanceof Uint8Array);
+        if (!(chunk.value instanceof Uint8Array)) return invalidBody;
         size += chunk.value.byteLength;
-        requireValue(size <= TOKEN_RESPONSE_MAX_BYTES);
+        if (size > TOKEN_RESPONSE_MAX_BYTES) return invalidBody;
         chunks.push(chunk.value);
       }
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(
-        Buffer.concat(chunks, size),
-      );
-      return validateResponse(JSON.parse(text) as unknown, grant);
+
+      let value: unknown;
+      try {
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(
+          Buffer.concat(chunks, size),
+        );
+        value = JSON.parse(text) as unknown;
+      } catch {
+        // A known non-200 status stays neutral when JSON is unavailable.
+        return invalidBody;
+      }
+      if (status !== 200) {
+        const error = knownOAuthError(value);
+        completed = true;
+        return error === undefined
+          ? { kind: 'http_error', status }
+          : { kind: 'oauth_error', status, error };
+      }
+      const tokens = validateResponse(value, grant);
+      completed = true;
+      return { kind: 'tokens', tokens };
     };
 
-    const result = await Promise.race([operation(), deadline]);
-    completed = true;
-    return result;
+    return await Promise.race([operation(), deadline]);
   } catch {
-    // Never attach the provider response, request, original error, or cause.
-    throw new Error(FAILURE);
+    // Never return the provider response, request, original error, or cause.
+    return { kind: 'unknown', reason: timedOut ? 'timeout' : failureReason };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (!completed) controller.abort();
@@ -231,4 +307,24 @@ export async function requestTokens(
       }
     }
   }
+}
+
+/** One HTTP attempt with bounded, sanitized outcome classification. */
+export async function requestTokenOutcome(
+  fetch: TokenFetch,
+  credentials: TokenCredentials,
+  grant: TokenGrant,
+): Promise<TokenOutcome> {
+  return execute(fetch, credentials, grant, true);
+}
+
+/** Preserve the original tokens-or-generic-Error contract and body handling. */
+export async function requestTokens(
+  fetch: TokenFetch,
+  credentials: TokenCredentials,
+  grant: TokenGrant,
+): Promise<TokenResult> {
+  const outcome = await execute(fetch, credentials, grant, false);
+  if (outcome.kind === 'tokens') return outcome.tokens;
+  throw new Error(FAILURE);
 }
