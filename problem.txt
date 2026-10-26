@@ -1663,7 +1663,7 @@
 
 ## P-118 7-2の0:00時点の判定入力を現行保存データだけでは復元できない
 - 発見日: 2026-10-22(7-2着手前調査)
-- 状態: 履歴保存の先行追加をユーザー承認(2026-10-22)・7-2-A/B/C/D完了・初回目標/数値編集履歴を実装済み・他保存経路/初期化/定時判定は未実装
+- 状態: 解決済み(2026-10-26。全保存経路・初期化・時点復元・定時判定・1,000人結合と正式7-2の独立review/security PASS)
 - 内容: requirements 3-3およびshared/dailyJudgement.tsは0:00時点の目標値・投稿設定・連携・課金情報を判定入力とする。処理開始前にこれらが変わった場合、現在値だけを読む実装では当初仕様を保証できない。
 - 根拠: src/features/goals/editGoalRepository.tsのupdateDocは目標数値を上書き。replaceGoal.tsはactiveGoalIdと旧statusを更新。functions/src/applePurchase/verifyApplePurchase.tsのpersistSubscriptionはsubscriptionを丸ごと更新。現行データモデルにこれらの時点履歴は定義されていない。計測セッションのcutoff処理だけでは入力設定の時点を復元できない。
 - 対応案: 当初仕様を維持するため、判定に必要な変更履歴の保存を先行する小タスクへ分ける。保持対象・履歴のない既存データ・遅延/再実行の扱いを確定してから実装する。仕様を処理時点へ黙って変更しない。
@@ -1810,3 +1810,37 @@
 - 修正計画: 実装担当が新fixtureに合成rawTokenだけを追加しSDK型を満たす。製品/認証検証/期待値/timeoutを変更せず、統合型・lint・対象Emulatorと独立review/securityを再確認する。
 
 - P-131/P-132完了確認(2026-10-26): mock構文のみの修正後に本来REDを確認して初回保存接続を実装。認証fixtureには合成rawTokenだけを追加し、製品/期待値/timeoutを維持。全体1901件/対象118件/Emulator136件/型lintと各単位の独立review/security PASS。7-2全体/P-118は未完了。
+
+
+## P-133 全員処理コアの担当が一時ディレクトリ作成の権限承認待ちで進行しない
+- 発見日: 2026-10-26(7-2の定時処理コア)
+- 状態: 解決済み(2026-10-26。読取専用担当のコード直接受渡しへ変更し、対象実装/独立review/security PASS)
+- 原因: read-only環境で担当が/tmp mkdirの昇格承認を待ち、製品/test作成前に停止。進捗依頼にもツール終了前に応答できず、mainの中断要求で判明。製品不具合や仕様不明ではない。
+- 対応計画: 新担当はファイル書込や承認要求を出さず、対象コードを報告に直接含める。mainが内容とSHAを確認して明示的な昇格コマンドで適用する。test→RED→実装→review/securityを維持し、権限待ちを黙って継続しない。
+
+
+## P-134 Schedulerテストのlogger namespace検査がdefault objectをspyとみなす
+- 発見日: 2026-10-26(7-2 Scheduler接続)
+- 状態: 解決済み(2026-10-26。静的6関数参照で6件/型lint・独立review/security PASS)
+- 再現/原因: 新6件のafterEachでObject.values(logger)を全てtoHaveBeenCalledに渡し、TypeScriptのnamespace import相互運用で追加されるdefault objectもspy扱いしてmatcher error。6件すべて同じ後処理で失敗。
+- 修正計画: mockした6つの名前付きlogger関数だけを明示列挙して未呼出を検証する。ログ非露出/console/時計/metadata/retryの期待値と製品コードは維持し、対象テストと両レビューで確認する。
+
+
+## P-135 全員処理の新テストが現行Jestの型引数個数に合わない
+- 発見日: 2026-10-26(7-2の全員処理コアtests-first)
+- 状態: 解決済み(2026-10-26。型引数限定修正・32件/型lint・独立review/security PASS)
+- 再現/原因: functions型チェックで新runDailyJudgements.test.ts:196のjest.fn<typeof judgeUserDay>()がTS2743。現行@types/jestは型引数0または2個であり、別versionの1引数形式が混入した。その他は未作成コア由来の未解決型で、実装後に再確認する。
+- 修正計画: 実装担当がReturnType/Parametersの2引数指定へ1か所だけ修正し、typed mockと期待値を維持する。実装前のモジュール欠落REDは確認済み。製品実装後に対象Emulator/型lint・両レビューで検証する。
+
+- P-134追加確認: 6件は修正後PASSだが、logger[name]の動的namespace参照が既存import/namespace lintで検証不能。列挙した6関数をlogger.write等の静的参照配列に変更する最小修正へ分離する。製品やログ非露出assertは変更しない。
+
+
+## P-136 全員判定コアのページ取得失敗経路が動的テストで未検証
+- 発見日: 2026-10-26(7-2の独立通常レビュー)
+- 状態: 解決済み(2026-10-26。ページ取得失敗/再試行テスト追加後32件・独立review/security PASS)
+- 原因: 新31件はuser単位例外の完走/再試行を検証するが、2ページ目query失敗時の処理済み集計保持・原例外非露出・再試行の結果不変は未注入。製品上の不具合は未確認。
+- 修正計画: 実装担当が3人/pageSize2で第2ページ取得だけ一度失敗させるテストを追加し、定型errorと処理済み2人、再試行後の残り1人/既存結果不変を検証する。製品や既存期待値は変更せず対象Emulator/型lint・独立review/securityへ戻す。
+
+- P-133/P-134/P-135/P-136完了確認(2026-10-26): 書込権限待ちは担当からのコード直接受渡しで解消。P-134は名前付きlogger静的6関数だけを検査、P-135は現Jestの2型引数へ限定、P-136は製品を変更せずquery失敗/再試行の検証を追加した。全員処理32件・Scheduler6件・型lintと各単位の独立review/security PASS。正式7-2全体は最終統合判定待ち。
+
+- P-118最終解決確認(2026-10-26): 当初の0:00時点仕様を維持し、必要な履歴保存と開始前データの非推測、原子的復元/判定、認証付き初期化/初回保存接続、Schedulerを実装。正式7-2の通常/セキュリティ双方PASS。1,000人/10万sessionで初回29.994秒・再実行7.447秒、全600結果一致/400不在・結果不変・失敗0・fixture削除/Emulator正常停止。root1901件/TZ373×2/32件/6件/型lint PASS。本番デプロイと未完手動作業を完了扱いにはしない。

@@ -1,6 +1,7 @@
 export { authAccountAction } from './account/authAccountAction';
 export { appleServerNotification } from './applePurchase/appleServerNotification';
 export { verifyApplePurchase } from './applePurchase/verifyApplePurchase';
+export { dailyStudyJudgement } from './dailyJudgement/dailyJudgementSchedule';
 export { initializeJudgementHistory } from './dailyJudgement/initializeHistoryCallable';
 export { issueDeviceToken } from './deviceToken/issueDeviceTokenCallable';
 export { health } from './health';
