@@ -1794,3 +1794,19 @@
 - 修正計画: 実装担当が異なる種類の時刻同士の誤比較だけを除き、同種時刻の相互一致・payload/counter・rollbackの検証を維持する。製品コード・timeout変更なし。対象実Emulatorと独立review/securityで確認する。
 
 - P-129/P-130完了確認(2026-10-25): 判定コア60件を含む199件PASS・skip0、型/lintおよび各コアの独立review/security PASS。正常なstopAt/confirmations省略だけを変換し、不正保存値を補完せず除外。初期化testのREQUEST_TIME/updateTime誤比較だけを修正し、親と4履歴の原子保存assertは維持した。7-2全体/P-118は未完了。
+
+
+## P-131 初回保存接続の新テストがTimestamp mockのBabel hoistで実行前に止まる
+- 発見日: 2026-10-25(7-2内の初回目標保存前接続)
+- 状態: 解決済み(2026-10-26。限定mock修正・対象118件/型lint・独立review/security PASS)
+- 再現/原因: 既存saveGoal31件はPASS。新saveGoalPreparation.test.tsのjest.mock内classでconstructor(readonly seconds, readonly nanoseconds)というparameter propertyを使い、Babelがscope外参照secondsとして拒否。P-123と同じ既知のテスト構文上の問題で、製品未実装のREDではない。
+- 修正計画: 新mock classだけを明示fieldとconstructor内代入に限定修正し、Timestamp構造/instanceof/期待値/timeoutを維持。本来の実装前REDを確認してから製品実装へ進む。対象テストと両レビューで確認する。
+
+
+## P-132 履歴初期化Callableの認証fixtureがSDK必須rawTokenを欠く
+- 発見日: 2026-10-26(7-2内認証入口・再開時の統合型チェック)
+- 状態: 解決済み(2026-10-26。合成rawToken追加のみ・型/136件Emulator・独立review/security PASS)
+- 再現/原因: initializeHistoryCallable.test.ts:33のauth fixtureにuid/tokenだけを指定し、現SDK CallableRequest AuthDataで必須のrawTokenがないためTS2322。Jest実行は可能でも型チェックは失敗する。製品実装の認証不具合ではない。
+- 修正計画: 実装担当が新fixtureに合成rawTokenだけを追加しSDK型を満たす。製品/認証検証/期待値/timeoutを変更せず、統合型・lint・対象Emulatorと独立review/securityを再確認する。
+
+- P-131/P-132完了確認(2026-10-26): mock構文のみの修正後に本来REDを確認して初回保存接続を実装。認証fixtureには合成rawTokenだけを追加し、製品/期待値/timeoutを維持。全体1901件/対象118件/Emulator136件/型lintと各単位の独立review/security PASS。7-2全体/P-118は未完了。

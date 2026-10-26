@@ -8,13 +8,18 @@
  */
 import type * as RNFBApp from '@react-native-firebase/app';
 import type * as RNFBFirestore from '@react-native-firebase/firestore';
+import type * as RNFBFunctions from '@react-native-firebase/functions';
+import { FUNCTIONS_REGION } from '@shared/index';
 
-import type { SaveGoalFirestoreDeps, SaveGoalHistoryDeps } from './saveGoal';
+import { getCurrentUid } from '@/config/firebase';
+
+import type { SaveGoalDeps, SaveGoalFirestoreDeps, SaveGoalHistoryDeps } from './saveGoal';
 
 type Ref = RNFBFirestore.DocumentReference<RNFBFirestore.DocumentData, RNFBFirestore.DocumentData>;
 
 /** 本番・開発ビルドで使う SaveGoalFirestoreDeps(Emulator 接続は firebase.ts が別途行う) */
-export function createGoalFirestoreDeps(): SaveGoalFirestoreDeps<Ref> & {
+export function createGoalFirestoreDeps(): SaveGoalFirestoreDeps<Ref>
+& Required<Pick<SaveGoalDeps<Ref>, 'prepareHistory' | 'getCurrentUid'>> & {
   history: SaveGoalHistoryDeps<Ref>;
 } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -26,6 +31,30 @@ export function createGoalFirestoreDeps(): SaveGoalFirestoreDeps<Ref> & {
   const firestore = getFirestore(getApp());
 
   return {
+    getCurrentUid,
+    prepareHistory: async (uid) => {
+      const assertCurrentUid = () => {
+        if (!uid || getCurrentUid() !== uid) {
+          throw new Error('目標保存中に認証ユーザーが変わりました');
+        }
+      };
+      assertCurrentUid();
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getFunctions, httpsCallable } = require('@react-native-firebase/functions') as typeof RNFBFunctions;
+      const callable = httpsCallable(
+        getFunctions(getApp(), FUNCTIONS_REGION), 'initializeJudgementHistory',
+      );
+      assertCurrentUid();
+      // UID・時刻・状態は送らず、サーバーが認証本人のbaselineを確定する。
+      const result = await callable({});
+      assertCurrentUid();
+      const data: unknown = result?.data;
+      if (typeof data !== 'object' || data === null || Array.isArray(data)
+        || !('status' in data)
+        || (data.status !== 'initialized' && data.status !== 'alreadyInitialized')) {
+        throw new Error('判定履歴を初期化できませんでした');
+      }
+    },
     history: {
       isTimestamp: (value) => value instanceof Timestamp,
       getEntryDocRef: (uid, revision) =>

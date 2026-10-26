@@ -81,6 +81,10 @@ export type SaveGoalHistoryDeps<Ref> = {
 };
 
 export type SaveGoalDeps<Ref> = SaveGoalFirestoreDeps<Ref> & {
+  /** native初回保存ではtransactionの外で本人の判定履歴を初期化する。legacy純粋依存は省略可 */
+  prepareHistory?: (uid: string) => Promise<void>;
+  /** native保存のUID拘束。transactionの再試行でも現在の本人を確認する */
+  getCurrentUid?: () => string | null;
   /** legacyでは省略可能。metadataが存在する場合は必須 */
   history?: SaveGoalHistoryDeps<Ref>;
   /** 保存に成功した後に一時保存(3-1)を消す(storage.ts の clearOnboardingDraft を渡す) */
@@ -150,13 +154,27 @@ export async function saveGoal<Ref>(
 ): Promise<SaveGoalResult> {
   const goal = buildGoalDocument(params.draft, params.now);
 
+  const assertCurrentUid = () => {
+    if (deps.getCurrentUid && (!params.uid || deps.getCurrentUid() !== params.uid)) {
+      throw new Error('目標保存中に認証ユーザーが変わりました');
+    }
+  };
+  assertCurrentUid();
+  // callbackの再試行で初期化を繰り返さない。入力不正・初期化失敗時は保存もdraft消去もしない。
+  if (deps.prepareHistory) {
+    await deps.prepareHistory(params.uid);
+    assertCurrentUid();
+  }
+
   // Firestoreがcallbackを再試行しても、同じgoal参照を使う。
   let goalDoc: { ref: Ref; id: string } | undefined;
   let goalId: string;
   try {
     goalId = await deps.runTransaction(async (tx) => {
+      assertCurrentUid();
       const userRef = deps.getUserDocRef(params.uid);
       const userSnapshot = await tx.get(userRef);
+      assertCurrentUid();
       const user = userSnapshot.exists() ? userSnapshot.data() ?? {} : {};
       const existingActiveGoalId = user.activeGoalId ?? null;
       if (existingActiveGoalId) {
@@ -210,6 +228,7 @@ export async function saveGoal<Ref>(
     throw error;
   }
 
+  assertCurrentUid();
   await deps.clearOnboardingDraft();
 
   return { goalId, goal };
