@@ -33,7 +33,7 @@ const MAX_DOCUMENT_ID_BYTES = 1500;
 const MIN_TIMESTAMP_MS = -62135596800000;
 const MAX_TIMESTAMP_MS = 253402300799999;
 const POST_STATUSES = ['none', 'pending', 'posted', 'failed', 'skipped'] as const;
-const SKIP_REASONS = ['start_date', 'x_post_disabled', 'x_not_linked'] as const;
+const SKIP_REASONS = ['start_date', 'x_post_disabled', 'x_not_linked', 'x_post_cancelled'] as const;
 
 function invalid(): Error {
   return new Error('Invalid posting job input');

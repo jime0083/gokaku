@@ -83,7 +83,8 @@ export type DailyJudgementInput = {
 export type PostSkipReason =
   | 'start_date' // 目標の開始日(登録日。目標変更日を含む)
   | 'x_post_disabled' // X 投稿許可 OFF
-  | 'x_not_linked'; // X 未連携
+  | 'x_not_linked' // X 未連携
+  | 'x_post_cancelled'; // 送信開始前に待機投稿を中止
 
 /** dailyResults/{date} に書く内容 */
 export type DailyResultDraft = {

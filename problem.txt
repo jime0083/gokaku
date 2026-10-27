@@ -1911,3 +1911,19 @@
 - 状態: 解決済み(2026-10-26。障害注入2件のみSDK単発化後46件/型lint・独立review/security PASS)
 - 再現/原因: 新22件のうちcode14を注入する2件だけ5秒timeout、既存consent24件と他20件はPASS。実SDK transaction.jsはUNAVAILABLE(14)を再試行し、maxAttempts未指定でbackoffを行う。テスト終了後も処理が残り、afterAllのclient終了と競合した。型/lintはPASS。
 - 修正計画: SDK例外の同一性とrollbackを検査する当該2ケースだけ、実transactionをmaxAttempts1にする。code14・assertion・timeout・製品処理は維持し、成功時競合/別callback replay検証も維持する。対象Emulatorと型lint・独立review/securityで確認する。
+
+
+## P-146 投稿job Storeの監査テストがQueryの記録形式と異なる履歴パスを期待する
+- 発見日: 2026-10-26(7-3b 投稿job永続化の初回検証)
+- 状態: 解決済み(2026-10-26。本人履歴queryのisEqual検証後47件/型lint・独立review/security PASS)
+- 原因: 実Emulator47件中46件PASS、監査1件だけ失敗。observe helperはQueryを文字列queryとして記録する一方、検証はそのログにjudgementHistoryのパスが含まれることを要求している。製品は同一txのreadPostingConsentを使用し、型lintはPASS。
+- 修正計画: 当該監査ケースで実Queryを取得し、本人のsettings/xLink履歴クエリと公開isEqualで照合する。guard/全read後write/書込先/非変更の検証と製品は維持し、単にassertionを削除しない。対象Emulator/型lint・独立review/securityで確認する。
+
+
+## P-147 正式7-3bの回帰で既存historyReaderテストの終了処理が時間切れになる
+- 発見日: 2026-10-27(独立reviewの実Emulator全体回帰)
+- 状態: 再現せず・原因未確定の監視継続(2026-10-27)。製品/旧テスト/timeoutの変更なし。
+- 再現: 19suite/646件のテスト本体は全成功したが、historyReader.test.ts afterAllのdb.terminate/deleteAppが5000ms timeout。終了処理のどちらで待機したか未確定。Emulatorは正常停止。正式7-3bはまだ完了扱いにしない。
+- 調査計画: SDK終了処理と未完了のRPC/cleanupを担当が調査し、同じ条件で一度再現確認する。旧タスク/旧テスト/timeout/製品を勝手に変更しない。再現条件と全ケース実行・終了結果を独立reviewで確認してから判定する。
+
+- 再現確認結果: 同一の未変更19suiteを独立reviewが1回再実行し646件/19suite全成功・skip0/exit0、historyReader suite605ms。SDK rollbackの非同期終了とpool terminate待機経路は確認したが因果未証明。通常/securityとも最新実行で正式7-3b PASS。前回/今回のログとJSONを上記恒久証跡フォルダへ保存し、再発時に待機段階を調べる。

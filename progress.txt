@@ -906,7 +906,7 @@ Phase 7: X連携・0:00判定・自動投稿
     内容: 承認済みの定型文と「#今月N回目」「#累計M回目」の計算(requirements 3-3)を shared のロジックにする。文章と画像を分けて組み立てる形(将来の画像添付用)
     完了条件: 月またぎ・目標変更後の数え直し・投稿しなかった未達成日を含むユニットテストが緑
 
-[ ] 7-3b 自動投稿と再試行
+[x] 7-3b 自動投稿と再試行
     ※着手前確認(2026-10-26): W8完了。ユーザーが初回込み合計3回/5分間隔・成否不明は再送しない・待機中OFF/再連携は送信前検知で中止・token更新結果不明は更新を繰り返さず再連携案内を確定。既存crypto/refresh grant/履歴を再利用し、実APIはmock。
     内部単位(既存の7-3b内容/完了条件は変更しない):
       [x] X投稿HTTP部品: (1)固定の公式endpointへ注入fetchで1回送信 (2)201のpostId/非201のstatus/成否不明を秘密非露出の型で区別 (3)10秒・64KB・redirect拒否・reader後始末 (4)設定/永続化/再試行方針を持たず本文とmediaを分離 (5)mock対象test/型lint・独立review/security PASS。画面0/公開Function0/依存0。送信回数・不明時の再送・キャンセル判断は後続のユーザー確定仕様に従う。
@@ -930,8 +930,19 @@ Phase 7: X連携・0:00判定・自動投稿
       ※P-145: 障害注入2件のSDK自動retryだけを単発に限定し、例外/rollback/timeout/製品を維持する。
       [x] 初回本文固定jobの作成: (1)本人親とpending結果・投稿同意を同一transactionで確認 (2)確定結果から既存7-3a helperで本文/N・Mを1回だけ作成 (3)日付単位のjobをcreateし重複/再実行で上書きしない (4)削除中/不正結果/履歴欠損を拒否し、OFF/再連携は送信不可の結果だけを返す (5)新旧Emulator/型lint・review/security PASS。画面0/公開Function0/依存0。取消結果の保存・状態遷移・外部送信は後続接続。
       ※初回job作成完了(2026-10-26): 新22/既存24の46件PASS・skip0、型lint PASS、coverage statement93.69/branch90.9/function100/line98.93%、独立review/security双方PASS。P-145解決。本文/N・Mの原子的固定と重複非上書きを確認。
-      [ ] 投稿jobの永続化と送信許可: (1)親/確定結果/job/投稿同意を同一transactionで検証 (2)既存コアのclaim/送信開始/結果確定だけを永続化しcommit後の許可だけを返す (3)送信直前OFF/再連携・旧claim・削除競合を拒否 (4)終端とdailyResultsの投稿状態を原子的に揃え学習数値を保持 (5)Emulator対象test/型lint・review/security PASS。画面0/公開Function0/依存0。HTTP/定時起動/お知らせUIは次の接続。
+      ※P-146: Query監査を本人履歴クエリとのisEqual比較へ限定修正し、権限とIO順序の検証を維持する。
+      [x] 投稿jobの永続化と送信許可: (1)親/確定結果/job/投稿同意を同一transactionで検証 (2)既存コアのclaim/送信開始/結果確定だけを永続化しcommit後の許可だけを返す (3)送信直前OFF/再連携・旧claim・削除競合を拒否 (4)終端とdailyResultsの投稿状態を原子的に揃え学習数値を保持 (5)Emulator対象test/型lint・review/security PASS。画面0/公開Function0/依存0。HTTP/定時起動/お知らせUIは次の接続。
+      ※job Store完了(2026-10-26): 新25/既存22の47件/型lint PASS・skip0、coverage statement98.2/branch98.06/function100/line97.98%、独立review/security双方PASS。P-146解決。送信許可と終端結果の原子的保存を確認。
+      [x] 1日分の投稿処理接続: (1)初回job作成/永続claim/認証取得/送信直前確認を順に接続 (2)commitされた送信許可1回だけでHTTPを1回呼ぶ (3)明確な一時拒否だけを5分後へ回し成否不明は終端化 (4)取消/再連携/削除/保存応答喪失で再送や秘密露出をしない (5)mock対象test/型lint・review/security PASS。画面0/公開Function0/依存0。定時起動と全体結合は後続。
+      ※1日分の接続完了(2026-10-26): mock30件/対象型lint PASS・skip0、coverage statement95.38/branch96/function100/line95.23%、独立review/security双方PASS。HTTPはcommit済み許可後の1回だけ。正式7-3bは結合検証待ち。
+      [x] 投稿待機のページ処理: (1)pending結果だけを文書パス順にページ取得 (2)並列数を制限して1日分workerへ委譲 (3)他人/不正パスを拒否し個別失敗でも他の処理を継続 (4)既知集計だけを返しSDK/秘密を露出しない・必要な索引を用意 (5)隔離Emulator対象test/型lint・review/security PASS。画面0/公開Function0/依存0。Scheduler登録・本番デプロイは含めない。
+      ※ページ処理完了(2026-10-26): 隔離named DBの20件/対象型lint PASS・skip0、coverage全4指標100%、独立review/security双方PASS。pending限定のページ処理と並列上限・索引設定を確認。本番索引登録は未実施。
+      [x] 投稿Schedulerの実行時接続: (1)毎分の定時入口を1つ登録し並列上限を固定 (2)Admin/秘密値/時計/UUIDは実行時だけ取得して既存部品へ注入 (3)待機ページ処理をawaitしイベント本文を信用しない (4)秘密/生例外/結果本文を応答やログへ露出しない (5)mock対象test/型lint・review/security PASS。画面0/公開Function1/依存0。本番デプロイは8-2で別途承認。
+      ※Scheduler接続完了(2026-10-27): 対象10件・全体型lint PASS、独立review/security双方が当該内部単位をPASS。正式7-3bはP-147の終了処理検証待ち。本番デプロイ未実施。
+      ※P-147: 646件本体成功後の既存終了hook timeoutを調査・再現確認する。旧テスト/timeoutは変更しない。
+      [x] 投稿処理の実部品結合と正式7-3b検証: (1)実Emulatorの確定結果からjob/token/workerを接続 (2)成功・一時拒否後成功・合計3回失敗を時刻注入で確認 (3)成否不明/認証更新不明/保存応答喪失/同時実行の再送防止を確認 (4)OFF/再連携による中止と学習結果の保持を確認 (5)統合の型lint/対象回帰・独立review/securityで正式7-3bを判定。本番Xはmock、画面0/公開Function0/依存0。お知らせUIは7-3c。
     後続の分割計画: active認証情報のclaim/比較保存→更新処理接続→cutoff以降のOFF/再連携検知→初回本文固定job作成→job状態遷移→1job送信→永続再開Schedulerとmock結合。各単位は画面0/公開Function1以下/依存0/完了条件5以下、着手前に個別条件を登録する。7-3cの通知UIは含めない。
+    ※正式7-3b完了(2026-10-27): 独立reviewの実Emulator再検証19suite/646件成功・skip0/exit0、securityも全体PASS。結合10件・Scheduler10件を含み、root1921件/TZ393件×2・全体型lint PASS。前回は646件本体成功後に旧終了hookが一度timeout。P-147は原因未確定の監視継続で解決済みとはしない。証跡は /Users/jime0083/.codex/verification/gokaku/7-3b-20261027 に保持。実X投稿/本番デプロイ/7-3c通知UIは未実施。
     内容: 投稿が必要な結果(pending)だけを X に投稿、最大3回の再試行、二重投稿の防止、アクセストークンの更新
     完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れ・二重投稿なしのテストが緑
 
