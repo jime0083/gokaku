@@ -1967,3 +1967,7 @@
 - 証跡: .maestro/output/iphone-se-3rd-generation/2026-10-28_184636 配下のcommands.json/screen-hierarchy/logs。
 - 対応境界: 契約・初期ルート・StoreKit設定・保存データのどれが影響したか未確定。既存のアカウント/課金/フローや保存データを消して回避せず、既定の一度の2機種実行結果を残す。P-016/P-085等と同一原因と断定しない。7-3cの独立UI76件・全体Jest/Emulatorの合格と、ネイティブE2E未合格を区別する。
 - 一度の既定実行結果: SEは1/6、Pro Maxは1/5成功(paywall_displayのみ成功)、終了コード1。両機種のhome_screen hierarchyで同じ「プランを読み込めませんでした」を確認。Metro/runner/Maestroの所有PID12893/13679/13698/14504は終了後すべて不存在。再実行・保存データ消去・旧フロー修正なし。
+
+- 原因調査(2026-10-28): 両機種の保存ログはindex→Firestore接続失敗→paywall→StoreKit商品0件の順。接続URLにpaywall指定はなく、SubscriptionBoundaryのregistered/locked判定とRepositoryの通信失敗時fallbackで課金画面へ移る経路を確認。商品0件は遷移後の読込エラーの原因であり、課金画面への遷移原因とは分ける。ハーネスはMetroだけを起動し、Emulator稼働・未ログイン状態を保証していない。Auth Emulator9099の接続拒否も記録されている。
+- 未確定事項: 実際に残った認証状態・契約期限・cache欠損/読込不能の内訳は未確認。Keychain/認証/cacheの内容は読まず、製品の購読制御変更・保存データ消去は行わない。限定修正案はE2E開始前の前提状態検査と理由表示であり、現時点で製品バグやP-016/P-085との同一原因とは断定しない。
+- 調査の独立検証(2026-10-28): 4項目の調査条件についてreview PASS。P-151自体の解決や全原因確定・E2E合格とは扱わない。ユーザー承認の順序で8-0へ進む。

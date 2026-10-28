@@ -430,6 +430,9 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - テスト: Jest、Firebase Emulator Suite、Maestro(iOS シミュレータ E2E)、Xcode StoreKit 設定ファイル
 
 ## 8. 非機能要件
+- リリース用の開発入口除外(2026-10-28): 開発用dev-*画面はReleaseで到達不可とし、debug専用のnative関数はReleaseから除外する。既存の開発用「勉強中？」間隔/応答期限の上書きもReleaseでは利用しない。
+- App Intentsの表示範囲(2026-10-28 ユーザー承認): ロック画面・ウィジェットの開始/停止を維持し、StartStudyIntent/StopStudyIntentはisDiscoverable=falseとしてSiriやショートカットの候補には表示しない。
+
 - 費用: 運用費(Firebase + X API)は月3,000円以内。
   Firebase(Google Cloud)の予算機能は通知のみで自動停止はしないため、予算アラートを設定する。
   X API は前払いクレジット制のため、チャージ額を上限として管理する
