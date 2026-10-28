@@ -960,6 +960,7 @@ Phase 7: X連携・0:00判定・自動投稿
         [x] P-149修正: 新画面テストでrenderRouter戻り値を保持し、同じルート/パラメータ検証を型付きAPIで実施→対象テスト/型lint・review/security。
         [x] P-150修正: 応答保留6ケースのイベント/Promise待機を調査し、同じ検証条件を維持して限定修正→対象テスト・review/security。
     ※正式7-3c完了(2026-10-28): 独立review/security双方PASS。通知の原子保存、本人限定既読、ホームの対象日/3文言/閉じる/再試行、実再連携の成功/取消/失敗、UID/focus/新通知競合保護を確認。独立76件、全体Jest1964件/TZ397件×2、Functions1074件/rules612件、型lint/diff成功。新protocol/APIの4指標coverage100%。P-148〜150を限定修正、目標数値の変更なし。証跡 /Users/jime0083/.codex/verification/gokaku/7-3c-20261028。Phase末Maestro/ネイティブ外観の合格を含まず、別途実行結果を記録する。
+    ※Phase7末E2E(2026-10-28): 既定2機種を一度実行。SE1/6・Pro Max1/5成功、paywall_display以外は初期画面/開発画面へ到達できずFAIL。両機種の開始画面でプラン読込エラーを確認(P-151、原因未確定)。7-3cの合否と区別し、Phase7全体のE2E合格とは扱わない。所有Metro/runner/Maestroは終了確認済み。Phase8へは進まず、8-1の前提W9(正式名称・問い合わせ先)も未完了。
     内容: 失敗時の xNotice 記録と、ホームでのお知らせ表示(X連携切れは再連携を促す)
     完了条件: 画面テストでお知らせの表示・再連携への導線。Emulator 上で xNotice の記録テストが緑
 

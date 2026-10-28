@@ -1958,3 +1958,12 @@
 - 修正計画: 担当案どおりHomeContentへ渡すonNoticeCloseだけをvoid closeNoticeの同期wrapperにする。例外処理/排他/状態更新/全assertion/await規則/timeoutを維持して同じ72件を再確認する。
 
 - 確認結果: 全assertion・timeoutを維持し、対象72件と独立76件、全体Jest1964件/TZ397件×2・型lintに成功。独立review/securityが原因・修正の整合を確認。
+
+
+## P-151 Phase7末E2Eが開始画面へ到達できない
+- 発見日: 2026-10-28(正式7-3cレビュー合格後の既定Maestro実行)
+- 状態: 再現済み・原因未確定
+- 再現: SE home_screenが合格ウォッチ/Close表示待ちで失敗。実hierarchyは「プランを読み込めませんでした」「再読み込み」の画面。続くonboarding_exam_route_errorsもonboarding-start-buttonがなく失敗。新通知の表示以前の開始状態で停止している。
+- 証跡: .maestro/output/iphone-se-3rd-generation/2026-10-28_184636 配下のcommands.json/screen-hierarchy/logs。
+- 対応境界: 契約・初期ルート・StoreKit設定・保存データのどれが影響したか未確定。既存のアカウント/課金/フローや保存データを消して回避せず、既定の一度の2機種実行結果を残す。P-016/P-085等と同一原因と断定しない。7-3cの独立UI76件・全体Jest/Emulatorの合格と、ネイティブE2E未合格を区別する。
+- 一度の既定実行結果: SEは1/6、Pro Maxは1/5成功(paywall_displayのみ成功)、終了コード1。両機種のhome_screen hierarchyで同じ「プランを読み込めませんでした」を確認。Metro/runner/Maestroの所有PID12893/13679/13698/14504は終了後すべて不存在。再実行・保存データ消去・旧フロー修正なし。
