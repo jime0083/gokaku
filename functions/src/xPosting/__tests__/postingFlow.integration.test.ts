@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import {
@@ -7,7 +7,7 @@ import {
 
 import { jstStartOfDay, jstStartOfNextDay } from '../../../../shared/date';
 import type { JudgementSnapshots } from '../../../../shared/judgementHistory';
-import { MONTHLY_PRODUCT_ID } from '../../domain';
+import { MONTHLY_PRODUCT_ID, type XNotice, type XNoticeKind } from '../../domain';
 import { createActiveTokenStore } from '../../xAuth/activeTokenStore';
 import { decrypt, encrypt } from '../../xAuth/crypto';
 import { TOKEN_RESPONSE_MAX_BYTES, type TokenFetch } from '../../xAuth/tokenTransport';
@@ -129,6 +129,7 @@ function setup(expired: boolean) {
     judgementRevisions: { goal: 1, settings: 1, xLink: 1, subscription: 1 },
     unrelated: { nested: ['keep'], number: 17 },
   };
+  let expectedNotice: XNotice | undefined;
   const initialResult = {
     goalId, studiedMinutes: 12, minDailyMinutes: 60, goalDailyMinutes: 120,
     metMin: false, metGoal: false, postStatus: 'pending', postSkipReasons: [],
@@ -188,6 +189,13 @@ function setup(expired: boolean) {
   return {
     user, token, access, nextAccess, replies, postFetch, tokenFetch, postTimes,
     result, job, store,
+    expectNotice: (kind: XNoticeKind, targetDate = DATE) => {
+      expectedNotice = {
+        schemaVersion: 1,
+        id: createHash('sha256').update(JSON.stringify([targetDate, goalId, 1, kind]), 'utf8').digest('hex'),
+        date: targetDate, linkRevision: 1, kind, readAt: null,
+      };
+    },
     advance: (milliseconds: number) => { time += milliseconds; },
     run: (date = DATE, source: Store = store) =>
       processPostingDate(uid, date, { ...deps, store: source }),
@@ -253,7 +261,9 @@ function setup(expired: boolean) {
       await batch.commit();
     },
     assertPreserved: async () => {
-      expect((await user.get()).data()).toEqual(expectedRoot);
+      expect((await user.get()).data()).toEqual({
+        ...expectedRoot, ...(expectedNotice === undefined ? {} : { xNotice: expectedNotice }),
+      });
       expect((await user.collection('goals').doc(goalId).get()).data()).toEqual(goal);
       expect((await result('2026-10-24').get()).data()).toEqual(priorResult);
       const rows = await user.collection('dailyResults').get();
@@ -388,6 +398,7 @@ describe('formal7-3b real posting pipeline', () => {
           f.advance(1);
         }
       }
+      f.expectNotice('post_failed');
       expect(f.postTimes).toEqual([CUTOFF, CUTOFF + RETRY_MS, CUTOFF + 2 * RETRY_MS]);
       expect((await f.result().get()).get('postStatus')).toBe('failed');
       f.advance(RETRY_MS);
@@ -401,6 +412,7 @@ describe('formal7-3b real posting pipeline', () => {
   test('unknown POST network outcome is terminal without another HTTP attempt', async () => {
     await fixture(async (f) => {
       f.replies.push('network');
+      f.expectNotice('unknown_post');
       expect(await f.run()).toEqual({ status: 'unknown' });
       expect((await f.job().get()).data()).toMatchObject({
         status: 'unknown', attempt: 1, post: FIXED_POST,
@@ -429,6 +441,7 @@ describe('formal7-3b real posting pipeline', () => {
       expect(await f.run('2026-10-26')).toEqual({ status: 'failed' });
       expect((await f.job('2026-10-26').get()).data()).toMatchObject({ status: 'failed', attempt: 0 });
       expect((await f.result('2026-10-26').get()).get('postStatus')).toBe('failed');
+      f.expectNotice('relink_required', '2026-10-26');
       expect((await f.token.get()).get('refreshControl.state')).toBe('blocked');
       expect(f.tokenFetch).toHaveBeenCalledTimes(1);
       expect(f.postFetch).not.toHaveBeenCalled();
@@ -494,6 +507,7 @@ describe('formal7-3b real posting pipeline', () => {
       f.advance(LEASE_MS);
       // Reinvoke with the unwrapped real store after the exact send lease.
       const expected = phase === 'before_commit' ? 'unknown' : 'posted';
+      if (phase === 'before_commit') f.expectNotice('unknown_post');
       expect(await f.run()).toEqual({ status: expected });
       expect((await f.job().get()).data()).toMatchObject({ status: expected, attempt: 1, post: FIXED_POST });
       expect((await f.result().get()).get('postStatus'))

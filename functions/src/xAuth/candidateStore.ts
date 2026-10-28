@@ -7,6 +7,7 @@ import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore'
 
 import { getWritableAccount } from '../account/accountWriteGuard';
 import { buildServerHistory } from '../dailyJudgement/serverHistory';
+import { readXNotice } from '../domain';
 import { decrypt } from './crypto';
 import type { ProfileResult } from './profileTransport';
 
@@ -233,9 +234,11 @@ export function createCandidateStore(deps: CandidateStoreDeps): CandidateStore {
         // A different receipt is not proof for this request. A matching NEW pending
         // candidate can still be confirmed, replacing the previous small receipt.
         const pending = candidate(data.pendingLink, uid, deps.encryptionKey);
+        // Sample once per callback after reads; receipt replays return above.
+        const confirmedAt = currentTime();
         requireValue(
           pending.candidateId === candidateId &&
-          pending.expiresAt.toMillis() > currentTime() &&
+          pending.expiresAt.toMillis() > confirmedAt &&
           pending.profile !== undefined,
         );
         const trustedProfile = pending.profile;
@@ -245,6 +248,14 @@ export function createCandidateStore(deps: CandidateStoreDeps): CandidateStore {
           xPostEnabled: postEnabled,
         };
         const history = buildServerHistory(current, userUpdatePatch);
+        // Validate existing notice even for legacy new confirmations, but never
+        // infer a revision when the history writer produced no counter patch.
+        const notice = readXNotice(current.xNotice);
+        const newLinkRevision = history.counterPatch['judgementRevisions.xLink'];
+        const noticePatch = notice !== null && notice.kind === 'relink_required'
+          && notice.readAt === null && newLinkRevision !== undefined
+          && notice.linkRevision < newLinkRevision
+          ? { xNotice: { ...notice, readAt: confirmedAt } } : {};
         tx.update(tokenRef, {
           encryptedAccessToken: pending.encryptedAccessToken,
           encryptedRefreshToken: pending.encryptedRefreshToken,
@@ -257,6 +268,7 @@ export function createCandidateStore(deps: CandidateStoreDeps): CandidateStore {
         tx.update(userRef, {
           ...userUpdatePatch,
           ...history.counterPatch,
+          ...noticePatch,
         });
         for (const entry of history.entries) {
           const entryRef = deps.firestore.doc(

@@ -18,19 +18,20 @@
  */
 import type * as RNFBApp from '@react-native-firebase/app';
 import type * as RNFBFirestore from '@react-native-firebase/firestore';
-import type { DateKey, HomeDailyResult, HomeGoal, JudgementSession } from '@shared/index';
+import { readXNotice, type DateKey, type HomeDailyResult, type HomeGoal, type JudgementSession, type XNotice, type XNoticeKind } from '@shared/index';
 
 import { getCurrentUid } from '@/config/firebase';
 import { parseEditableGoal } from '@/features/goals/editGoalRepository';
 import type { GoalDocument } from '@/features/goals/types';
 
-/**
- * X の投稿失敗・連携切れのお知らせ(requirements 4-6)。
- * users.xNotice の実際の形は 7-3c で決まる(現時点は未決定)。ここでは表示する場所だけ用意するため、
- * 本番の fetchHomeData は常に null を返す(xNotice フィールドを読まない)。
- * 7-3c で、実際の形に合わせてこの型と読み込みを差し替える
- */
-export type HomeNotice = { message: string } | null;
+/** 最新の未読X通知と、承認済みの表示文言(requirements 4-6)。 */
+export type HomeNotice = (XNotice & { message: string }) | null;
+
+const NOTICE_MESSAGES: Record<XNoticeKind, string> = {
+  post_failed: 'Xへの投稿に失敗しました',
+  unknown_post: '投稿結果を確認できませんでした',
+  relink_required: 'X連携が切れています',
+};
 
 export type HomeData = {
   goalId: string;
@@ -117,9 +118,12 @@ export async function fetchHomeData(): Promise<HomeDataResult> {
     const firestore = getFirestore(getApp());
 
     const userSnapshot = await getDoc(doc(firestore, 'users', uid));
-    const activeGoalId = userSnapshot.exists()
-      ? (userSnapshot.data()?.activeGoalId as unknown)
+    const userData = userSnapshot.exists() ? userSnapshot.data() : undefined;
+    const storedNotice = readXNotice(userData?.xNotice);
+    const notice: HomeNotice = storedNotice !== null && storedNotice.readAt === null
+      ? { ...storedNotice, message: NOTICE_MESSAGES[storedNotice.kind] }
       : null;
+    const activeGoalId: unknown = userData?.activeGoalId;
     if (typeof activeGoalId !== 'string' || activeGoalId.length === 0) {
       return { status: 'no_goal' };
     }
@@ -155,8 +159,7 @@ export async function fetchHomeData(): Promise<HomeDataResult> {
         goalDocument: parseEditableGoal(goalSnapshot.data()),
         dailyResults,
         sessions,
-        // xNotice の形が決まっていない(7-3c)ため読まない。常に null(お知らせなし)
-        notice: null,
+        notice,
       },
     };
   } catch {

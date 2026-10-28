@@ -8,7 +8,13 @@ import { loadGoalReplacement } from '@/features/onboarding/replacementStorage';
 import type { DateKey, HomeDailyResult, JudgementSession } from '@shared/index';
 import { act, cleanup, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 
-import type { HomeDataResult } from '@/features/home/homeDataRepository';
+import type { HomeData, HomeDataResult } from '@/features/home/homeDataRepository';
+import * as WebBrowser from 'expo-web-browser';
+import type { OpenSession } from '@/features/xLink/authBrowser';
+import { xLinkApi, type XLinkPending } from '@/features/xLink/xLinkApi';
+import { loadRelinkIntent } from '@/features/xLink/relinkIntentStorage';
+import { xNoticeApi } from '@/features/home/xNoticeApi';
+import * as AccountActionBoundaryModule from '@/features/account/AccountActionBoundary';
 import { loadLocalSessions, startLocalSession } from '@/features/timer/storage';
 
 jest.mock('@/features/billing/subscriptionRepository', () => ({
@@ -43,11 +49,13 @@ jest.mock('../../../../modules/study-sync/src/StudySyncModule');
 jest.mock('@/features/deviceToken/useDeviceTokenSync', () => ({
   useDeviceTokenSync: jest.fn(),
 }));
-const mockGetXPending = jest.fn(async () => ({ pending: null }));
+jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn() }));
+jest.mock('@/features/home/xNoticeApi', () => ({ xNoticeApi: { ack: jest.fn() } }));
 jest.mock('@/features/xLink/xLinkApi', () => ({
-  xLinkApi: { getPending: mockGetXPending, begin: jest.fn(), complete: jest.fn(),
+  xLinkApi: { getPending: jest.fn(async () => ({ pending: null })), begin: jest.fn(), complete: jest.fn(),
     confirm: jest.fn(), discard: jest.fn() },
 }));
+const mockGetXPending = jest.mocked(xLinkApi.getPending);
 const mockLoadSettings = jest.fn();
 const mockUpdateSettings = jest.fn();
 jest.mock('@/features/settings/settingsRepository', () => ({ loadSettings: mockLoadSettings, updateSettings: mockUpdateSettings }));
@@ -115,7 +123,7 @@ function okResult(overrides: {
   examDate?: string;
   dailyResults?: HomeDailyResult[];
   sessions?: JudgementSession[];
-  notice?: { message: string } | null;
+  notice?: HomeData['notice'];
 }): HomeDataResult {
   return {
     status: 'ok',
@@ -142,10 +150,12 @@ function dailyResult(
   return { date: date as DateKey, goalId: GOAL_ID, studiedMinutes, metMin, metGoal };
 }
 
+let homeRoute: ReturnType<typeof renderRouter> | undefined;
+
 /** renderRouter の初期レンダリングを await act で包む(CLAUDE.md の決まり) */
 async function renderHomeRouter(): Promise<void> {
   await act(async () => {
-    renderRouter('src/app', { initialUrl: '/home' });
+    homeRoute = renderRouter('src/app', { initialUrl: '/home' });
   });
 }
 
@@ -244,7 +254,10 @@ describe('ホーム画面(6-1。requirements 4-6)', () => {
 
   it('お知らせがあるとき: 一番上に表示する', async () => {
     mockFetchHomeData.mockResolvedValue(
-      okResult({ targetHours: 10, notice: { message: 'X連携が切れています' } }),
+      okResult({ targetHours: 10, notice: {
+        schemaVersion: 1, id: 'a'.repeat(64), date: '2026-10-09', linkRevision: 1,
+        kind: 'relink_required', readAt: null, message: 'X連携が切れています',
+      } }),
     );
     await renderHomeRouter();
 
@@ -847,5 +860,275 @@ describe('ホーム画面(6-3b。試験日以降)', () => {
     expect(screen.queryByTestId('route-select-exam-button')).toBeNull();
     expect(await loadGoalReplacement(uid)).toBeNull();
     expect(await loadGoalReplacement('other-home-user')).toBeNull();
+  });
+});
+
+describe('7-3c home notice display and operations', () => {
+  const ack = jest.mocked(xNoticeApi.ack);
+  const api = jest.mocked(xLinkApi);
+  const browser = WebBrowser.openAuthSessionAsync as jest.MockedFunction<OpenSession>;
+  const messages = {
+    post_failed: 'Xへの投稿に失敗しました',
+    unknown_post: '投稿結果を確認できませんでした',
+    relink_required: 'X連携が切れています',
+  } as const;
+  const communicationError = '通信できませんでした。電波の良い場所で再度お試しください';
+  const redirect = 'gokaku://x-auth/callback';
+  const authorizationUrl = 'https://x.com/i/oauth2/authorize?' +
+    new URLSearchParams({ state: 'notice-state', redirect_uri: redirect }).toString();
+  const candidate: XLinkPending = {
+    candidateId: 'notice-candidate',
+    profile: { id: 'notice-x-user', username: 'notice_student', profileImageUrl: null },
+    expiresAt: 2000000000000,
+  };
+  let serverNotice: HomeData['notice'];
+
+  function makeNotice(kind: keyof typeof messages = 'post_failed', id = 'a'.repeat(64)): NonNullable<HomeData['notice']> {
+    return {
+      schemaVersion: 1, id, date: '2026-10-09', linkRevision: 1,
+      kind, readAt: null, message: messages[kind],
+    };
+  }
+
+  function pending<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+    return { promise, resolve, reject };
+  }
+
+  async function press(id: string) {
+    await fireEvent.press(screen.getByTestId(id));
+  }
+
+  async function openNotice(kind: keyof typeof messages = 'post_failed') {
+    serverNotice = makeNotice(kind);
+    await renderHomeRouter();
+    await waitFor(() => expect(screen.getByTestId('home-notice-text')).toHaveTextContent(messages[kind]));
+  }
+
+  async function enterRelink() {
+    await openNotice('relink_required');
+    await press('home-notice-relink');
+    await waitFor(() => expect(homeRoute?.getPathname()).toBe('/x-link'));
+    expect(homeRoute?.getSearchParams()).toEqual({ mode: 'relink' });
+    await waitFor(() => expect(screen.getByTestId('x-link-start')).toBeEnabled());
+    expect(await loadRelinkIntent('owner')).toBe(true);
+    expect(ack).not.toHaveBeenCalled();
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-10T10:00:00+09:00'));
+    serverNotice = makeNotice();
+    mockFetchHomeData.mockReset().mockImplementation(async () =>
+      okResult({ targetHours: 10, notice: serverNotice }));
+    ack.mockReset().mockResolvedValue({ status: 'acknowledged' });
+    api.getPending.mockReset().mockResolvedValue({ pending: null });
+    api.begin.mockReset().mockResolvedValue({ authorizationUrl });
+    api.complete.mockReset().mockResolvedValue({ candidateId: candidate.candidateId });
+    api.confirm.mockReset().mockImplementation(async () => {
+      // The server confirmation transaction acknowledges the old relink notice.
+      serverNotice = null;
+      return { ok: true };
+    });
+    api.discard.mockReset().mockResolvedValue({ ok: true });
+    browser.mockReset().mockResolvedValue({
+      type: 'success', url: redirect + '?state=notice-state&code=notice-code',
+    });
+  });
+
+  afterEach(async () => {
+    await cleanup();
+    await AsyncStorage.clear();
+    jest.useRealTimers();
+    jest.clearAllMocks();
+  });
+
+  it.each(['post_failed', 'unknown_post', 'relink_required'] as const)(
+    'shows the date and approved %s message, with relink only for a broken link', async (kind) => {
+      await openNotice(kind);
+      expect(screen.getByText('2026-10-09')).toBeOnTheScreen();
+      expect(screen.getAllByTestId('home-notice-banner')).toHaveLength(1);
+      expect(screen.getByTestId('home-notice-close')).toHaveTextContent('閉じる');
+      if (kind === 'relink_required') {
+        expect(screen.getByTestId('home-notice-relink')).toHaveTextContent('Xと再連携');
+      } else {
+        expect(screen.queryByTestId('home-notice-relink')).toBeNull();
+      }
+      expect(screen.getByTestId('home-percent-text')).toHaveTextContent('0.0%');
+    },
+  );
+
+  it.each(['acknowledged', 'unchanged'] as const)(
+    'keeps the banner until %s succeeds and prevents duplicate close requests', async (status) => {
+      const response = pending<{ status: 'acknowledged' | 'unchanged' }>();
+      ack.mockReturnValueOnce(response.promise);
+      await openNotice();
+      await press('home-notice-close');
+      expect(screen.getByTestId('home-notice-close')).toBeDisabled();
+      expect(screen.getByTestId('home-notice-banner')).toBeOnTheScreen();
+      await press('home-notice-close');
+      expect(ack.mock.calls).toEqual([['a'.repeat(64)]]);
+      await act(async () => { response.resolve({ status }); });
+      await waitFor(() => expect(screen.queryByTestId('home-notice-banner')).toBeNull());
+      expect(screen.getByTestId('home-percent-text')).toHaveTextContent('0.0%');
+    },
+  );
+
+  it('retains the same notice after failure, redacts the error, and retries the same acknowledgement', async () => {
+    ack.mockRejectedValueOnce(new Error('private-sdk-detail'));
+    await openNotice();
+    await press('home-notice-close');
+    await waitFor(() => expect(screen.getByTestId('home-notice-error')).toHaveTextContent(communicationError));
+    expect(screen.getByTestId('home-notice-banner')).toBeOnTheScreen();
+    expect(screen.queryByText('private-sdk-detail')).toBeNull();
+    expect(screen.getByTestId('home-notice-retry')).toHaveTextContent('再試行');
+    await press('home-notice-retry');
+    await waitFor(() => expect(screen.queryByTestId('home-notice-banner')).toBeNull());
+    expect(ack.mock.calls).toEqual([['a'.repeat(64)], ['a'.repeat(64)]]);
+  });
+
+  it('an old close response cannot erase a newer notice fetched on foreground return', async () => {
+    const response = pending<{ status: 'acknowledged' }>();
+    ack.mockReturnValueOnce(response.promise);
+    await openNotice();
+    await press('home-notice-close');
+    await act(async () => { triggerAppStateChange('background'); });
+    serverNotice = { ...makeNotice('unknown_post', 'b'.repeat(64)), date: '2026-10-10' };
+    await act(async () => { triggerAppStateChange('active'); });
+    await waitFor(() => expect(screen.getByTestId('home-notice-text')).toHaveTextContent(messages.unknown_post));
+    await act(async () => { response.resolve({ status: 'acknowledged' }); });
+    expect(screen.getByTestId('home-notice-text')).toHaveTextContent(messages.unknown_post);
+    expect(screen.getByText('2026-10-10')).toBeOnTheScreen();
+    await press('home-notice-close');
+    await waitFor(() => expect(screen.queryByTestId('home-notice-banner')).toBeNull());
+    expect(ack.mock.calls).toEqual([['a'.repeat(64)], ['b'.repeat(64)]]);
+  });
+
+  it('a close completion from an earlier focus cannot dismiss the same notice after returning', async () => {
+    const response = pending<{ status: 'acknowledged' }>();
+    ack.mockReturnValueOnce(response.promise);
+    await openNotice('relink_required');
+    await press('home-notice-close');
+    await fireEvent.press(screen.getByText('タイマー'));
+    await waitFor(() => screen.getByTestId('timer-toggle-button'));
+    await fireEvent.press(screen.getByText('ホーム'));
+    await waitFor(() => screen.getByTestId('home-notice-banner'));
+    await act(async () => { response.resolve({ status: 'acknowledged' }); });
+    expect(screen.getByTestId('home-notice-banner')).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-notice-error')).toBeNull();
+    expect(screen.getByTestId('home-notice-close')).toBeEnabled();
+  });
+
+  it('does not acknowledge or navigate an old owner notice after UID changes', async () => {
+    await openNotice('relink_required');
+    jest.mocked(firebaseConfig.getCurrentUid).mockReturnValue('other-owner');
+    await press('home-notice-close');
+    await press('home-notice-relink');
+    expect(ack).not.toHaveBeenCalled();
+    expect(api.getPending).not.toHaveBeenCalled();
+    expect(await loadRelinkIntent('other-owner')).toBe(false);
+    expect(homeRoute?.getPathname()).toBe('/home');
+  });
+
+  it('ignores an acknowledgement completed after UID changes', async () => {
+    const response = pending<{ status: 'acknowledged' }>();
+    ack.mockReturnValueOnce(response.promise);
+    await openNotice();
+    await press('home-notice-close');
+    jest.mocked(firebaseConfig.getCurrentUid).mockReturnValue('other-owner');
+    await act(async () => { response.resolve({ status: 'acknowledged' }); });
+    expect(screen.getByTestId('home-notice-banner')).toBeOnTheScreen();
+    expect(ack).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not display home data fetched under an identity that changed during loading', async () => {
+    const response = pending<HomeDataResult>();
+    mockFetchHomeData.mockReturnValueOnce(response.promise);
+    await renderHomeRouter();
+    await waitFor(() => expect(mockFetchHomeData).toHaveBeenCalledTimes(1));
+    jest.mocked(firebaseConfig.getCurrentUid).mockReturnValue('other-owner');
+    await act(async () => {
+      response.resolve(okResult({ targetHours: 10, notice: makeNotice() }));
+    });
+    expect(screen.queryByTestId('home-notice-banner')).toBeNull();
+  });
+
+  it('checks the account action gate before close or relink and again after acknowledgement', async () => {
+    let ready = true;
+    jest.spyOn(AccountActionBoundaryModule, 'useAccountActions').mockReturnValue({
+      ready: true, isReady: () => ready, request: jest.fn(),
+    });
+    const response = pending<{ status: 'acknowledged' }>();
+    ack.mockReturnValueOnce(response.promise);
+    await openNotice('relink_required');
+    ready = false;
+    await press('home-notice-close');
+    await press('home-notice-relink');
+    expect(ack).not.toHaveBeenCalled();
+    expect(homeRoute?.getPathname()).toBe('/home');
+    ready = true;
+    await press('home-notice-close');
+    ready = false;
+    await act(async () => { response.resolve({ status: 'acknowledged' }); });
+    expect(screen.getByTestId('home-notice-banner')).toBeOnTheScreen();
+  });
+
+  it.each(['cancel', 'failure'] as const)(
+    'Home to the real XLink screen and %s back to Home retains the banner without acknowledging', async (outcome) => {
+      if (outcome === 'cancel') browser.mockResolvedValueOnce({ type: 'cancel' });
+      else api.begin.mockRejectedValueOnce(new Error('private-authorization-detail'));
+      await enterRelink();
+      await press('x-link-start');
+      if (outcome === 'cancel') {
+        await waitFor(() => expect(screen.getByTestId('x-link-start')).toBeEnabled());
+        expect(browser).toHaveBeenCalledWith(authorizationUrl, redirect, { preferEphemeralSession: true });
+      } else {
+        await waitFor(() => expect(screen.getByTestId('x-link-error')).toHaveTextContent(communicationError));
+      }
+      await press('x-link-home');
+      await waitFor(() => expect(homeRoute?.getPathname()).toBe('/home'));
+      await waitFor(() => expect(screen.getByTestId('home-notice-text')).toHaveTextContent(messages.relink_required));
+      expect(ack).not.toHaveBeenCalled();
+      expect(api.confirm).not.toHaveBeenCalled();
+      expect(serverNotice?.id).toBe('a'.repeat(64));
+      expect(await loadRelinkIntent('owner')).toBe(false);
+    },
+  );
+
+  it('failed candidate confirmation keeps the notification when returning Home', async () => {
+    api.getPending.mockResolvedValue({ pending: candidate });
+    api.confirm.mockRejectedValueOnce(new Error('confirmation-failed'));
+    await openNotice('relink_required');
+    await press('home-notice-relink');
+    await waitFor(() => expect(screen.getByTestId('x-link-use-account')).toBeEnabled());
+    await press('x-link-use-account');
+    await press('x-link-deny');
+    await waitFor(() => expect(screen.getByTestId('x-link-error')).toHaveTextContent(communicationError));
+    await press('x-link-home');
+    await waitFor(() => expect(homeRoute?.getPathname()).toBe('/home'));
+    await waitFor(() => expect(screen.getByTestId('home-notice-banner')).toBeOnTheScreen());
+    expect(ack).not.toHaveBeenCalled();
+    expect(serverNotice?.kind).toBe('relink_required');
+  });
+
+  it('successful real XLink flow returns Home and refreshes server acknowledgement without a client ack', async () => {
+    api.getPending.mockResolvedValueOnce({ pending: null }).mockResolvedValue({ pending: candidate });
+    await enterRelink();
+    const readsBeforeReturn = mockFetchHomeData.mock.calls.length;
+    await press('x-link-start');
+    await waitFor(() => expect(screen.getByTestId('x-link-use-account')).toBeEnabled());
+    await press('x-link-use-account');
+    expect(api.confirm).not.toHaveBeenCalled();
+    expect(serverNotice?.kind).toBe('relink_required');
+    await press('x-link-deny');
+    await waitFor(() => expect(homeRoute?.getPathname()).toBe('/home'));
+    await waitFor(() => expect(mockFetchHomeData.mock.calls.length).toBeGreaterThan(readsBeforeReturn));
+    await waitFor(() => expect(screen.queryByTestId('home-notice-banner')).toBeNull());
+    expect(api.confirm.mock.calls).toEqual([[candidate.candidateId, false]]);
+    expect(ack).not.toHaveBeenCalled();
+    expect(await loadRelinkIntent('owner')).toBe(false);
+    expect(screen.getByTestId('home-percent-text')).toHaveTextContent('0.0%');
   });
 });

@@ -1927,3 +1927,34 @@
 - 調査計画: SDK終了処理と未完了のRPC/cleanupを担当が調査し、同じ条件で一度再現確認する。旧タスク/旧テスト/timeout/製品を勝手に変更しない。再現条件と全ケース実行・終了結果を独立reviewで確認してから判定する。
 
 - 再現確認結果: 同一の未変更19suiteを独立reviewが1回再実行し646件/19suite全成功・skip0/exit0、historyReader suite605ms。SDK rollbackの非同期終了とpool terminate待機経路は確認したが因果未証明。通常/securityとも最新実行で正式7-3b PASS。前回/今回のログとJSONを上記恒久証跡フォルダへ保存し、再発時に待機段階を調べる。
+
+
+## P-148 7-3cホーム画面テストのX連携mockが未初期化となる
+- 発見日: 2026-10-28(7-3cホーム通知の初回GREEN検証)
+- 状態: 解決済み(2026-10-28。対象72件/独立76件・全体Jest/型lint、review/security PASS)
+- 再現: 通知API/Repositoryの2suiteは成功。home.test.tsxで既存X再連携1件がgetPending呼出0件、新規16件がapi.getPending.mockResetのundefinedで停止。3suite合計55件成功・17件失敗。diff checkは同テスト末尾の余分な空行も検出。製品の挙動はこれら画面テストで未確認。
+- 調査計画: 追加されたxLinkApiの実行時importとjest.mock factory内の外側mockGetXPending初期化順を担当が追跡する。原因確定後、この新しいテストのmock構築だけを修正し、旧assertion・製品・timeoutは変更せず全72件を再確認する。
+- 原因: 新しいxLinkApi実行時importで、hoistされたjest.mock factoryが外側mockGetXPending初期化より先に評価され、getPendingにundefinedを固定する。babel-jest/jest-hoistとExpo block-scoping変換順、および既存1件/新規16件の失敗が一致。
+- 修正計画: factory内でmockを一度生成し、外側を同じ関数への型付きaliasとする。EOF空行だけ整え、assertion/timeout/製品ソースは維持して72件・型lint・独立レビューで確認。
+
+
+- 確認結果: 全assertion・timeoutを維持し、対象72件と独立76件、全体Jest1964件/TZ397件×2・型lintに成功。独立review/securityが原因・修正の整合を確認。
+
+## P-149 7-3c新画面テストのrouter matcherに型定義がない
+- 発見日: 2026-10-28(統合typecheck)
+- 状態: 解決済み(2026-10-28。対象72件/独立76件・全体Jest/型lint、review/security PASS)
+- 再現/原因: 新規homeテスト7箇所のtoHavePathname/toHaveSearchParamsがTS2339。現行expo-routerのmatcher拡張に型宣言がなく、router取得APIはrenderRouterの戻り値に追加される。既存x-link/SubscriptionBoundaryテストはその戻り値のgetPathname/getSearchParamsを使っている。
+- 修正計画: 新規画面テストもrenderRouterの戻り値を保持して実ルート/検索値を標準matcherで検証する。型キャストやts-ignoreで回避せず、全パス/パラメータassertion・実遷移・timeoutは維持する。製品変更なし。
+
+
+- 確認結果: 全assertion・timeoutを維持し、対象72件と独立76件、全体Jest1964件/TZ397件×2・型lintに成功。独立review/securityが原因・修正の整合を確認。
+
+## P-150 7-3c画面テストの応答保留ケースが時間切れになる
+- 発見日: 2026-10-28(P-148/P-149修正後の同じ72件再検証)
+- 状態: 解決済み(2026-10-28。対象72件/独立76件・全体Jest/型lint、review/security PASS)
+- 再現: 66件成功。ack応答をテスト内で保留する6件だけ5000ms timeout。通常閉じる/失敗再試行/実再連携遷移は成功。全体型チェック/lint成功。
+- 調査計画: RNTL14 fireEvent.pressがasync onPressの戻り値を待ち、後続の保留応答解決へ到達できないか、実装と既存の非同期操作テストを追跡する。timeout追加/skip/待機追加は行わず、原因と限定修正計画を記録してから修正する。
+- 原因: RNTL14 fireEventはhandlerの戻り値Promiseも返す。直接渡したasync closeNoticeが保留ackを待つため、テストはawait pressから応答解決へ進めない。RN Pressability自体はonPressの戻り値を待たず、既存x-link/AccountActionPopupもvoid run方式を使う。
+- 修正計画: 担当案どおりHomeContentへ渡すonNoticeCloseだけをvoid closeNoticeの同期wrapperにする。例外処理/排他/状態更新/全assertion/await規則/timeoutを維持して同じ72件を再確認する。
+
+- 確認結果: 全assertion・timeoutを維持し、対象72件と独立76件、全体Jest1964件/TZ397件×2・型lintに成功。独立review/securityが原因・修正の整合を確認。

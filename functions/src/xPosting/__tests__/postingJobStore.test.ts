@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import {
@@ -8,6 +8,7 @@ import {
 
 import { jstStartOfNextDay } from '../../../../shared/date';
 import * as accountGuard from '../../account/accountWriteGuard';
+import type { XNotice, XNoticeKind } from '../../domain';
 import { createPostingJobStore } from '../postingJobStore';
 import {
   createPostingJob, transitionPostingJob, type PostingJob,
@@ -32,6 +33,16 @@ const startedAt = Timestamp.fromMillis(cutoff - 30 * 86400000);
 const leaseMs = 60000;
 const retryMs = 300000;
 const none = { lastHttpStatus: null, failureReason: null };
+
+function expectedNotice(kind: XNoticeKind, targetDate = date): XNotice {
+  return {
+    schemaVersion: 1,
+    id: createHash('sha256').update(JSON.stringify([targetDate, goalId, 1, kind]), 'utf8').digest('hex'),
+    date: targetDate, linkRevision: 1, kind, readAt: null,
+  };
+}
+
+const priorNotice = expectedNotice('post_failed', '2026-10-24');
 
 type Store = ReturnType<typeof createPostingJobStore>;
 type Action = Parameters<Store['apply']>[2];
@@ -123,7 +134,7 @@ async function fixture(body: (ref: DocumentReference) => Promise<void>) {
     const batch = db.batch();
     batch.set(ref, {
       activeGoalId: goalId, xPostEnabled: true, xLinked: true,
-      subscription: null, xNotice: { preserved: 'prior notice' },
+      subscription: null, xNotice: priorNotice,
       judgementHistoryStartedAt: startedAt,
       judgementRevisions: { goal: 1, settings: 1, xLink: 1, subscription: 1 },
     });
@@ -428,6 +439,7 @@ describe('postingJobStore local Firestore', () => {
           lastHttpStatus: 503, failureReason: 'unknown_post',
         });
         expect((await daily(ref).get()).data()).toEqual(pending({ postStatus: 'failed' }));
+        expect((await ref.get()).get('xNotice')).toEqual(expectedNotice('unknown_post'));
         const before = await ledger(ref);
         expect(await api.apply(ref.id, date, { kind: 'claim', claimId: 'another', leaseMs }))
           .toMatchObject({ changed: false, authorizeHttp: false });
@@ -478,6 +490,7 @@ describe('postingJobStore local Firestore', () => {
       }
       expect((await daily(ref).get()).data()).toEqual(pending({ postStatus: 'failed' }));
       expect((await job(ref).get()).get('delivery')).toEqual({ lastHttpStatus: 503, failureReason: 'post_failed' });
+      expect((await ref.get()).get('xNotice')).toEqual(expectedNotice('post_failed'));
       expect((await job(ref).get()).get('post')).toEqual(initial().post);
     });
   });
@@ -509,7 +522,7 @@ describe('postingJobStore local Firestore', () => {
 
   test('abort and terminal outcomes persist fixed failure classifications while preserving absent HTTP feedback', async () => {
     await fixture(async (ref) => {
-      const cases: { state: PostingJob; action: Action; feedback?: Feedback; reason: string }[] = [
+      const cases: { state: PostingJob; action: Action; feedback?: Feedback; reason: XNoticeKind }[] = [
         { state: prepared(), action: { kind: 'abort_preparation', claimId: 'owner' },
           feedback: { failureReason: 'relink_required' }, reason: 'relink_required' },
         { state: sending(), action: { kind: 'complete', claimId: 'owner', outcome: { kind: 'permanent' } },
@@ -524,6 +537,7 @@ describe('postingJobStore local Firestore', () => {
           .toMatchObject({ changed: true, authorizeHttp: false, forceRefresh: false });
         expect((await job(ref).get()).get('delivery')).toEqual({ lastHttpStatus: 429, failureReason: item.reason });
         expect((await daily(ref).get()).data()).toEqual(pending({ postStatus: 'failed' }));
+        expect((await ref.get()).get('xNotice')).toEqual(expectedNotice(item.reason));
       }
     });
   });
@@ -847,6 +861,126 @@ describe('postingJobStore local Firestore', () => {
       before = await ledger(ref);
       await rejected(() => store().cancelUncreated(ref.id, date));
       expect(await ledger(ref)).toEqual(before);
+    });
+  });
+
+  test.each(['post_failed', 'unknown_post', 'relink_required'] as const)(
+    'new %s notice commits with job/result using the existing parent read', async (kind) => {
+      await fixture(async (ref) => {
+        await job(ref).set({ ...sending(), delivery: none });
+        const before = await ledger(ref);
+        const parent = (await ref.get()).data();
+        const events: string[] = [];
+        const source = instrument((tx) => observe(tx, events));
+        const result = await store(source).apply(ref.id, date, {
+          kind: 'complete', claimId: 'owner',
+          outcome: { kind: kind === 'unknown_post' ? 'unknown' : 'permanent' },
+        }, { failureReason: kind });
+        expect(result).toMatchObject({ changed: true, authorizeHttp: false });
+        const snapshots = await Promise.all([ref.get(), job(ref).get(), daily(ref).get()]);
+        expect(snapshots[0].data()).toEqual({ ...parent, xNotice: expectedNotice(kind) });
+        expect(snapshots[1].get('post')).toEqual(initial().post);
+        expect(snapshots[1].get('status')).toBe(kind === 'unknown_post' ? 'unknown' : 'failed');
+        expect(snapshots[2].data()).toEqual(pending({ postStatus: 'failed' }));
+        expect(snapshots[0].updateTime).toEqual(snapshots[1].updateTime);
+        expect(snapshots[0].updateTime).toEqual(snapshots[2].updateTime);
+        const changedPaths = [ref.path, job(ref).path, daily(ref).path];
+        expect((await ledger(ref)).filter((row) => !changedPaths.includes(row.path)))
+          .toEqual(before.filter((row) => !changedPaths.includes(row.path)));
+        expect(events.filter((event) => event === `read:${ref.path}`)).toHaveLength(1);
+        const writes = events.filter((event) => event.startsWith('write:'));
+        expect(writes).toHaveLength(3);
+        expect(new Set(writes)).toEqual(new Set([
+          `write:set:${job(ref).path}`, `write:update:${daily(ref).path}`, `write:update:${ref.path}`,
+        ]));
+        const firstWrite = events.findIndex((event) => event.startsWith('write:'));
+        expect(events.slice(firstWrite).every((event) => event.startsWith('write:'))).toBe(true);
+      });
+    },
+  );
+
+  test.each(['newer', 'acknowledged'] as const)('%s notice survives a new terminal result without rewriting parent', async (mode) => {
+    await fixture(async (ref) => {
+      const retained = mode === 'newer'
+        ? expectedNotice('post_failed', '2026-10-26')
+        : { ...expectedNotice('unknown_post'), readAt: cutoff + 1 };
+      await ref.update({ xNotice: retained });
+      await job(ref).set({ ...sending(), delivery: none });
+      const before = await ledger(ref);
+      expect(await store(db, () => cutoff + 2).apply(ref.id, date, {
+        kind: 'complete', claimId: 'owner', outcome: { kind: 'unknown' },
+      })).toMatchObject({ changed: true, authorizeHttp: false, job: { status: 'unknown' } });
+      expect((await daily(ref).get()).data()).toEqual(pending({ postStatus: 'failed' }));
+      expect((await ref.get()).get('xNotice')).toEqual(retained);
+      const changedPaths = [job(ref).path, daily(ref).path];
+      expect((await ledger(ref)).filter((row) => !changedPaths.includes(row.path)))
+        .toEqual(before.filter((row) => !changedPaths.includes(row.path)));
+      const committed = await ledger(ref);
+      expect(await store(db, () => cutoff + leaseMs).apply(ref.id, date, {
+        kind: 'claim', claimId: 'later', leaseMs,
+      })).toMatchObject({ changed: false, authorizeHttp: false });
+      expect(await ledger(ref)).toEqual(committed);
+    });
+  });
+
+  test('malformed prior notice rejects terminal storage without changing any owned document', async () => {
+    await fixture(async (ref) => {
+      await job(ref).set({ ...sending(), delivery: none });
+      for (const xNotice of [null, { preserved: 'untrusted-notice' }, { ...priorNotice, readAt: 'untrusted-notice' }]) {
+        await ref.update({ xNotice });
+        const before = await ledger(ref);
+        await rejected(() => store().apply(ref.id, date, {
+          kind: 'complete', claimId: 'owner', outcome: { kind: 'unknown' },
+        }), 'untrusted-notice');
+        expect(await ledger(ref)).toEqual(before);
+      }
+    });
+  });
+
+  test('notice-write failure rolls back all three documents; sending recovery settles unknown without authorizing another send', async () => {
+    await fixture(async (ref) => {
+      await job(ref).set({ ...sending(), delivery: none });
+      const before = await ledger(ref);
+      const failure = Object.assign(new Error('synthetic notice write failure'), { code: 14 });
+      const events: string[] = [];
+      const source = instrument((tx) => observe(tx, events, {
+        wrote: (target) => { if (target.path === ref.path) throw failure; },
+      }), { maxAttempts: 1 });
+      await expect(store(source).apply(ref.id, date, {
+        kind: 'complete', claimId: 'owner', outcome: { kind: 'unknown' },
+      })).rejects.toBe(failure);
+      expect(events).toContain(`write:update:${ref.path}`);
+      expect(await ledger(ref)).toEqual(before);
+      expect((await job(ref).get()).get('status')).toBe('sending');
+      expect((await daily(ref).get()).get('postStatus')).toBe('pending');
+      const api = store(db, () => cutoff + leaseMs);
+      expect(await api.apply(ref.id, date, { kind: 'claim', claimId: 'recovery', leaseMs }))
+        .toMatchObject({ changed: true, authorizeHttp: false, job: { status: 'unknown', attempt: 1 } });
+      expect((await ref.get()).get('xNotice')).toEqual(expectedNotice('unknown_post'));
+      expect((await daily(ref).get()).data()).toEqual(pending({ postStatus: 'failed' }));
+      expect((await job(ref).get()).get('post')).toEqual(initial().post);
+      const committed = await ledger(ref);
+      for (const action of [
+        { kind: 'begin_send', claimId: 'owner' },
+        { kind: 'claim', claimId: 'another', leaseMs },
+        { kind: 'complete', claimId: 'owner', outcome: { kind: 'posted', postId: '123' } },
+      ] satisfies Action[]) {
+        expect(await api.apply(ref.id, date, action)).toMatchObject({ changed: false, authorizeHttp: false });
+      }
+      expect(await ledger(ref)).toEqual(committed);
+    });
+  });
+
+  test('a callback replay rereads a concurrent acknowledgement before selecting a notice', async () => {
+    await fixture(async (ref) => {
+      await job(ref).set({ ...sending(), delivery: none });
+      const acknowledged = { ...expectedNotice('unknown_post'), readAt: cutoff + 1 };
+      const source = replay(async () => { await ref.update({ xNotice: acknowledged }); });
+      expect(await store(source, () => cutoff + 2).apply(ref.id, date, {
+        kind: 'complete', claimId: 'owner', outcome: { kind: 'unknown' },
+      })).toMatchObject({ changed: true, authorizeHttp: false });
+      expect((await ref.get()).get('xNotice')).toEqual(acknowledged);
+      expect((await daily(ref).get()).data()).toEqual(pending({ postStatus: 'failed' }));
     });
   });
 

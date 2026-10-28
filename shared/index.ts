@@ -23,3 +23,4 @@ export * from './missedStudyPost';
 export * from './pace';
 export * from './studyCheck';
 export * from './studyTime';
+export * from './xNotice';

@@ -946,7 +946,20 @@ Phase 7: X連携・0:00判定・自動投稿
     内容: 投稿が必要な結果(pending)だけを X に投稿、最大3回の再試行、二重投稿の防止、アクセストークンの更新
     完了条件: X のモックで、成功・一時失敗後に成功・3回失敗・連携切れ・二重投稿なしのテストが緑
 
-[ ] 7-3c 投稿失敗のお知らせ
+[x] 7-3c 投稿失敗のお知らせ
+    ※着手前確認(2026-10-27): ホーム上部に対象日/最新1件、3種類の文言、閉じるで既読/通信失敗保持、再連携成功で対象既読・取消失敗保持をユーザー承認。画面仕様は既存案内枠を使用し、新しいネイティブ依存は追加しない。
+    内部単位: 通知protocolと既存Storeの原子保存→本人の既読API(公開Function1)→再連携確定時の既読(既存Function1)→ホーム表示と既読操作→統合review/security。outbox/追加scanner/index/cron変更は不要。各単位の条件5以下、UI/課金/計算の過去タスクは変更しない。
+      [x] 通知protocolとStore原子保存: (1)厳密schema/決定的ID/選択helper (2)新failed/unknownのみjob/result/noticeを同時保存 (3)既読保持/旧日抑止/不正値rollback (4)保存失敗後のsending復旧と学習値・counter保持 (5)対象テスト/Emulator/型lint・独立review/security。画面0/公開Function0/依存0、45〜55分見込み。
+        ※2026-10-27: shared4件/Emulator45件・Functions型/対象lint成功、独立review/security PASS。内部単位の合格であり正式7-3cは継続。証跡 .codex/verification/gokaku/7-3c-20261027/persistence (ユーザー領域)。
+      [x] 本人の既読API: (1)厳密noticeId入力/認証UIDのみ (2)同一txの親guard/時刻/ID比較と冪等既読 (3)専用毎分10回制限/汎用エラー・直接書込拒否 (4)対象Emulator/型lint・独立review/security。画面0/公開Function1/依存0、40〜50分見込み。
+        ※2026-10-27: 関連Functions233件/通知とX認証rules50件・型/対象lint成功、独立review/security PASS。正式7-3cの画面と統合検証は継続。
+      [x] 再連携確定時の既読: (1)新しい確定revisionより古い連携切れ通知だけ既読 (2)既存confirm transactionで連携/履歴/通知を原子保存 (3)取消/失敗/receipt再送/他種別/新revision保持 (4)対象Emulator/型lint・独立review/security。画面0/公開Function変更1/依存0、30〜40分見込み。
+        ※2026-10-27: 関連Functions233件/通知とX認証rules50件・型/対象lint成功、独立review/security PASS。正式7-3cの画面と統合検証は継続。
+      [x] ホーム通知の表示と操作: (1)既存取得で最新未読1件/対象日/承認済み3文言 (2)閉じるは既読成功後だけ反映、失敗保持と再試行/新通知競合保護 (3)連携切れから既存再連携へ遷移、成功/取消/失敗を実renderRouterで確認 (4)UID切替/SE収まり・対象テスト/型lint・独立review/security。画面2以下/公開Function0/依存0、45〜55分見込み。
+        [x] P-148修正: 新画面テストのmock初期化順を調査し、対象テストだけの限定修正→72件/型lint→review/securityで確認。
+        [x] P-149修正: 新画面テストでrenderRouter戻り値を保持し、同じルート/パラメータ検証を型付きAPIで実施→対象テスト/型lint・review/security。
+        [x] P-150修正: 応答保留6ケースのイベント/Promise待機を調査し、同じ検証条件を維持して限定修正→対象テスト・review/security。
+    ※正式7-3c完了(2026-10-28): 独立review/security双方PASS。通知の原子保存、本人限定既読、ホームの対象日/3文言/閉じる/再試行、実再連携の成功/取消/失敗、UID/focus/新通知競合保護を確認。独立76件、全体Jest1964件/TZ397件×2、Functions1074件/rules612件、型lint/diff成功。新protocol/APIの4指標coverage100%。P-148〜150を限定修正、目標数値の変更なし。証跡 /Users/jime0083/.codex/verification/gokaku/7-3c-20261028。Phase末Maestro/ネイティブ外観の合格を含まず、別途実行結果を記録する。
     内容: 失敗時の xNotice 記録と、ホームでのお知らせ表示(X連携切れは再連携を促す)
     完了条件: 画面テストでお知らせの表示・再連携への導線。Emulator 上で xNotice の記録テストが緑
 

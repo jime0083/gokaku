@@ -1,7 +1,7 @@
 import { calculateHomeSummary, formatWithThousandsSeparator, splitHoursMinutes, toJstDateKey, type HomeSummary } from '@shared/index';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getCurrentUid } from '@/config/firebase';
@@ -14,6 +14,7 @@ import { ErrorText } from '@/components/ErrorText';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { ProgressBar } from '@/components/ProgressBar';
 import { fetchHomeData, type HomeData, type HomeNotice } from '@/features/home/homeDataRepository';
+import { xNoticeApi } from '@/features/home/xNoticeApi';
 import { GoalEditPopup } from '@/features/goals/GoalEditPopup';
 import type { GoalDocument } from '@/features/goals/types';
 import { SettingsPopup, settingsPopupStyles } from '@/features/settings/SettingsPopup';
@@ -47,15 +48,15 @@ function summarizeHomeData(data: HomeData, now: number): LoadState {
  * ホーム画面(6-1。requirements 4-6、2026-10-12 決定の画面構成)。
  * 上から: (編集ボタン。右上固定) → お知らせ(あるときだけ) → 大きな達成率とグリーンの進捗スライダー・
  * 積み上げ時間 → 「あと○日」「残り必要時間」カード(左右) → 最低/努力目標の達成日数カード(左右)。
- * iPhone SE でスクロールなしに収まるようにする。
+ * 通知の操作やエラーで高さが増える場合は、iPhone SEでもスクロールで操作できるようにする。
  *
  * データの読み込みは画面から切り離した層(homeDataRepository)が行い、計算は
  * shared/homeSummary.ts の calculateHomeSummary を使う(重複実装しない)。
  *
  * 試験日当日以降は日数カードを「お疲れさまでした」に切り替え、既存の目標変更確認への
  * ボタンを表示する(6-3b。他の数値は通常どおり表示する)。
- * X 投稿失敗・連携切れのお知らせ(users.xNotice)は形がまだ決まっていない(7-3c)ため、
- * 表示する場所だけ用意し、本番の読み込み(fetchHomeData)は常に notice: null を返す
+ * X通知は最新未読1件を表示し、閉じる操作は既読API成功後にだけ反映する。
+ * 再連携の既読化はサーバーの確定transactionに任せ、ホーム復帰時に再取得する。
  */
 export default function HomeScreen() {
   const router = useRouter();
@@ -71,6 +72,49 @@ export default function HomeScreen() {
   const [replacementError, setReplacementError] = useState<string | null>(null);
   const [replacementBusy, setReplacementBusy] = useState(false);
   const replacementLock = useRef(false);
+  const homeContext = useRef({ active: false, generation: 0, owner: null as string | null });
+  const noticeLock = useRef<number | null>(null);
+  const [noticeBusy, setNoticeBusy] = useState(false);
+  const [noticeError, setNoticeError] = useState<{ id: string; message: string } | null>(null);
+
+  const canOperateNotice = () => {
+    const context = homeContext.current;
+    return context.active && context.owner !== null && context.owner === getCurrentUid() && isReady();
+  };
+
+  const closeNotice = async () => {
+    if (!canOperateNotice() || noticeLock.current !== null || state.status !== 'ok' || !state.data.notice) return;
+    const noticeId = state.data.notice.id;
+    const uid = homeContext.current.owner;
+    const generation = homeContext.current.generation;
+    const valid = () => homeContext.current.generation === generation
+      && homeContext.current.owner === uid && canOperateNotice();
+    noticeLock.current = generation;
+    setNoticeBusy(true);
+    setNoticeError(null);
+    try {
+      await xNoticeApi.ack(noticeId);
+      if (!valid()) return;
+      setState((current) => valid() && current.status === 'ok' && current.data.notice?.id === noticeId
+        ? { ...current, data: { ...current.data, notice: null } }
+        : current);
+    } catch {
+      if (valid()) {
+        setNoticeError({ id: noticeId, message: '通信できませんでした。電波の良い場所で再度お試しください' });
+      }
+    } finally {
+      if (noticeLock.current === generation) {
+        noticeLock.current = null;
+        setNoticeBusy(false);
+      }
+    }
+  };
+
+  const relinkNotice = () => {
+    if (!canOperateNotice() || noticeLock.current !== null || state.status !== 'ok'
+      || state.data.notice?.kind !== 'relink_required') return;
+    router.push({ pathname: '/x-link', params: { mode: 'relink' } });
+  };
 
   const openReplacement = async () => {
     if (!isReady() || replacementLock.current || state.status !== 'ok') return;
@@ -104,6 +148,15 @@ export default function HomeScreen() {
     let foreground = AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
     let requestId = reloadToken;
     let date = toJstDateKey(Date.now());
+    homeContext.current.active = foreground;
+    const invalidateNoticeOperation = () => {
+      ++homeContext.current.generation;
+      homeContext.current.owner = null;
+      noticeLock.current = null;
+      setNoticeBusy(false);
+      setNoticeError(null);
+    };
+    invalidateNoticeOperation();
 
     const recalculate = () => {
       const now = Date.now();
@@ -112,11 +165,16 @@ export default function HomeScreen() {
     const refresh = async () => {
       const id = ++requestId;
       const revision = editRevision.current;
+      const uid = getCurrentUid();
+      invalidateNoticeOperation();
+      const generation = homeContext.current.generation;
       const result = await fetchHomeData();
-      // 前の取得・非表示中に完了した取得で、新しい表示を上書きしない。
-      if (!focused || !foreground || id !== requestId || revision !== editRevision.current) {
+      // UID・取得世代・表示状態が変わった応答は反映しない。
+      if (!focused || !foreground || id !== requestId || revision !== editRevision.current
+        || generation !== homeContext.current.generation || getCurrentUid() !== uid) {
         return;
       }
+      homeContext.current.owner = uid;
       setState(result.status === 'ok'
         ? summarizeHomeData(result.data, Date.now())
         : { status: result.status });
@@ -127,12 +185,14 @@ export default function HomeScreen() {
     }
     const subscription = AppState.addEventListener('change', (appState) => {
       foreground = appState === 'active';
+      homeContext.current.active = foreground;
       if (foreground) {
         date = toJstDateKey(Date.now());
         recalculate();
         void refresh();
       } else {
         ++requestId;
+        invalidateNoticeOperation();
       }
     });
     const interval = setInterval(() => {
@@ -149,6 +209,10 @@ export default function HomeScreen() {
 
     return () => {
       focused = false;
+      homeContext.current.active = false;
+      ++homeContext.current.generation;
+      homeContext.current.owner = null;
+      noticeLock.current = null;
       subscription.remove();
       clearInterval(interval);
     };
@@ -199,13 +263,19 @@ export default function HomeScreen() {
           </Text>
         </View>
       ) : (
-        <HomeContent
-          summary={state.summary}
-          notice={state.data.notice}
-          onReplacement={openReplacement}
-          replacementBusy={replacementBusy}
-          replacementError={!replacementConfirm && !editMenuOpen ? replacementError : null}
-        />
+        <ScrollView style={styles.contentScroll} contentContainerStyle={styles.contentContainer}>
+          <HomeContent
+            summary={state.summary}
+            notice={state.data.notice}
+            noticeBusy={noticeBusy}
+            noticeError={noticeError?.id === state.data.notice?.id ? noticeError?.message ?? null : null}
+            onNoticeClose={() => { void closeNotice(); }}
+            onNoticeRelink={relinkNotice}
+            onReplacement={openReplacement}
+            replacementBusy={replacementBusy}
+            replacementError={!replacementConfirm && !editMenuOpen ? replacementError : null}
+          />
+        </ScrollView>
       )}
       {replacementConfirm ? <View testID="home-replace-dialog" style={settingsPopupStyles.backdrop}>
         <View style={settingsPopupStyles.popup} accessibilityViewIsModal>
@@ -268,6 +338,10 @@ export default function HomeScreen() {
 type HomeContentProps = {
   summary: HomeSummary;
   notice: HomeNotice;
+  noticeBusy: boolean;
+  noticeError: string | null;
+  onNoticeClose: () => void;
+  onNoticeRelink: () => void;
   onReplacement: () => void;
   replacementBusy: boolean;
   replacementError: string | null;
@@ -276,6 +350,10 @@ type HomeContentProps = {
 function HomeContent({
   summary,
   notice,
+  noticeBusy,
+  noticeError,
+  onNoticeClose,
+  onNoticeRelink,
   onReplacement,
   replacementBusy,
   replacementError,
@@ -284,9 +362,29 @@ function HomeContent({
     <>
       {notice ? (
         <View testID="home-notice-banner" style={styles.notice}>
+          <Text testID="home-notice-date" style={styles.noticeText}>{notice.date}</Text>
           <Text testID="home-notice-text" style={styles.noticeText}>
             {notice.message}
           </Text>
+          <View style={styles.noticeActions}>
+            <View style={styles.noticeAction}>
+              <PrimaryButton title="閉じる" variant="secondary" testID="home-notice-close"
+                disabled={noticeBusy} onPress={onNoticeClose} />
+            </View>
+            {notice.kind === 'relink_required' ? (
+              <View style={styles.noticeAction}>
+                <PrimaryButton title="Xと再連携" testID="home-notice-relink"
+                  disabled={noticeBusy} onPress={onNoticeRelink} />
+              </View>
+            ) : null}
+          </View>
+          <ErrorText message={noticeError} testID="home-notice-error" />
+          {noticeError ? (
+            <View style={styles.retryButtonArea}>
+              <PrimaryButton title="再試行" testID="home-notice-retry"
+                disabled={noticeBusy} onPress={onNoticeClose} />
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -354,6 +452,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
     justifyContent: 'space-between',
+  },
+  contentScroll: {
+    flex: 1,
+  },
+  contentContainer: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
+  },
+  noticeActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  noticeAction: {
+    flexGrow: 1,
+    flexBasis: 120,
   },
   headerRow: {
     flexDirection: 'row',

@@ -9,6 +9,8 @@ import {
   AccountWriteBlockedError, getWritableAccount,
 } from '../account/accountWriteGuard';
 import { JudgementHistoryReadError } from '../dailyJudgement/historyReader';
+import { selectXNotice } from '../domain';
+import { createPostingNotice } from './postingNotice';
 import {
   readPostingConsent, type PostingConsentReadResult,
 } from './postingConsentReader';
@@ -297,12 +299,12 @@ function updateDelivery(
   return { lastHttpStatus, failureReason };
 }
 
-async function blockedAccount(
+async function readAccount(
   tx: Transaction, userRef: DocumentReference,
-): Promise<Extract<Unavailable, { status: 'missing' | 'noAccount' | 'deleting' }> | undefined> {
+): Promise<{ readonly status: 'available'; readonly snapshot: DocumentSnapshot } | Unavailable> {
   try {
-    await getWritableAccount(tx, userRef);
-    return undefined;
+    const snapshot = await getWritableAccount(tx, userRef);
+    return { status: 'available', snapshot };
   } catch (error) {
     if (error instanceof AccountWriteBlockedError) {
       return { status: error.reason === 'missing' ? 'noAccount' : 'deleting' };
@@ -368,8 +370,8 @@ export function createPostingJobStore(deps: { db: Firestore; now: () => number }
     const { userRef, resultRef, jobRef, cutoffMs, cutoff } = references(uid, date);
 
     return db.runTransaction<PostingJobApplyResult>(async (tx) => {
-      const blocked = await blockedAccount(tx, userRef);
-      if (blocked !== undefined) return blocked;
+      const account = await readAccount(tx, userRef);
+      if (account.status !== 'available') return account;
       const storedJob = await tx.get(jobRef);
       if (!storedJob.exists) return { status: 'missing' };
       const storedResult = await tx.get(resultRef);
@@ -413,11 +415,25 @@ export function createPostingJobStore(deps: { db: Firestore; now: () => number }
       if (consent?.status === 'noAccount' || consent?.status === 'deleting') {
         return { status: consent.status };
       }
+      // A terminal replay never creates a notice. The existing parent snapshot
+      // participates in the same transaction as the new job/result disposition.
+      const noticeSelection = computed.changed
+        && (computed.job.status === 'failed' || computed.job.status === 'unknown')
+        ? local(() => {
+          requireValue(computed.delivery.failureReason !== null);
+          return selectXNotice(account.snapshot.get('xNotice'), createPostingNotice({
+            date: computed.job.date,
+            goalId: computed.job.goalId,
+            linkRevision: computed.job.linkRevision,
+            kind: computed.delivery.failureReason,
+          }));
+        }) : undefined;
       if (computed.changed) {
         // storedJob.exists and the parent guard were read in this same transaction.
         // Replacing this owned document removes obsolete state-specific core fields.
         tx.set(jobRef, { ...computed.job, delivery: computed.delivery });
         if (computed.resultUpdate !== undefined) tx.update(resultRef, computed.resultUpdate);
+        if (noticeSelection?.changed) tx.update(userRef, { xNotice: noticeSelection.notice });
       }
       return {
         status: 'available', job: computed.job, changed: computed.changed,
@@ -432,8 +448,8 @@ export function createPostingJobStore(deps: { db: Firestore; now: () => number }
   ): Promise<CancelUncreatedPostingJobResult> {
     const { userRef, resultRef, jobRef, cutoffMs, cutoff } = references(uid, date);
     return db.runTransaction<CancelUncreatedPostingJobResult>(async (tx) => {
-      const blocked = await blockedAccount(tx, userRef);
-      if (blocked !== undefined) return blocked;
+      const account = await readAccount(tx, userRef);
+      if (account.status !== 'available') return account;
       const storedJob = await tx.get(jobRef);
       local(() => requireValue(!storedJob.exists));
       const storedResult = await tx.get(resultRef);

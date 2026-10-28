@@ -27,7 +27,7 @@ import { ensureAdminApp } from './firebaseAdmin';
  * のデプロイ)で反映する(手動作業にしない。5-3b-3)
  */
 
-export type RateLimitKind = 'study-event' | 'purchase-verify' | 'history-initialize';
+export type RateLimitKind = 'study-event' | 'purchase-verify' | 'history-initialize' | 'x-notice-ack';
 
 /** 種類ごとの1分あたりの呼び出し回数の上限(requirements 3-2。2026-10-10 決定の目安をそのまま採用) */
 export const RATE_LIMITS: Readonly<Record<RateLimitKind, number>> = {
@@ -35,6 +35,8 @@ export const RATE_LIMITS: Readonly<Record<RateLimitKind, number>> = {
   'purchase-verify': 10,
   // 履歴初期化の公開入口に対する技術的な呼出制限。既存kindの枠は維持する。
   'history-initialize': 10,
+  // 本人の通知既読API専用。既存kindとは別の枠で数える。
+  'x-notice-ack': 10,
 };
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
