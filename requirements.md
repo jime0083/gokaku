@@ -430,6 +430,8 @@ X連携画面の状態と再開(2026-10-20 ユーザー決定):
 - テスト: Jest、Firebase Emulator Suite、Maestro(iOS シミュレータ E2E)、Xcode StoreKit 設定ファイル
 
 ## 8. 非機能要件
+- 費用の可視化(2026-10-28 ユーザー承認): Xへの実リクエスト数(投稿・プロフィール取得・認証更新)と判定の処理件数を、UID・トークン・投稿本文等の個人情報を含めずFunctionsログへ記録する。費用は公式の既知単価によるUSD参考見積もりとし、未知の単価は未算定と明示する。円換算・実請求額の断定・予算到達時の自動停止は含めない。公式単価確認: https://docs.x.com/x-api/getting-started/pricing (2026-10-28、通常Post Create $0.015/要求、User Read $0.010/返却リソース)。
+
 - リリース用の開発入口除外(2026-10-28): 開発用dev-*画面はReleaseで到達不可とし、debug専用のnative関数はReleaseから除外する。既存の開発用「勉強中？」間隔/応答期限の上書きもReleaseでは利用しない。
 - App Intentsの表示範囲(2026-10-28 ユーザー承認): ロック画面・ウィジェットの開始/停止を維持し、StartStudyIntent/StopStudyIntentはisDiscoverable=falseとしてSiriやショートカットの候補には表示しない。
 

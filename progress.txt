@@ -991,11 +991,17 @@ Phase 8: リリース準備
     内容: スクリーンショット、説明文、審査用メモ(テストアカウントの扱い、X 連携の説明)を用意する
     完了条件: ユーザーが素材を確認し OK を出す(その後 manual-work W10)
 
-[ ] 8-0 本番のビルドから開発用の画面・関数を外す(problem P-036)  【セキュリティ確認】
+[x] 8-0 本番のビルドから開発用の画面・関数を外す(problem P-036)  【セキュリティ確認】
     ※着手確認(2026-10-28): 前提Workなし。Siri/ショートカット候補を非表示にする仕様をユーザー承認。内部単位を(1)Releaseのdevルート遮断(2)debug専用native入口除外とIntent候補非表示(3)Release/Debug統合検証に分ける。画面layout1/公開Function0/既存native部品のみ/各条件5以下。
-      [ ] 開発ルート遮断: 実renderRouterでReleaseの6devルート到達不可・Debug利用可、通常ルート維持を確認。
-      [ ] native入口除外: debug専用関数をReleaseから除外し、開始/停止Intentの候補非表示と既存DEBUG上書き除外を確認。
-      [ ] 統合検証: 本番相当JS/ReleaseとDebugの実ビルド・対象試験/全体型lint、独立review/security双方PASS。新native依存は追加しない。
+      [x] 開発ルート遮断: 実renderRouterでReleaseの6devルート到達不可・Debug利用可、通常ルート維持を確認。
+        [x] P-152修正: async test helperのrouter API保持を調査し、限定修正→正しいRED→製品実装→対象試験で確認。
+        [x] P-153修正: 新テストのNode/React Native型環境の不整合を調査し、限定修正→同条件Jest/型lint・review/security。
+      [x] native入口除外: debug専用関数をReleaseから除外し、開始/停止Intentの候補非表示と既存DEBUG上書き除外を確認。
+        ※適用前確認: debugSendStudySyncEventと確認画面専用getPendingQueueWaitingForTokenCountはSwiftの無条件登録。呼出元はdev-lockscreen-spikeだけ。本番Account/timer/syncの26入口と既存DEBUG上書きを維持する。Release実binaryの適用前計測は未実施であり、ソース確認と区別する。
+      [x] P-156調査: 実Release専用smoke初回画面未到達の原因を画面/ログから特定し、修正前に計画を記録する。
+      [x] 統合検証: 本番相当JS/ReleaseとDebugの実ビルド・対象試験/全体型lint、独立review/security双方PASS。新native依存は追加しない。
+        ※P-154は補助ASTランナーの不整合として未解決・停止。P-155は開発専用selectorに限定して解決。AST成功とは扱わず、実ビルド/ソース/実archive/生成metadataでnative要件を独立reviewが判定。
+    ※正式8-0完了(2026-10-31): 独立review/security双方PASS。Release/Debug実ビルド、開発用native4入口のRelease除外/Debug維持、製品26入口維持、app/widget生成Intent metadata候補非表示を確認。root1985件/TZ397件×2/route21件、型lint/diff成功。専用fresh SE実Releaseで6dev URL全件遮断を確認し端末削除済み。既存2機種へDebugをデータ無消去で再installし元の停止状態へ復帰。P-036/152/153/155/156解決、P-154補助検証は未解決を維持。P-151/Phase7 E2Eや実機操作の合格を含めない。証跡 /Users/jime0083/.codex/verification/gokaku/8-0-20261028。
     内容: src/app/dev-* の画面を、本番のビルドで到達できないようにする(ルートから外す・__DEV__ のときだけ登録する等)。
           StudySyncModule の debug 用の関数(debugSendStudySyncEvent 等)を #if DEBUG で外す
           あわせて StartStudyIntent・StopStudyIntent に isDiscoverable = false を付け、Siri やショートカットから見えないようにするか検討する(5-3d-2 レビューの申し送り)

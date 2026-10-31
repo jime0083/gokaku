@@ -273,6 +273,7 @@ public class StudySyncModule: Module {
             StudySyncQueue.count()
         }
 
+        #if DEBUG
         /// キューに溜まっている項目のうち、「トークンを待つ」印が付いている件数(5-3c-6。確認画面での
         /// 証跡用。キューを空にせずに数えるだけ)
         Function("getPendingQueueWaitingForTokenCount") { () -> Int in
@@ -308,6 +309,7 @@ public class StudySyncModule: Module {
             )
             return await StudySyncAPI.send(event)
         }
+        #endif
 
         AsyncFunction("requestNotificationPermission") { () -> Bool in
             (try? await UNUserNotificationCenter.current().requestAuthorization(

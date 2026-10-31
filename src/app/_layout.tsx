@@ -13,7 +13,16 @@ export default function RootLayout() {
   return (
     <AccountActionBoundary>
       <SubscriptionBoundary>
-        <Stack screenOptions={{ headerShown: false }} />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Protected guard={__DEV__}>
+            <Stack.Screen name="dev-account-spike" />
+            <Stack.Screen name="dev-firebase-probe" />
+            <Stack.Screen name="dev-iap-probe" />
+            <Stack.Screen name="dev-maestro-text-probe" />
+            <Stack.Screen name="dev-design-tokens" />
+            <Stack.Screen name="dev-lockscreen-spike" />
+          </Stack.Protected>
+        </Stack>
       </SubscriptionBoundary>
       <StatusBar style="dark" />
     </AccountActionBoundary>

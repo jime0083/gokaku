@@ -33,6 +33,7 @@ import AppIntents
 /// 5-3c-5a: 計測中の状態を消すときに「最後にロック画面で止めた計測」(sessionId・stopAt)を残す
 struct StopStudyIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "勉強を停止"
+    static var isDiscoverable: Bool = false
 
     @Parameter(title: "uid")
     var uid: String
@@ -124,6 +125,7 @@ struct StopStudyIntent: LiveActivityIntent {
 /// (ログイン・目標設定が済んでいない端末からの操作を無視する)
 struct StartStudyIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "勉強を開始"
+    static var isDiscoverable: Bool = false
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult {

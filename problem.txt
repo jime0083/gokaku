@@ -897,7 +897,7 @@
 - 解決内容: setLastLockscreenStop を clearActiveSession より前に呼ぶ順番に直した
 
 ## P-036 開発用の画面と debug 用のネイティブの関数が、本番のビルドにも残る
-- 状態: 原因特定済み・対応タスク待ち(2026-10-12)
+- 状態: 解決済み(2026-10-31、8-0独立review/security PASS)
 - 発見: 5-3c-6 レビュー・セキュリティ確認
 - 問題内容:
   - src/app/dev-* の画面(dev-lockscreen-spike・dev-firebase-probe・dev-iap-probe・dev-design-tokens・dev-maestro-text-probe など)が、本番のビルドにも入っている
@@ -906,6 +906,7 @@
 - 影響: 他人へのなりすましにはならない(送信は本人の uid とトークンの範囲だけ)。ただし本番に不要な入口が残る
 - 原因: 開発用の画面と関数を、本番のビルドで外す仕組みを作っていない
 - 切り出したタスク: progress.txt 8-0(リリース準備の前に行う)
+- 解決確認: 8-0の対象21件/全体1985件・型lint、Release/Debug実ビルドと実Release全6dev URL遮断を確認。P-154の補助AST成功を意味しない。
 
 ## P-037 ロック画面の送信キューの読み書きが同時に起きると、片方の結果が巻き戻る可能性がある
 - 状態: 記録のみ(2026-10-12)
@@ -1971,3 +1972,47 @@
 - 原因調査(2026-10-28): 両機種の保存ログはindex→Firestore接続失敗→paywall→StoreKit商品0件の順。接続URLにpaywall指定はなく、SubscriptionBoundaryのregistered/locked判定とRepositoryの通信失敗時fallbackで課金画面へ移る経路を確認。商品0件は遷移後の読込エラーの原因であり、課金画面への遷移原因とは分ける。ハーネスはMetroだけを起動し、Emulator稼働・未ログイン状態を保証していない。Auth Emulator9099の接続拒否も記録されている。
 - 未確定事項: 実際に残った認証状態・契約期限・cache欠損/読込不能の内訳は未確認。Keychain/認証/cacheの内容は読まず、製品の購読制御変更・保存データ消去は行わない。限定修正案はE2E開始前の前提状態検査と理由表示であり、現時点で製品バグやP-016/P-085との同一原因とは断定しない。
 - 調査の独立検証(2026-10-28): 4項目の調査条件についてreview PASS。P-151自体の解決や全原因確定・E2E合格とは扱わない。ユーザー承認の順序で8-0へ進む。
+
+
+## P-152 Releaseルート新テストのasync helperでrouter検査APIを保持できない
+- 発見日: 2026-10-28(8-0開発ルート遮断の未実装RED確認)
+- 状態: 解決済み(2026-10-31、8-0独立review/security PASS)
+- 再現: 一覧検査1件成功、動的20件がresult.getPathname is not a function。製品の遮断未実装による意図したREDより前で止まる。
+- 調査計画: RNTL14 renderのPromiseにExpo Routerが検査メソッドを付ける仕組みと、async open()戻り値のPromise同化を確認する。全ルート/境界/assertionを維持してhelperだけ修正し、期待するRelease6件のREDを確かめてから製品を適用する。
+- 原因: RNTL14のasync renderが返すPromiseにrenderRouterがgetPathname等を追加する。async open()がこのPromiseを直接返すと、await時のPromise同化で追加メソッドのない解決値になる。Release/Debug共通の20件の失敗と一致。
+- 修正計画: 担当案のreturn {route: result}でPromise参照を包み、呼出3箇所でrouteを取り出す。全assertion・fixture・await/cleanup規則を維持し、未実装のRelease6件だけが失敗するREDを先に確認する。
+
+- 解決確認: 8-0の対象21件/全体1985件・型lint、Release/Debug実ビルドと実Release全6dev URL遮断を確認。P-154の補助AST成功を意味しない。
+
+## P-153 Releaseルート新テストがアプリ用TypeScriptの型環境と合わない
+- 発見日: 2026-10-28(8-0統合型チェック)
+- 状態: 解決済み(2026-10-31、8-0独立review/security PASS)
+- 再現: Jest1985件/時差397件×2とlintは成功。release-routes.test.tsxのnode:fs/node:path型、readdirコールバック型、globalThis.__DEV__をjest.replacePropertyへ渡すkey型がエラー。
+- 調査計画: アプリ用tsconfigのtypes制限と既存tests/lint用Node型環境、__DEV__の宣言を確認する。全体tsconfigを広げず、新テストの配置/環境操作だけを適切な型付き検証へ限定修正し、同じ条件のテストと型チェックを再確認する。
+- 原因: アプリtsconfigはtypes=[jest]、Node環境は既存tests/lintの別tsconfigへ分離されている。__DEV__はRNのglobal constでありglobalThisのkey型に含まれない。製品コードの型エラーではない。
+- 修正計画: 一覧検査1件だけをNode型環境のtests/lintへ移し、既存TypeScriptパーサーで動的検証対象の一覧を読み比較する。appの20件は維持し、__DEV__はdescriptor保存/defineProperty/cleanup後復元へ限定変更。型設定/型キャスト/旧テスト/警告抑制は変更しない。
+
+- 解決確認: 8-0の対象21件/全体1985件・型lint、Release/Debug実ビルドと実Release全6dev URL遮断を確認。P-154の補助AST成功を意味しない。
+
+## P-154 native AST検証ランナーが1 frontend jobだけを想定する
+- 発見日: 2026-10-28(8-0 native公開入口のコンパイラ検証)
+- 状態: 補助検証ランナーの修正停止・未解決(2026-10-31)
+- 再調査: 8 primary-file jobのほか既存検査がfrontendの-oも拒否する不整合を確認。担当は2試行で停止し、製品ソース・ビルド設定は変更していない。実Release/Debugビルド、archiveのdebug入口除外、生成Intent metadataの確認結果とは区別する。補助AST検査の成功とは扱わない。
+- 原因/再現: swift driverは-dump-astを8個のprimary-file jobへ展開する。各jobは元の8ソース全てを含む。製品ビルドはRelease/Debugとも成功しているが、検証scriptのjob数1のassertionで実コンパイラ実行前に停止。
+- 修正計画: 元の8ソースと条件を保持し、StudySyncModule.swiftをprimaryとするjobを一意に選んで実行する。全本番26/Debug30入口の期待条件、最適化/SDK/定義の一致検査は維持。ソースやビルド設定は変更しない。
+
+## P-155 Release smoke案の禁止selectorが本番境界のIDも含む
+- 発見日: 2026-10-28(8-0未適用smoke flowの事前レビュー)
+- 状態: 解決済み(2026-10-31、8-0独立review/security PASS)
+- 原因: 禁止ID account-.* は全画面の本番AccountActionBoundaryのaccount-action-contentも含み、正常な初回画面を誤って失敗にする。実行前に検出し未適用。
+- 修正計画: 開発画面専用ID account-(nonce-probe|apple-availability)-.* とdev/probe/sample専用IDへ限定する。初回画面表示/全6deep link遮断等の期待条件は維持し、境界を外したり警告を抑えたりしない。
+- 解決確認: 8-0の対象21件/全体1985件・型lint、Release/Debug実ビルドと実Release全6dev URL遮断を確認。P-154の補助AST成功を意味しない。
+
+## P-156 Release専用smokeで初回画面を確認できない
+- 発見日: 2026-10-31(8-0実Release確認)
+- 状態: 解決済み(2026-10-31、8-0独立review/security PASS)
+- 原因: 保存スクリーンショットとUI階層にiOS標準の「“gokaku”で開きますか?」および「開く」が表示され、アプリへ遷移する前に待機していた。製品ルートの失敗を示す証拠ではない。
+- 修正計画: openLink直後に当該OS確認がある場合だけ「開く」を押す。初回画面/全6ルート遮断の検証条件や30秒timeoutは維持。専用端末で再実行する。
+- 再現: fresh専用SE/iOS18.6にdemo/local設定のReleaseを入れ、dev-account-spikeへdeep linkするとonboarding-start-buttonを30秒で確認できず最初の1件で停止。残5件は未実行。既存端末の保存データには触れていない。専用端末削除済み。
+- 調査計画: smoke/results/dev-account-spikeの画面・階層・ログを確認し、URL拒否/起動例外/システム確認などを区別する。原因特定までは製品や検証条件を変更しない。
+- 解決確認: 8-0の対象21件/全体1985件・型lint、Release/Debug実ビルドと実Release全6dev URL遮断を確認。P-154の補助AST成功を意味しない。
