@@ -260,7 +260,7 @@ describe('history initialization production factory / real Firestore Emulator', 
     expect(await dump(ref)).toEqual(before);
   });
   test('history kind is 10/min; existing kind limits remain 60/10', async () => {
-    expect(RATE_LIMITS).toEqual({ 'study-event': 60, 'purchase-verify': 10, 'history-initialize': 10 });
+    expect(RATE_LIMITS).toEqual({ 'study-event': 60, 'purchase-verify': 10, 'history-initialize': 10, 'x-notice-ack': 10 });
     const ref = await user();
     const other = await user();
     for (let i = 0; i < 10; i += 1) await run(ref.id);

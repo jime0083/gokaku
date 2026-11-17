@@ -2016,3 +2016,167 @@
 - 再現: fresh専用SE/iOS18.6にdemo/local設定のReleaseを入れ、dev-account-spikeへdeep linkするとonboarding-start-buttonを30秒で確認できず最初の1件で停止。残5件は未実行。既存端末の保存データには触れていない。専用端末削除済み。
 - 調査計画: smoke/results/dev-account-spikeの画面・階層・ログを確認し、URL拒否/起動例外/システム確認などを区別する。原因特定までは製品や検証条件を変更しない。
 - 解決確認: 8-0の対象21件/全体1985件・型lint、Release/Debug実ビルドと実Release全6dev URL遮断を確認。P-154の補助AST成功を意味しない。
+
+## P-157 8-3の新認証テストのmock引数型が一致しない
+- 発見日: 2026-10-31(8-3統合型チェック)
+- 状態: 解決済み(2026-10-31、限定修正の独立review/security PASS)
+- 再現: 対象Jest155件は成功、全体typecheckはauthorizationCallable.test.ts:629でTS2322。lint成功。
+- 原因: CandidateStore.getは(uid:string)引数を取るが、新しいfixtureが引数なしcallback由来のjest.Mock<...,[]>を代入している。
+- 修正計画: 当該mockをgetのParameters/ReturnTypeに一致する型付きjest.fnで生成する。製品コード・assertion・timeout・型設定・型キャストによる回避を変更せず、対象テストと全体型チェックで再確認しreview/securityへ回す。
+- 確認: P-157はauth155件/全体型成功、P-158は隔離Emulator63件/exit0。P-159と正式8-3の未完了を維持。
+
+## P-158 既存履歴初期化テストのrate limit全体期待値が現在の定義と不一致
+- 発見日: 2026-10-31(8-3関連範囲統合テスト)
+- 状態: 解決済み(2026-10-31、限定修正の独立review/security PASS)
+- 再現: initializeHistoryCallable.test.ts:263のRATE_LIMITS全体一致が、既存x-notice-ack:10を期待値に含まず失敗。8-3統合は35suite中33成功、1523件成功/1件失敗/skip0。
+- 原因: 既存のレート制限にx-notice-ackが追加済みだが、この旧テストの期待値はstudy-event/purchase-verify/history-initializeの3種のみ。今回rateLimit定義と当該旧テストは未変更。
+- 独立確認: review/security双方がHEADでも同じ不一致であることを確認。8-3のログ差分による不一致ではない。
+- 修正計画: 新規問題P-158の限定修正として、既存レート制限の全体一致の期待値にx-notice-ack:10だけを追加する。既存3種と実10/minの検証を維持し、製品定義・過去タスクの合否・timeoutを変更しない。対象Emulatorと独立review/securityで確認する。
+- 確認: P-157はauth155件/全体型成功、P-158は隔離Emulator63件/exit0。P-159と正式8-3の未完了を維持。
+
+## P-159 8-3統合時に既存historyReader終了hookがtimeout
+- 発見日: 2026-10-31
+- 状態: 原因未確定・調査記録
+- 再現: historyReader.test.ts:88 afterAllのdb.terminate/deleteAppが既存5000msでtimeout。テスト本体の失敗は記録されず、suite失敗になった。補助ランナーはFirestore Emulatorを終了済み。
+- 調査/対応計画: P-147の過去の終了hook事象と同一原因とは断定しない。既存timeout/cleanup/テストデータを変更せず、独立の対象再実行と処理/環境の記録で切り分ける。8-3の製品ログ動作・既存業務ロジックは変更しない。
+
+- P-159追加証跡(2026-10-31): 隔離したhistoryReaderのみ再実行でも本体61/61成功後に同じ終了hook timeout。再現2回、原因は未確定。証跡 /var/folders/j1/t5bh3_rn0mv2970mhs3v817m0000gn/T/gokaku-7-3c-functions-20jpslah。
+
+- P-159計測補足: 初回の観測setupはSDKのexports subpathを絶対ファイルパスとしてrequireし、テスト開始前にmodule解決で停止した。SDKのexport解決を使う限定修正後に2回目の計測を行い、さらに失敗すれば深追いしない。製品/既存テスト未変更。
+
+- P-159計測結果(2026-10-31): export解決修正後の観測付き実行は61/61・exit0。終了時pool opCount0/pendingStreams空、BulkWriter closeとclient destructor完了。観測時は再現せず、RunQuery未解放の仮説は未確定。推測修正は行わない。P-158修正後の統合を通常条件(観測なし/同じtimeout)で1回再確認する。証跡 gokaku-7-3c-functions-lc9m5y2k。
+
+- P-159通常統合再確認(2026-10-31): P-158修正後の通常統合ではhistoryReader suite成功。原因未確定の監視を維持し解決とは扱わない。
+
+- P-159再開計画(2026-11-01): 前回は終了時観測2回とも正常で原因未確定。今回はSDKの先行ロードだけを行う条件とsetup無しを、freshな隔離Emulatorで各1回比較する。Firestoreインスタンス/メソッドhook/既存テスト/timeout/製品は変更しない。全体rerun無し。30分以内に比較結果と未確定事項を報告し、同条件を盲目的に反復しない。
+
+- P-159比較結果(2026-11-01): setup無しは本体61/61後afterAll timeout/exit1、SDK先行ロードのみは61/61・exit0。先行ロードのみでも成功する結果を観測したが各1回のため因果未確定。独立source reviewでJest29.7のafterAllは登録順、setup登録hook内の遅延SDK取得は既存hook直前に届くと確認。次はこの遅延方式で終了処理だけ観測し、SDK初期化順の変更を避ける。既存テスト/timeout/製品は変更せず対象suiteのみ1回、全体rerun無し。
+
+- P-159遅延観測(2026-11-01): SDK取得をsetup登録afterAll内まで遅らせても61/61・exit0、終了時op0/クライアント破棄完了。先行ロードを除外しても追加hook/観測の時間的影響は未除外。次の1回は外部ts-jest委譲transformerで元テストのawait db.terminate()だけをメモリ上の観測helper呼出へ置き換える。既存ソースファイル/fixture/assertion/timeoutを変えず、SDK先行ロードと追加afterAllを両方避け、既存終了位置の待機段階を捕捉する。30分以内の限定調査範囲で全体rerun無し。
+
+- P-159終了解始後観測(2026-11-01): 元db.terminate()を先に呼び外部helperで観測しても61/61・exit0。SDK先行ロード/追加afterAllは無いが、Promiseへの追加then・destructor観測・終了前ログによる時間的影響は未除外。次の対象1回はこれらを全て外し、元のawaitを維持したまま4500ms時点の既存db状態を読むタイマーだけに限定する。元ファイル/SDK/ASSERT/timeout不変、30分以内・全体rerun無し。
+
+- P-159タイマーのみ観測結果(2026-11-01): Promise/SDKメソッド監視を除いても61/61・exit0。4500msの観測は発火せず正常完了したため失敗段階未確定。各観測条件はJest設定/変換キャッシュ条件も変わる。次は元setup無し・元test/timeoutのまま外部fresh cacheDirectoryだけを指定し1回比較する。既存cacheは消さず、compiledcode差分/コンパイル時間影響を区別し、成功のみで修正とは扱わない。
+
+- P-159キャッシュ分離結果(2026-11-01): setup/観測/変換追加なし、元testのまま外部fresh cacheDirectoryだけ指定すると61/61・exit0。既存cacheは保持。次に同じfreshcacheを1回だけ再利用し、cache miss/hitという対照条件を比較する。通るまでの反復はせず、既存/freshの生成JS比較と合わせて判断する。成功だけでcache破損やP-159解決とは断定しない。
+
+- P-159限定比較の結論(2026-11-01): 元cache/setup無しでは終了timeoutを再現。freshcache初回/同cache再利用は元test61/61・exit0。対象2ファイルの生成JSはchecksum/sourceMapURLを除いて一致し、stale codeの根拠なし(mainも1組ずつ直接一致確認)。待機段階・cache/SDKとの因果は未確定。製品・元test・SDK設定・timeoutは変更せず、全体rerun無し。約24分で観測反復を終了。限定比較の実施/結論の正確性のみ独立review PASS、P-159未解決/8-3未完了を維持。型チェック/diff成功、所有Emulator終了確認。証跡 /Users/jime0083/.codex/verification/gokaku/p159-20261101/comparison-summary.json。
+
+## P-160 既存の同時日次判定テストが5秒でtimeout
+- 発見日: 2026-10-31(8-3統合再確認)
+- 状態: 原因調査中
+- 再現: judgeUserDay.test.ts:350「two concurrent judges create one result; loser returns already」が5000msでtimeout。他34suite成功、1523件成功/1件失敗/skip0。初回統合では当該testは成功していた。製品judgeUserDayと同testは8-3で未変更。
+- 調査計画: SDKの同時transaction再試行と実際の待機時間、競合・cleanupを区別する。製品・旧assertion・timeoutは原因と修正計画が確定するまで変更しない。全体の盲目的な再実行はせず、独立調査と最小観測に限定する。
+
+- P-160観測: 同時判定48/49は初回commitでcode10/約2043ms、617/1451ms後に2attempt目、2689/3503msで正常完了。観測実行60/60成功・exit0。前回timeoutの直接原因は未再現で未確定。
+- 設計上の原因: SDK標準の最大5attemptに対し、code10通常backoff4回だけでも最大12187.5msとなり、製品に5秒以内要件がない正当性テストの既定5秒は標準再試行を収めない。
+- 限定修正計画: 失敗した同時判定case1件だけ30,000msの有限budgetを明示する。最大約12.2秒の通常backoffと実測約2秒の競合待ちを伴う複数attemptを想定したテストbudgetであり、SDK全経路の保証上限ではない。assertion/SDK再試行設定/製品/他テストは変更しない。対象Emulator・型lint・独立review/security後に統合を確認する。元timeout原因の監視は維持する。
+
+- P-159追加限定調査(2026-10-31ユーザー承認): 統合3回目は全1524テスト本体成功後、同じhistoryReader終了hookで失敗。終了処理だけの観測を30分以内の独立調査として実施する。query/transaction中への計測は入れず、製品/既存テスト/timeoutを維持。初期30分内で原因特定または取得証跡と未確定点を報告し、全体の再実行は行わない。
+
+- P-159追加限定調査1回目: 終了処理のみ観測で61/61・exit0。enterはopCount0/listener0/BulkWriter1、resolvedはopCount0/client0/BulkWriter0/destructor完了1/1。失敗は捕捉できず、先行SDKロード・stderr/Promise観測の時間的影響は未除外。transport設定は変更していない。同条件2回目を1回だけ行い、再度正常なら反復を止める。証跡 p159-terminate-only-run1。
+
+## P-161 リリース前再監査で新規highと継続警告を確認
+- 発見日: 2026-11-01(ユーザー承認の8-5調査のみ先行)
+- 状態: 方針承認済み・修正継続中（Functions限定更新/decoder spike完了、decoder本体/開発依存は未完了）
+- 再現/証跡: npm audit dev込み/root93 package(high24)/Functions28(high1)、dev除外root54/Functions9。GHSA重複除外はfull root55/Functions6。監査JSONは /Users/jime0083/.codex/verification/gokaku/8-5-20261101。
+- 原因/範囲: 現在の依存に修正前decoder0.2.2とFunctions body-parser2.3.0が残る。production iOS JSの発生元18 package中decoderのみ含有。ほかのnpm prod警告とiOS実行コードを混同しない。body-parserの実デプロイFramework解決先/悪用は未検証。
+- 旧判断との区別: decoderに別high追加、旧P-001/P-010/P-020の状態・承認は変更しない。Functions uuidの確認済みgaxios経路は無引数v4。
+- 調査結果/提案: docs/dependency-audit-20261101.md。body-parser2.4.0互換候補とdecoder0.5.1対応の互換性検証を優先する案。decoderはESM/親範囲外で単純overrideを安全としない。audit推奨のmajor/downgradeを自動適用しない。
+- 次の手順: 独立review/securityで調査確認→ユーザーが方針承認→必要な修正を小タスク化。今回は依存/source/lock更新なし。本問題と正式8-5は未完了、8-3/P-159も未完了を保持。
+- 独立確認(2026-11-01): 統合調査reportのreview/security双方PASS。新規修正・検証の方針をユーザー確認中。型チェック/diff成功。リスク受入や修正完了の判定は未実施。
+
+- P-161方針承認(2026-11-01): ユーザーはbody-parser2.4.0互換更新を優先、iOS decoder0.5.1はESM互換性検証先行、開発ツールは互換候補から確認/major別途確認、uuidは確認済み無引数v4利用のみ従来受入継続を承認。正式8-5の調査/方針決定は完了。修正はP-161-A/B/Cへ分割し、本問題の修正完了・リリース可能性は未判定。旧問題の状態を一括変更しない。
+
+## P-162 decoder隔離Metro検証ランナーの初回失敗
+- 発見日: 2026-11-01。状態: 解決済み（2026-11-02、独立review/security双方PASS）。製品不具合とは判定しない。
+- 再現: P-161-Bの隔離production iOS Metroランナー初回がexit1。baseline/file-map-cacheへのENOENTを出力。
+- 証跡: /Users/jime0083/.codex/verification/gokaku/8-5-20261101/p161-b-metro-biTiPc/results.json。担当に結果/設定の原因調査と限定修正案を依頼。本体依存/製品コードは変更しない。
+
+- 原因調査(2026-11-02): 初回resultsの致命的エラーは@babel/runtime/helpers/slicedToArrayの解決失敗。watchFoldersだけでは隔離entryからrepo依存への探索先を追加しない。cache警告は指定親ディレクトリ未作成。既存helper存在とMetro cache書込コードを担当が確認済み。
+- 限定修正計画: 外部v2のみnodeModulesPathsに隔離/repo探索先を追加、cache親を作成、実解決先assertを追加。初回証跡・製品は保持し2回目の比較を1回行う。
+
+## P-163 Functionsビルドに性能テストが入りJest名未定義で失敗
+- 発見日: 2026-11-02。状態: 解決済み（同日、独立review/security双方PASS）。
+- 再現: P-161-Aの既存Functions回帰runnerでtsc -p functions/tsconfig.build.jsonがexit2。dailyJudgement/__performance__/dailyJudgementLoad.bench.tsのjest/afterAll/expect/testが未定義。Emulatorはまだ起動していない。
+- 証跡: /Users/jime0083/.codex/verification/gokaku/8-5-20261101/p161-a/review-emulator/build.log。通常typecheckとproduction buildを混同しない。review担当に既存build設定と依存更新の因果調査を依頼。原因特定前に本体設定を修正しない。
+
+- P-163原因確認(2026-11-02): tsconfig.build.jsonはJest型を除いたnode専用typesだが、excludeは__tests__だけ。既存b20966dの__performance__/dailyJudgementLoad.bench.tsもinclude srcに入り、Jest名を使うため型エラー。本番moduleにも入れるべきでないローカルEmulator専用性能測定ファイル。body-parser/qsの変更箇所と独立したビルド対象設定の不整合。
+- P-163修正計画: production buildの対象から__performance__だけを除き、通常typecheck/性能テスト本文・実行経路は維持。tsc入力一覧で製品入口保持/性能測定不含有と型/ビルドを確認し、独立review/securityで検証する。
+
+- P-161-A/P-161-B完了(2026-11-02): 独立review/security双方PASS。Functions lockのbody-parser2.4.0/qs6.17.1限定更新とNode22回帰19件、安全隔離Functions/Firestore Emulator47件+Callable401成功。監査high0。decoderは隔離互換性spike完了のみ、本体未更新・実Hermes未検証、範囲外/橋渡し制約を維持。開発依存Cおよびdecoderの実修正は残るためP-161全体は未解決。
+- P-162解決確認(2026-11-02): 外部v2の3点だけを修正し3構成bundle/VM生成、実依存解決先・source hashを独立確認、review/security双方PASS。製品コードの変更なし。
+- P-163解決確認(2026-11-02): build設定1行修正でbenchmarkだけ本番入力/出力から除外。通常typecheckには保持、製品12export維持、fresh buildとEmulator回帰成功。review/security双方PASS。
+
+- P-161-C部分調査/C1(2026-11-02): re2js2.8.7/node-forge1.4.2/root body-parser1.20.9の公開互換候補確認は部分調査review PASS。root parser1.20.9の隔離lock候補は独立review PASS、version/resolved/integrityのみ変更。他root依存/Functions不変。本体反映・実動回帰は未実施、P-161-C全体は未完了。証跡p161-c/c1-lock-candidate-__lp53si/review-final.md。
+
+- P-159再開調査計画(2026-11-02ユーザー依頼): 8-3残件は前提Workなし。過去baseline/cache/先行ロードの反復を避け、既存終了hookとSDK/既存証跡から待機箇所を特定する新しい比較計画を先に作る。30分以内の調査単位、製品・旧test・timeoutは不変更、全体再実行は原因切分けとは別の最終統合時のみ。P-160は既存修正/原因根拠の独立確認を並行し、過去問題を無断で解決扱いにしない。
+
+- P-159/8-3統合再確認(2026-11-02): Node22.19.0・元setup無し/defaultcache、隔離demoFirestoreで36suite中35成功、1543テスト本体すべて成功/skip0、historyReader元afterAll5000msだけ失敗。CLI exit1、Emulator終了済み。Node22でも再現するため世代差だけの説明を支持しない。8-3/P159未完了を維持。証跡8-3-resume-20261102/integration/integration-summary.json。
+- P-159次の限定観測計画(2026-11-02): 本体/旧test/SDK/timeout/既存cacheを変えず、Jestがhook失敗を確定した後のInspector参照取得を試す。まずSDK無しの小fixtureでhook閉包のdb参照取得を検証（5分以内）。成立時だけ対象historyReaderを1回、非秘密のwriter/pool/Promise状態だけを抽出しrawscope/UID等は保存しない。新規外部調査unit/30分以内、同じ全体suiteの再実行無し。参照不可・再現せずなら追加反復を止める。観測自体でタイミングが変わる限界は保持。根拠はp159-20261102/observation-plan.md。
+
+- P-160限定修正確認(2026-11-02): 対象1caseのみ30秒budget/既存3assertion・SDK・製品不変、独立review/security双方PASS。今回Node22統合でも該当case2850ms成功。限定修正完了を進捗へ反映したが、元timeoutの直接原因未確定という調査・監視状態は保持。
+
+## P-164 P-159用Inspector事前fixtureが応答待ち上限で失敗
+- 発見日: 2026-11-02。状態: 原因調査中。製品のエラーとは区別する。
+- 再現: SDK無し外部closure-fixture.cjsをNode22.19.0で実行、5秒のcontroller deadlineでexit1。fixture FAIL/controllerDeadline true、実historyReaderは起動していない。
+- 証跡: p159-20261102/closure-fixture.cjs、main tool出力。
+- 調査計画: worker起動/Inspector接続/Debugger.enable/ready/pausedの到達phaseだけを限定記録する。timeout延長や本suite実行をせず、fixtureは合計2回まで。閉包参照方式の可否は現時点未確定。
+
+- P-164限定診断結果(2026-11-02): 2回目も5秒deadline/exit1。固定phaseはcontroller.enter→connect.before→connect.after→post.Debugger.enable.beforeまでで、enableの応答/readyは未観測。SDK/元test/Emulator未起動。接続開始後のenable応答前まで絞れたが根因は未確定。元fixtureを保持し、同問題2回の停止規定に従い第三試行/実suite起動は行わない。証跡p159-20261102/fixture-results.json（tool出力由来要約）。P159/8-3未完了を保持。
+
+## P-165 8-3の終了障害と観測ツール調査の混在
+- 発見日: 2026-11-04。進め方の調査と再編に着手。
+- 根拠: 機能の小単位はレビュー済み。統合1543テスト本体成功後、既存historyReaderの終了hookのみ失敗した。複数の観測条件で原因が確定せず、さらに補助Inspectorの不成立で調査が停止した。
+- 進行上の原因: 機能実装の大きさより、終了障害で得るべき証拠と補助ツールの境界が不明確だった。条件を変えた試行の成功だけでは元の失敗原因を確定できなかった。
+- 対応: P159を観測・限定修正・回帰に分ける。P164は別問題として保留し、次の観測は小さな事前検証を入口とする。8-3の統合合格条件は維持する。
+
+- P-159-A観測（2026-11-04）: Node22・既存Jest設定と既定cacheで対象suiteを1回実行。本体61件成功、元afterAllは5000msで失敗、exit1。担当報告ではhook_failure後にpoolTerminated=1、poolDrain=pending。プールの残存処理待ちを支持するが、処理種別・原因は未確定。writer項目のnullは値取得不可。P164とは別経路で観測できた。
+
+- 独立照合補足: terminateDeferredは操作0件でもpendingのままになり得る。今回確定したのはプール終了処理に到達したこと。次はactiveRequestCountを採り、解放待ちとクライアント終了待ちを区別する。
+
+- P-159-A/A2 独立review PASS。終了フック失敗時点でプールの未解放操作3件を確認し、クライアント破棄前の解放待ちに特定。RPC種別の特定はA3へ。証跡 p159-a2-20261104/result.json。
+
+- P-159-A3: 元Jest設定・timeoutで対象suiteを1回。61件と終了hook成功、Emulator停止。失敗時のRPC種別は未取得。観測によるタイミング影響は未除外。証跡 p159-a3-20261104/result.json。A3は未完了、根因に基づく修正Bと統合Cは未着手。
+
+- P-159既存ログ照合: RunQueryの無効transaction警告あり。終了時の未解放3件との対応は未確定。A4はALSを使わず既存タグを使う限定観測とする。
+
+- P-159-A4: ALS無しのタグ照合を元設定で1回実施。61件と終了hook成功、未解放RPCは未特定。外部証跡 p159-a4-20261104/result.json。A3/A4とも失敗捕捉なしのため同系統の観測反復を停止。製品/テスト修正と統合再実行は未実施。
+
+- P-159次の切り分け: 無効transactionのRunQuery警告と二段のPromise.allの早期rejectから、失敗時の兄弟読み取りをB0の制御テストで確認する。P-159の実測3件の種別は未確定。再現できた競合経路だけを限定修正候補にする。
+
+- P-159-B0: 制御Promise 2件で、内側のクエリ失敗と外側の履歴検証失敗の両方が兄弟読み取り完了前に伝播することをRED確認。メモリ上の限定修正で両方GREEN。同じ例外を保持して開始済み読み取りのsettleを待つ修正をhistoryReaderの2箇所に適用する。過去の未解放3件との因果は未確定。
+
+- P-159対応完了（2026-11-04）: 履歴読み取りの早期エラー伝播を制御2件で再現し、開始済み読み取りの完了後に元例外を伝播するよう限定修正。対象61件と統合36suite/1543件で元の終了hookを含めPASS。型lint、独立review/securityもPASS。過去の未解放3件のRPC種別と因果の対応は未確定として記録を保持。P-164は独立した補助検証問題として保持。正式8-3完了。
+
+- 8-3未チェック項目を独立再照合。P-160原因調査、P-159追加限定調査・原因調査、A4は既存証跡でPASS。A2所要時間の独立確認には留保。A3は過去の未解放RPC種別を特定できず未達。8-3機能と修正後統合のPASSとは別に保持する。
+
+## P-166 P-161-C2の隔離npm ciがEUSAGE
+- 発見日: 2026-11-04。候補でtypescript@5.9.3不足。初回設定パス衝突は別々の空設定で解消。
+- Node22でnpm CLI 11.6.0を明示したdry-runではbaselineと候補ともexit0。最初のnpm実体・版との差を照合し、同11.6.0で実導入を1回検証する。本体lockは未変更。
+
+- P-166対応確認: Node22でnpm 10.9.3はEUSAGE、11.6.0を明示した隔離実導入はexit0。圧縮4件、親3辺、lock不変、独立review/security PASS。11.6.0を検証手順に固定しC2完了。npm内部の判定差の詳細は未調査。
+
+- P-161-C3完了: root body-parser1.20.9のみ反映。Node22/npm11.6 ci 1814件、親3辺、圧縮4件、型lint、独立review/security成功。MCP側2.xとFunctionsは別経路。
+
+- P-161-C4完了: re2js2.8.7の隔離導入、親2辺、CJS/ESM正常とlookbehind、独立review/security成功。本体反映待ち。証跡 p161-c/re2js-c4。
+
+- P-161-C5完了: re2js2.8.7のみ本体反映。Node22/npm11.6 ci、親2辺、CJS/ESM通常と2000位置、型lint、独立review/security PASS。
+
+- P-161-C6: 隔離導入、合成PEM/証明書/署名回帰、独立review/security PASS。別鍵証明書の拒否はfalseではなく検証例外だったためfixtureを例外確認に修正。製品変更を伴わない。
+
+- P-161-C7完了: node-forge1.4.2のみ本体反映。Node22/npm11.6 ci、親2辺、合成PEM/証明書/署名回帰、型lint、独立review/security PASS。root再監査90件。今回の対象3経路は監査から外れ、MCP配下body-parserは別経路として残る。証跡 p161-c/root-after-20261104.json。
+
+- P-161-C8隔離候補PASS: MCP側parser2.4.0と直下qs6.17.1の2エントリ、root側は維持。圧縮6件と独立review/security PASS。C9で共有qs案と比較後に適用。証跡p161-c/mcp-c8。
+
+- P-161-C9隔離PASS: MCP parser2.4.0とroot qs6.16.1だけ、全親適合、圧縮10件、qs comma RED/GREEN、独立review/security。C8のnested案に代えて共有案を採用。証跡p161-c/qs-c9。
+
+## P-167 fast-uri 3.1.9で公式suffix再現例が残る
+- 発見日: 2026-11-04。C11の隔離導入と親4辺・通常URI・他3修正対象は成功。公式GHSA-333x-w4r6-6crp例では再パース後にjavascript schemeとなる。
+- 公式修正版の表示とnpm実測の差を確認中。3.1.9本体反映は保留。隔離証跡 p161-c/fast-uri-c11/result.json。
+
+- P-161-C10隔離PASS: undici6.29.1限定、親2辺、loopback回帰旧2/4・新4/4、対象advisory5件消失、review/security。証跡p161-c/undici-c10。
+
+- C12/C13隔離PASS: ip-address10.7.4とfirebase-tools配下zod4.6.6の限定回帰・独立review/security確認。C9/C10と非重複のため本体導入を1回に統合する。C11/P167は既存3系範囲の別候補なし、公式例FAILで保留。
+
+- P-161-C14完了: 合格候補5エントリのみ本体へ反映。npm11.6/Node22導入1回、圧縮10件、qs、IP、Undici4件、Zod5件、型lint、独立review/security成功。root監査86件、今回対象の残りはroot zod3系。証跡p161-c/c14。

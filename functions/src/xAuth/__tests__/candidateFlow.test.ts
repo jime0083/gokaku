@@ -25,7 +25,7 @@ function response(image?: string): Response {
   } }));
 }
 
-function fixture() {
+function fixture(onProfileResource?: () => void) {
   const initial: PendingCandidate = {
     candidateId: 'candidate-a',
     encryptedAccessToken: encrypt(ACCESS, KEY, {
@@ -60,9 +60,10 @@ function fixture() {
   };
   const fetch: jest.MockedFunction<ProfileFetch> =
     jest.fn<ReturnType<ProfileFetch>, Parameters<ProfileFetch>>(async () => response());
+  const deps = { store, fetch, encryptionKey: KEY, onProfileResource };
   return {
     initial, store, fetch,
-    flow: createCandidateFlow({ store, fetch, encryptionKey: KEY }),
+    flow: createCandidateFlow(deps),
     set: (value: PendingCandidate | null) => { current = value; },
   };
 }
@@ -275,3 +276,60 @@ it('delegates confirm true/false and discard exactly, with no extra reads or HTT
   expect(f.store.attachProfile).not.toHaveBeenCalled();
   expect(f.fetch).not.toHaveBeenCalled();
 });
+
+
+it('observes a validated HTTP resource with zero arguments before attach, once across cached reads', async () => {
+  const observer = jest.fn();
+  const f = fixture(observer);
+  await f.flow.getPending(UID);
+  await f.flow.getPending(UID);
+  expect(observer.mock.calls).toEqual([[]]);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  expect(observer.mock.invocationCallOrder[0]).toBeLessThan(
+    f.store.attachProfile.mock.invocationCallOrder[0],
+  );
+});
+
+it.each(['none', 'attach', 'reread'] as const)(
+  'isolates observer throw and preserves %s persistence behavior', async (step) => {
+    const observer = jest.fn(() => { throw new Error(PRIVATE); });
+    const f = fixture(observer);
+    if (step === 'attach') f.store.attachProfile.mockRejectedValueOnce(new Error(ACCESS));
+    if (step === 'reread') {
+      f.store.get.mockResolvedValueOnce(f.initial).mockRejectedValueOnce(new Error(ACCESS));
+    }
+    if (step === 'none') await expect(f.flow.getPending(UID)).resolves.toEqual({
+      candidateId: f.initial.candidateId, profile: PROFILE, expiresAt: EXPIRES,
+    });
+    else await safeFailure(f.flow.getPending(UID));
+    expect(observer.mock.calls).toEqual([[]]);
+    expect(f.store.attachProfile).toHaveBeenCalledWith(
+      UID, f.initial.candidateId, f.initial.encryptedAccessToken, PROFILE,
+    );
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each(['absent', 'cached', 'decrypt', 'fetch', 'status', 'json', 'invalid', 'confirm', 'discard'] as const)(
+  'does not observe a returned HTTP resource for %s', async (step) => {
+    const observer = jest.fn();
+    const f = fixture(observer);
+    if (step === 'absent') f.set(null);
+    if (step === 'cached') f.set({ ...f.initial, profile: PROFILE });
+    if (step === 'decrypt') f.set({ ...f.initial, encryptedAccessToken: PRIVATE });
+    if (step === 'fetch') f.fetch.mockRejectedValueOnce(new Error(PRIVATE));
+    if (step === 'status') f.fetch.mockResolvedValueOnce(new Response(PRIVATE, { status: 401 }));
+    if (step === 'json') f.fetch.mockResolvedValueOnce(new Response('{'));
+    if (step === 'invalid') f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      data: { id: PROFILE.id, username: PRIVATE },
+    })));
+    const operation = step === 'confirm' ? f.flow.confirm(UID, f.initial.candidateId, false)
+      : step === 'discard' ? f.flow.discard(UID, f.initial.candidateId)
+        : f.flow.getPending(UID);
+    if (['decrypt', 'fetch', 'status', 'json', 'invalid'].includes(step)) await safeFailure(operation);
+    else await operation;
+    expect(observer).not.toHaveBeenCalled();
+    expect(f.store.attachProfile).not.toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledTimes(['fetch', 'status', 'json', 'invalid'].includes(step) ? 1 : 0);
+  },
+);

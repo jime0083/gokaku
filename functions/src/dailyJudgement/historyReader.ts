@@ -39,6 +39,16 @@ export class JudgementHistoryReadError extends Error {
 
 const STREAMS = ['goal', 'settings', 'xLink', 'subscription'] as const;
 
+// Keep the original rejection for transaction retry after all reads finish.
+function waitForReads<T extends readonly unknown[]>(reads: T): Promise<{
+  -readonly [K in keyof T]: Awaited<T[K]>;
+}> {
+  return Promise.all(reads).catch(async (error: unknown) => {
+    await Promise.allSettled(reads);
+    throw error;
+  });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -115,10 +125,10 @@ export async function readJudgementStreamPoint<S extends JudgementStream>(
     .orderBy('committedAt', 'desc').orderBy('revision', 'desc').limit(1);
   const afterQuery = collection.where('committedAt', '>=', cutoff)
     .orderBy('committedAt', 'asc').orderBy('revision', 'asc').limit(1);
-  const [before, after] = await Promise.all([
+  const [before, after] = await waitForReads([
     tx.get(beforeQuery),
     tx.get(afterQuery),
-  ]);
+  ] as const);
   const candidates = [...before.docs, ...after.docs].map((doc) => {
     const data: unknown = doc.data();
     if (
@@ -211,12 +221,12 @@ export async function readJudgementHistory(
   if (compareTimestamps(startedAt, cutoff) >= 0) return { status: 'beforeCoverage' };
 
   // goalなしでも残るstreamの欠損を正常skipへ置き換えない。
-  const [goalSnapshot, settings, xLink, subscription] = await Promise.all([
+  const [goalSnapshot, settings, xLink, subscription] = await waitForReads([
     readStream(tx, userRef, 'goal', revisions.goal, startedAt, cutoff),
     readStream(tx, userRef, 'settings', revisions.settings, startedAt, cutoff),
     readStream(tx, userRef, 'xLink', revisions.xLink, startedAt, cutoff),
     readStream(tx, userRef, 'subscription', revisions.subscription, startedAt, cutoff),
-  ]);
+  ] as const);
   if (goalSnapshot === null) return { status: 'noGoal' };
   const { goalId, ...goal } = goalSnapshot;
   return {

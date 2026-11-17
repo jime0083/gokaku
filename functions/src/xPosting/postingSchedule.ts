@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { getFirestore } from 'firebase-admin/firestore';
+import { info } from 'firebase-functions/logger';
 import { onSchedule, type ScheduleOptions } from 'firebase-functions/v2/scheduler';
 
 import { FUNCTIONS_REGION } from '../config';
 import { ensureAdminApp } from '../firebaseAdmin';
+import { runXRequest } from '../xUsage';
 import { createActiveTokenStore } from '../xAuth/activeTokenStore';
 import {
   X_OAUTH_CLIENT_ID,
@@ -16,7 +18,7 @@ import { requestPost, type PostFetch } from './postTransport';
 import { createPostingJobStore } from './postingJobStore';
 import { createPostingTokenProvider } from './postingToken';
 import { processPostingDate } from './postingWorker';
-import { runPendingPostings } from './runPendingPostings';
+import { PendingPostingsError, runPendingPostings, type PendingPostingsSummary } from './runPendingPostings';
 
 const POSTING_SCHEDULE_OPTIONS: ScheduleOptions = {
   schedule: '* * * * *',
@@ -29,6 +31,38 @@ const POSTING_SCHEDULE_OPTIONS: ScheduleOptions = {
   secrets: [X_OAUTH_CLIENT_ID, X_OAUTH_CLIENT_SECRET, X_TOKEN_ENCRYPTION_KEY],
 };
 
+/** 固定項目の非負safe integerだけを記録し、観測の失敗は本処理に伝播させない。 */
+function logPostingSummary(value: unknown, isFailure = false): void {
+  try {
+    const summary = isFailure
+      ? value instanceof PendingPostingsError ? value.summary : undefined
+      : value;
+    if (typeof summary !== 'object' || summary === null) return;
+    const { processed, errors, outcomes } = summary as PendingPostingsSummary;
+    if (typeof outcomes !== 'object' || outcomes === null) return;
+    const projected = {
+      processed,
+      errors,
+      outcomes: {
+        posted: outcomes.posted,
+        retry_wait: outcomes.retry_wait,
+        failed: outcomes.failed,
+        unknown: outcomes.unknown,
+        cancelled: outcomes.cancelled,
+        waiting: outcomes.waiting,
+        skipped: outcomes.skipped,
+        unavailable: outcomes.unavailable,
+      },
+    };
+    if (![processed, errors, ...Object.values(projected.outcomes)].every(
+      (count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0,
+    )) return;
+    info({ event: 'x_posting_summary', ...projected });
+  } catch {
+    // logger・不正な集計値の参照に失敗しても、投稿結果と再試行の扱いは維持する。
+  }
+}
+
 export const scheduledStudyPosting = onSchedule(
   POSTING_SCHEDULE_OPTIONS,
   async (): Promise<void> => {
@@ -39,8 +73,12 @@ export const scheduledStudyPosting = onSchedule(
       const clientSecret = X_OAUTH_CLIENT_SECRET.value();
       const encryptionKey = X_TOKEN_ENCRYPTION_KEY.value();
       const now = () => Date.now();
-      const tokenFetch: TokenFetch = (url, init) => globalThis.fetch(url, init);
-      const postFetch: PostFetch = (url, init) => globalThis.fetch(url, init);
+      const tokenFetch: TokenFetch = (url, init) => runXRequest(
+        'token_refresh', () => globalThis.fetch(url, init),
+      );
+      const postFetch: PostFetch = (url, init) => runXRequest(
+        'post_create', () => globalThis.fetch(url, init),
+      );
 
       const active = createActiveTokenStore({ firestore: db, now, encryptionKey });
       const store = createPostingJobStore({ db, now });
@@ -53,7 +91,7 @@ export const scheduledStudyPosting = onSchedule(
         newClaimId: randomUUID,
       });
 
-      await runPendingPostings({
+      const summary = await runPendingPostings({
         db,
         processPostingDate: (uid, date) => processPostingDate(uid, date, {
           ensureJob: (targetUid, targetDate) => ensurePostingJob(targetUid, targetDate, {
@@ -65,7 +103,9 @@ export const scheduledStudyPosting = onSchedule(
           newClaimId: randomUUID,
         }),
       });
-    } catch {
+      logPostingSummary(summary);
+    } catch (failure) {
+      logPostingSummary(failure, true);
       throw new Error('X posting scheduled processing failed');
     }
   },

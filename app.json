@@ -13,6 +13,7 @@
       "bundleIdentifier": "com.jime0083.gokakuwatch",
       "appleTeamId": "78G6667N9J",
       "supportsTablet": false,
+      "icon": "./assets/app-icon-v3.png",
       "googleServicesFile": "./config/GoogleService-Info.emulator.plist",
       "infoPlist": {
         "NSSupportsLiveActivities": true,

@@ -983,7 +983,38 @@ Phase 8: リリース準備
           App Store Server Notifications V2 の URL 設定(W6 手順4)もこの時に行う
     完了条件: 本番確認(読み取りのみ): Functions とスケジュールが登録され、ルールがデプロイ済みであることをコンソール/CLIで確認
 
-[ ] 8-3 費用の見える化
+[x] 8-3 費用の見える化
+    ※着手確認(2026-10-31): 前提Workなし。承認済みの個人情報なし実要求件数/判定件数/USD参考値だけを実装する。新依存0/画面0。既存の判定・投稿・認証の動作は変更しない。
+      [x] 共通ログ部品: (1)固定event/operationと安全な数値のみ (2)実HTTP試行を1回記録し元の戻り値/例外を保持 (3)投稿は要求単価、プロフィールは検証済み返却1リソース単価、認証単価は未算定 (4)logger失敗を本処理に伝播しない (5)対象test/型lint・review/security。公開Function0/依存0/40分見込み。
+        ※2026-10-31: 期待RED→22件PASS、Functions型/対象lint成功、独立review/security双方PASS。正式8-3は接続・統合検証待ち。
+      [x] 投稿Scheduler接続: 実post/token fetchと既知の処理集計だけ接続。公開Function変更1/条件5以下/40分見込み。
+      [x] P-157修正: 新認証fixtureのmock引数型だけを限定修正し、同じテスト/全体型チェックとreview/securityを確認する。
+      [x] X認証接続: 実token/profile要求と検証済みprofile返却リソースを記録し、保存済みprofileの再読込は要求へ数えない。公開Function変更1/条件5以下/45分見込み。
+      [x] 判定Scheduler接続: 成功/既知の部分失敗summaryの件数だけ記録し、元の再試行動作を保持。公開Function変更1/条件5以下/30分見込み。
+        ※2026-10-31: 投稿143件/日次31件/共通22件、対象型lint成功、独立review/security双方PASS。正式8-3は認証接続と統合Emulator待ち。
+      [x] P-158限定修正: 現行レート制限の全体期待値に既存x-notice-ack:10だけを追加し、既存の実制限検証とEmulator/review/securityを維持する。
+      [x] P-160限定修正: SDK標準再試行とのbudget不整合に基づき、失敗case1件だけ30秒を明示。既存assertion/SDK/製品を保持し対象Emulator・review/securityで確認。前回timeoutの直接原因監視は維持。
+        ※2026-11-02: 現差分1caseだけの30秒指定・既存assertion保持を独立review/security双方PASS。過去60件成功に加え今回Node22統合でも対象case2850ms成功。元timeoutの直接原因は未確定として原因調査/監視は継続。
+      [x] P-160原因調査: 既存同時判定のtransaction再試行/待機箇所を特定し、推測修正やtimeout延長をせず計画を記録する。
+      [x] P-159再開比較(2026-11-01): 先行SDKロードのみ/setup無しを各1回比較。製品/旧テスト/timeout不変、30分以内の限定調査。
+        ※限定比較のみreview PASS。元cache終了timeout/fresh初回再利用61件成功、生成JS対象2ファイル一致、原因未確定。約24分で反復停止。P-159/正式8-3は未完了、既存cache/元test/timeoutを保持。
+      [x] P-159追加限定調査(2026-10-31承認): 30分以内、終了処理のみの観測で待機段階を特定。製品/旧テスト/timeoutを維持し、全体rerunを行わず証跡と未確定事項を報告。
+      [x] P-159原因調査: 終了hookで待っている処理を特定し、timeout延長・skip・データ変更をせず修正計画を記録する。
+        ※P-158/P-159: 旧期待値と終了hookの統合失敗を記録。旧テスト/timeoutは変更せず、8-3との差分・再現を独立確認する。
+        ※2026-11-02再開: Node22/demoFirestoreで統合1回、36suite中35成功・1543本体全成功/skip0、historyReader終了hook5秒だけ失敗。型lint/diff成功・Emulator終了確認。P159新静的計画とSDK無しInspector事前fixture2回を実施し、Debugger.enable応答前で停止(P164)。実suite追加実行/timeout延長/skip/製品修正無し。正式8-3はreview/securityともFAIL、P159/P164未解決を保持。
+      ※2026-11-04再編。上の調査記録を保持し、今後の実行は以下の3単位に分ける。P-164は独立した補助検証の問題として保留。
+      [x] P-159-A 待機箇所の観測。SDKなしの最小検証が通った場合に限り、既存終了フックの失敗後に状態を取得する。対象suiteは1回。元テスト、設定、timeoutを維持。証拠が取れなければ未確定を記録する。
+        ※11-04。事前fixture成功。対象61件成功後に既存終了hook失敗を捕捉。プール完了待ちまで絞れた。次の観測は残存処理の種別だけに限定し、修正は証拠取得後。
+      [x] P-159-A2 失敗時の未解放操作数を1回だけ計測する。0件ならクライアント終了側、1件以上なら操作解放側を調べる。RPC種別は対応する記録がある場合に限り判定する。
+        ※独立review PASS。終了時の未解放操作3件を確認。
+      [調査終了・種別未特定] P-159-A3 対象suiteで操作取得・解放を対応付け、未解放の種類を特定する。1回のみ。証跡には操作名と件数だけを保存する。
+      [x] P-159-A4 既存RPCタグで取得・解放を照合する。対象suiteを1回、固定操作名と件数のみ保存。曖昧な対応は未特定とする。
+        ※独立再照合で旧調査3件とA4を完了。A4は1回の照合を実施し、RPC種別は未特定。A3は種別特定の条件が未達。過去の失敗時の操作別記録がなく、修正後の成功では補えない。追加限定調査のA2所要時間は証跡に未記録。
+      [x] P-159-B0 制御した読み取り失敗で、同じトランザクションの読み取りが未完了のまま戻るかを検証する。対象historyReaderのみ。既存Emulatorの観測反復なし。
+      [x] P-159-B 根拠に沿った限定修正。Aの証拠と再現手順を前提に修正箇所を1つに限定し、対象回帰と独立レビューを行う。
+      [x] P-159-C 終了処理の回帰確認。対象suiteと8-3統合を順に確認し、統合は1回。型lintと独立review/securityのPASS後に8-3を完了する。
+      [x] 統合検証: mock/隔離Emulatorのログ件数・秘密なし・既存動作保持、全体型lint/対象回帰・独立review/security。
+        ※2026-11-04完了。制御2件RED→修正後PASS、対象61件と終了hook成功、統合36suite/1543件・skip0・exit0、型lint成功。独立review/security双方PASS。過去観測3件のRPC種別は未特定。旧調査項目・A3/A4は未特定の観測記録として保持し、追加実行条件から外す。P-160限定修正は完了、旧timeoutの直接原因は監視事項。
     内容: X API の利用件数と推定費用、判定の処理件数を Functions のログで集計できるようにする(月3,000円の管理用)
     完了条件: Emulator のテストでログに件数が出る
 
@@ -1008,10 +1039,74 @@ Phase 8: リリース準備
           あわせて Release 構成でビルドが通り、5-3e-2 の #if DEBUG の部分(確認の間隔を短くする仕組み)が本番に入っていないことを確かめる
     完了条件: 本番相当のビルドで gokaku:///dev-* を開いても画面が出ない。debug 用の関数が本番のビルドにない。typecheck/lint/test が緑
 
-[ ] 8-5 リリース前の依存脆弱性の再確認(problem P-001)
+[x] 8-5 リリース前の依存脆弱性の再確認(problem P-001)
+    ※2026-11-01ユーザー承認: 8-3/P-159未完了を保持して調査のみ先行。前提Workなし。依存更新・本番操作は行わない。条件は(1)root/functionsのdev込みaudit (2)既存受入との比較 (3)アプリ/サーバー/開発時の露出と更新候補 (4)一次情報・独立reviewで調査確認 (5)結果記録とユーザー方針確認。画面0/Function0/依存追加0。
+    [x] 8-5調査記録・独立確認(2026-11-01): root/Functionsのdev込み・prod監査、版/経路/JS含有確認、一次資料照合、統合reportのreview/security双方PASS。正式8-5は方針承認待ち。
+    [x] 8-5方針承認: 優先修正・互換検証・残余評価/受入範囲をユーザー確認する。
     内容: npm audit(dev を含む)を再実行し、P-001・P-010 で受け入れた脆弱性(特にアプリ本体に含まれる decode-uri-component、firebase-tools 由来の4件、functions の uuid)が更新で解消されたかを確認する。
           新たに見つかったものはアプリ本体に含まれるかを調べ、ユーザーに報告して方針を決める
     完了条件: 調査結果を problem.txt に記録し、ユーザーが方針を承認する
+
+[x] P-161-A Functions body-parser互換更新 【セキュリティ確認】
+    ※2026-11-01方針承認。前提Workなし。公開Function変更0/画面0/新規依存0、既存ライブラリの更新。
+    完了条件: (1)body-parser2.4.0と必要な関連依存だけの限定差分・親範囲内 (2)正常gzip/deflate/brと不正末尾データを隔離processで検証 (3)rawBody/JSON/413等の既存契約保持 (4)対象Functions回帰・型lint/再監査 (5)独立review/security PASS。実デプロイのFramework解決先は8-2で別確認。
+
+[x] P-161-B iOS decoder 0.5.1互換性検証 【セキュリティ確認】
+    ※2026-11-01方針承認。前提Workなし。調査・spike単位/画面0/公開Function0/新規依存0。
+    完了条件: (1)隔離領域でCJS query-string/ESM decoderの組合せ確認 (2)production iOS Metroでの成立・URL正常/不正入力の既存意味を確認 (3)親の範囲外更新・既存SDKとの制約を明示 (4)本体を変えず最小の対応候補と根拠を報告 (5)独立review/security。major SDK変更や未検証overrideを適用しない。検証結果で実修正単位を確定する。
+
+[x] P-162 隔離Metroランナーの依存解決/cache親の限定修正
+    ※2026-11-02: 本体変更0。外部v2に既存依存の探索先とcache親作成だけを追加し、実解決先を照合して再比較。初回証跡保持・同一試行2回目まで。review/securityで結果の妥当性確認後に完了。
+
+[x] P-163 Functions本番ビルドと性能テストの対象分離 【セキュリティ確認】
+    ※2026-11-02。既存benchmarkを本番buildからだけ除く限定設定修正。条件: (1)build成功 (2)製品入口保持・性能fixture不含有 (3)通常typecheckでbenchmark型検査維持 (4)テスト/assertion/timeout不変更 (5)review/security PASS。
+
+    ※2026-11-02完了記録(P-161-A/B/P-162/P-163): 各タスク独立review/security双方PASS。Aは限定lock2件/Node22回帰19件/安全隔離Emulator47件+Callable401/型lint成功・Functions監査high0。Bは隔離Metro3構成のVM438操作再照合、query経由118件一致/単純ESM非互換と実Hermes未検証を記録、本体適用なし。P-162は外部runnerのみ修正し解決。P-163は本番buildの性能fixture除外のみ、通常型checkに保持・製品12export維持。実デプロイFramework解決先は8-2で別確認。8-3/P-159未完了保持。
+
+[ ] P-161-C 開発ツール互換更新候補の確認
+    ※2026-11-01方針承認。前提Workなし。互換更新候補を公開版/親要求/実行経路で確認し、1ライブラリ系統ずつの小タスクへ分割する。major/downgradeは別途確認。uuidの確認済み無引数v4利用に限り従来受入を継続する。
+
+[x] P-161-C2 root body-parser 1.20.9の隔離実動検証
+    ※前提Workなし。C1の候補を隔離導入、親3辺から解決、正常圧縮と不正末尾の回帰、他依存不変、独立review/security。適用判断は検証後。
+
+[x] P-161-C3 root body-parser 1.20.9の反映
+    ※C2の隔離検証と独立review/security PASS後。検証済みlock差分を適用し、Node22/npm11.6.0で再現導入。親解決・圧縮回帰・型lintを確認。
+
+[x] P-161-C5 re2js 2.8.7の本体反映
+    ※C4の合格候補のみ適用。再現導入・親解決・対象回帰・型lint・独立review/security。
+
+[x] P-161-C4 re2js 2.8.7の隔離互換性検証
+    ※前提Workなし。既存親2辺と限定lock差分、Node22、CJS/ESMと通常・修正対象の動作、独立review/securityを確認。
+
+[x] P-161-C7 node-forge 1.4.2の本体反映
+    ※C6候補のみ。再現導入・親解決・合成証明書回帰・型lint・独立review/security。
+
+[x] P-161-C6 node-forge 1.4.2の隔離互換性検証
+    ※前提Workなし。既存親2辺、限定lock、合成PEM文字列/Buffer・証明書/署名の回帰、独立review/security。
+
+[x] P-161-C8 MCP配下body-parser 2.4.0の隔離互換性検証
+    ※前提Workなし。既存親範囲、root parser/qsとの共存、限定lock差分、Node22隔離回帰、独立review/security。
+
+[x] P-161-C9 root qs 6.16.1との共存確認
+    ※C8とroot parserの要求を同時に満たす代替候補を隔離検証。変更2エントリ、両parser圧縮とqs回帰、review/security。
+
+[x] P-161-C10 undici 6.29.1の隔離互換性検証
+    ※既存親2辺、限定lock、ローカルHTTP/TLS・修正対象回帰、review/security。
+
+[保留・P-167] P-161-C11 fast-uri 3.1.9の隔離互換性検証
+    ※前提Workなし。既存親4経路、限定lock、通常URIと修正対象の回帰、review/security。
+
+[x] P-161-C12 ip-address 10.7.4の隔離互換性検証
+    ※既存親2辺、限定lock、IPv4/IPv6とadvisoryの回帰、review/security。
+
+[x] P-161-C13 firebase-tools配下zod 4.6.6の隔離検証
+    ※既存親範囲、rootの3系を保持、限定lock、schemaと修正対象の回帰、review/security。
+
+[x] P-161-C14 合格済み4候補の本体統合
+    ※MCP parser/共有qs、undici、ip-address、firebase-tools配下zodだけ。各候補は独立PASS済み。導入1回・対象回帰・型lint・監査・独立review/security。
+
+[x] P-161-C1 root body-parser 1.20.9の隔離lock候補作成
+    ※2026-11-02。既存Cの互換候補確認の小単位。本体変更なし、30分以内。条件: (1)入力hash保存 (2)parser1箇所のversion/resolved/integrityだけの差分 (3)親3辺の要求内・dependencies同一 (4)qs6.16.0/MCP側2.x/Functionsその他不変 (5)候補・機械比較を提出し独立review。実動回帰/本体反映/完了判断は後段。
 
 =====================================
 Phase 9: リリース後の追加機能(着手前に詳細仕様を再ヒアリングする)
@@ -1030,3 +1125,14 @@ Phase 10: 将来的に必要になった場合(リリース後に明確に問題
 
 [ ] 10-2 送れなかった計測の操作の溜め場所の一本化(requirements 12)
     内容: アプリ(JS・AsyncStorage)とロック画面(Swift・App Group)で別々にある溜め場所を1つにする
+
+※2026-11-02 P-161-C1完了: 独立review PASS。隔離候補の3フィールドだけ差分、親3辺適合・qs6.16/MCP2.3/Functions/入力hash不変。本体未適用、npm ci/実動回帰は未実施。P-161-C全体の完了/脆弱性修正完了は意味しない。
+
+残タスクの着手区分（2026-11-04）
+- 着手可: P-161-Cの残警告について、親の要求範囲内で更新できるかを依存経路ごとに確認する。優先3系統は反映済み。
+- 前提待ち: 5-3eは通知の実タップとサーバー反映。既存自動操作経路は未確認。3-5b/3-5c-2/3-E2EはW13から順に。5-3fはW12。8-1はW9手順1・2、8-2はW6/W7と本番実行承認、8-4はW9手順3と素材の確認。W10は素材承認後。
+- リリース後: 9-1〜9-3は詳細仕様決定後。10-1/10-2は問題が明確になった時点で判断。
+- 追加実行不要: P-159-A3の1回の観測は実施済み。過去のRPC種別は未特定という記録を保持。8-3統合は完了済み。5-3eの開始・停止の確認済み部分は繰り返さない。
+- 今回完了: root body-parser 1.20.9、re2js 2.8.7、node-forge 1.4.2を隔離検証後に本体反映。各対象回帰・型lint・独立review/security PASS。更新後root監査は90件（high22、moderate62、low6）。root parser経路は消失し、MCP配下parserは残る。P-161-Cは残警告の互換候補確認を継続。
+- C14完了: MCP parser 2.4.0、共有qs 6.16.1、undici 6.29.1、ip-address 10.7.4、Firebase CLI配下zod 4.6.6。再現導入、対象回帰、型lint、独立review/security成功。root監査86件（high20、moderate60、low6）。対象のうちroot zod3系のみ残る。C11/P167は配布3.1.9の回帰が未達で保留。
+- 残警告の切り分け: re2 1.26.1は親範囲内だがNode22.22.2以上の対応版とnode-gyp 13系が必要。major変更は承認待ち。fast-uriはP167の回帰未達。残るgRPC、OpenTelemetry、XML、FTP、glob/minimatch、root Zodは現在の該当親要求が修正版を許容せず、deepmergeは公開修正版なし。decoderとuuidは既存判断を維持。

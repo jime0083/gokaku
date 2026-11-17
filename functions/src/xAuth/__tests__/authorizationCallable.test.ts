@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { info } from 'firebase-functions/logger';
 import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
 
 import { ensureAdminApp } from '../../firebaseAdmin';
@@ -12,7 +13,8 @@ import {
 } from '../authorizationCallable';
 import type { AuthorizationFlow } from '../authorizationFlow';
 import type { CandidateFlow } from '../candidateFlow';
-import { createCandidateStore } from '../candidateStore';
+import { createCandidateStore, type CandidateStore, type PendingCandidate } from '../candidateStore';
+import { encrypt } from '../crypto';
 import {
   AuthorizationConfigError,
   X_OAUTH_CLIENT_ID,
@@ -23,6 +25,8 @@ import {
 } from '../config';
 import { createStateStore } from '../stateStore';
 import { createTokenStore } from '../tokenStore';
+
+jest.mock('firebase-functions/logger', () => ({ info: jest.fn() }));
 
 jest.mock('firebase-functions/params', () => {
   const define = (name: string) => ({ name, value: jest.fn() });
@@ -79,6 +83,7 @@ let network: jest.SpyInstance;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(info).mockReset();
   jest.mocked(X_OAUTH_CLIENT_ID.value).mockReturnValue('synthetic-client');
   jest.mocked(X_OAUTH_CLIENT_SECRET.value).mockReturnValue('synthetic-secret');
   jest.mocked(X_TOKEN_ENCRYPTION_KEY.value)
@@ -93,6 +98,23 @@ beforeEach(() => {
 afterEach(() => {
   try {
     for (const log of logs) expect(log).not.toHaveBeenCalled();
+    // Keep console silence; permit only the approved structured usage events.
+    const calls = jest.mocked(info).mock.calls;
+    for (const args of calls) {
+      expect(args).toHaveLength(1);
+      const event = args[0] as ReturnType<typeof usageRequest>;
+      expect(args).toEqual([event.measurement === 'request'
+        ? usageRequest(event.operation) : usageResource()]);
+    }
+    for (const operation of ['token_exchange', 'profile_read'] as const) {
+      const endpoint = operation === 'token_exchange'
+        ? 'https://api.x.com/2/oauth2/token'
+        : 'https://api.x.com/2/users/me?user.fields=profile_image_url';
+      expect(calls.filter(([event]) => event.operation === operation &&
+        event.measurement === 'request')).toHaveLength(
+        network.mock.calls.filter(([url]) => url === endpoint).length,
+      );
+    }
   } finally {
     jest.restoreAllMocks();
   }
@@ -568,4 +590,170 @@ describe('candidate callable actions', () => {
     expect(createTokenStore).not.toHaveBeenCalled();
     expect(network).not.toHaveBeenCalled();
   });
+});
+
+
+// Exercise production factories and the real usage helper; mock only I/O.
+function usageRequest(operation: 'token_exchange' | 'profile_read') {
+  return {
+    event: 'x_api_usage', operation, measurement: 'request', requestCount: 1,
+    validatedResourceCount: 0, estimatedCostMicroUsd: null,
+    costEstimateBasis: 'unestimated',
+    unestimatedReason: operation === 'profile_read'
+      ? 'validated_resource_not_counted' : 'unknown_unit_price',
+    currency: 'USD', pricingSource: 'https://docs.x.com/x-api/getting-started/pricing',
+    pricingCheckedOn: '2026-10-31', estimateKind: 'reference_only',
+  };
+}
+
+function usageResource() {
+  return {
+    ...usageRequest('profile_read'), measurement: 'validated_resource',
+    requestCount: 0, validatedResourceCount: 1, estimatedCostMicroUsd: 10_000,
+    costEstimateBasis: 'per_validated_resource_before_dedup', unestimatedReason: null,
+  };
+}
+
+function profileWire() {
+  const key = Buffer.alloc(32, 7).toString('base64');
+  const profile = { id: '123456', username: 'usage_user', profileImageUrl: null };
+  const initial: PendingCandidate = {
+    candidateId: 'usage-candidate',
+    encryptedAccessToken: encrypt(PRIVATE, key, { uid: UID, purpose: 'accessToken' }),
+    encryptedRefreshToken: encrypt(PRIVATE, key, { uid: UID, purpose: 'refreshToken' }),
+    expiresAt: Timestamp.fromMillis(1800000000000),
+    scope: 'tweet.read tweet.write users.read offline.access',
+  };
+  let current: PendingCandidate | null = initial;
+  const store: jest.Mocked<CandidateStore> = {
+    get: jest.fn<
+      ReturnType<CandidateStore['get']>, Parameters<CandidateStore['get']>
+    >(async () => current),
+    attachProfile: jest.fn<
+      ReturnType<CandidateStore['attachProfile']>, Parameters<CandidateStore['attachProfile']>
+    >(async (_uid, _id, _envelope, saved) => {
+      expect(jest.mocked(info).mock.calls).toEqual([
+        [usageRequest('profile_read')], [usageResource()],
+      ]);
+      current = { ...initial, profile: saved };
+    }),
+    confirm: jest.fn().mockResolvedValue(undefined),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
+  jest.mocked(createCandidateStore).mockReturnValue(store);
+  return {
+    store, initial, profile,
+    set: (value: PendingCandidate | null) => { current = value; },
+    response: () => new Response(JSON.stringify({ data: { ...profile, privateField: PRIVATE } })),
+  };
+}
+
+describe('production X usage logging', () => {
+  it.each([false, true])('counts a validated HTTP profile before save; logger throws=%s', async (throws) => {
+    const f = profileWire();
+    if (throws) jest.mocked(info).mockImplementation(() => { throw new Error(PRIVATE); });
+    network.mockResolvedValueOnce(f.response());
+    const expected = { pending: {
+      candidateId: f.initial.candidateId, profile: f.profile,
+      expiresAt: f.initial.expiresAt.toMillis(),
+    } };
+    await expect(handleAuthorizationRequest(
+      request({ action: 'pending' }), createProductionAuthorizationFlow,
+    )).resolves.toEqual(expected);
+    expect(network).toHaveBeenCalledTimes(1);
+    expect(network).toHaveBeenCalledWith(
+      'https://api.x.com/2/users/me?user.fields=profile_image_url',
+      expect.objectContaining({ method: 'GET', headers: {
+        Authorization: `Bearer ${PRIVATE}`, Accept: 'application/json',
+      } }),
+    );
+    expect(f.store.attachProfile).toHaveBeenCalledWith(
+      UID, f.initial.candidateId, f.initial.encryptedAccessToken, f.profile,
+    );
+    // Persisted profile reuse must add neither request nor resource events.
+    await expect(handleAuthorizationRequest(
+      request({ action: 'pending' }), createProductionAuthorizationFlow,
+    )).resolves.toEqual(expected);
+    expect(network).toHaveBeenCalledTimes(1);
+    expect(f.store.attachProfile).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(info).mock.calls).toEqual([
+      [usageRequest('profile_read')], [usageResource()],
+    ]);
+  });
+
+  it.each(['fetch', 'status', 'json', 'profile', 'attach', 'reread'] as const)(
+    'preserves failed profile %s behavior and counts only validated resources', async (step) => {
+      const f = profileWire();
+      jest.mocked(info).mockImplementation(() => { throw new Error(PRIVATE); });
+      if (step !== 'fetch') network.mockResolvedValueOnce(
+        step === 'status' ? new Response(PRIVATE, { status: 401 })
+          : step === 'json' ? new Response('{')
+            : step === 'profile' ? new Response(JSON.stringify({ data: { id: PRIVATE } }))
+              : f.response(),
+      );
+      if (step === 'attach') f.store.attachProfile.mockRejectedValueOnce(new Error(PRIVATE));
+      if (step === 'reread') {
+        f.store.get.mockResolvedValueOnce(f.initial).mockRejectedValueOnce(new Error(PRIVATE));
+      }
+      await failure(handleAuthorizationRequest(
+        request({ action: 'pending' }), createProductionAuthorizationFlow,
+      ), 'internal', 'X authorization failed');
+      const validated = step === 'attach' || step === 'reread';
+      expect(network).toHaveBeenCalledTimes(1);
+      expect(f.store.attachProfile).toHaveBeenCalledTimes(validated ? 1 : 0);
+      expect(jest.mocked(info).mock.calls).toEqual([
+        [usageRequest('profile_read')], ...(validated ? [[usageResource()]] : []),
+      ]);
+    },
+  );
+
+  it.each(['absent', 'cached', 'decrypt', 'confirm', 'discard'] as const)(
+    'does not log profile requests/resources for %s without HTTP', async (step) => {
+      const f = profileWire();
+      if (step === 'absent') f.set(null);
+      if (step === 'cached') f.set({ ...f.initial, profile: f.profile });
+      if (step === 'decrypt') f.set({ ...f.initial, encryptedAccessToken: PRIVATE });
+      const operation = handleAuthorizationRequest(request(
+        step === 'confirm' ? { action: 'confirm', candidateId: f.initial.candidateId, postEnabled: false }
+          : step === 'discard' ? { action: 'discard', candidateId: f.initial.candidateId }
+            : { action: 'pending' },
+      ), createProductionAuthorizationFlow);
+      if (step === 'decrypt') await failure(operation, 'internal', 'X authorization failed');
+      else await operation;
+      expect(network).not.toHaveBeenCalled();
+      expect(jest.mocked(info)).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['ok', 'fetch', 'status', 'invalid', 'stage'] as const)(
+    'counts a real token_exchange on %s and isolates logger failure', async (step) => {
+      const f = wire();
+      jest.mocked(info).mockImplementation(() => { throw new Error(PRIVATE); });
+      await handleAuthorizationRequest(request({ action: 'begin' }), createProductionAuthorizationFlow);
+      expect(jest.mocked(info)).not.toHaveBeenCalled();
+      if (step !== 'fetch') network.mockResolvedValueOnce(
+        step === 'status' ? new Response(PRIVATE, { status: 401 })
+          : step === 'invalid' ? new Response('{}')
+            : new Response(JSON.stringify({
+              access_token: PRIVATE, refresh_token: PRIVATE, token_type: 'bearer',
+              expires_in: 7200, scope: 'tweet.read tweet.write users.read offline.access',
+            })),
+      );
+      if (step === 'stage') f.stage.mockRejectedValueOnce(new Error(PRIVATE));
+      const operation = handleAuthorizationRequest(request({
+        action: 'complete', state: 'synthetic-state', code: PRIVATE,
+      }), createProductionAuthorizationFlow);
+      if (step === 'ok') {
+        const result = await operation;
+        expect(result).toEqual({ candidateId: f.stage.mock.calls[0][0].candidateId });
+      } else await failure(operation, 'internal', 'X authorization failed');
+      expect(network).toHaveBeenCalledTimes(1);
+      expect(network).toHaveBeenCalledWith(
+        'https://api.x.com/2/oauth2/token', expect.objectContaining({ method: 'POST' }),
+      );
+      expect(f.stage).toHaveBeenCalledTimes(step === 'ok' || step === 'stage' ? 1 : 0);
+      if (step === 'ok') expect(f.stage.mock.calls[0][0].tokens.accessToken).toBe(PRIVATE);
+      expect(jest.mocked(info).mock.calls).toEqual([[usageRequest('token_exchange')]]);
+    },
+  );
 });

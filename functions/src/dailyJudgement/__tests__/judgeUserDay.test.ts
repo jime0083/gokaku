@@ -353,7 +353,7 @@ describe('atomic read/write boundary and immutable results', () => {
     expect(results.map((value: { status: string }) => value.status).sort()).toEqual(['already', 'created']);
     expect((await ref.collection('dailyResults').get()).size).toBe(1);
     expect((await saved())?.studiedMinutes).toBe(30);
-  });
+  }, 30_000);
 });
 
 describe('actual writer/judge serializable consistency', () => {

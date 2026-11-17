@@ -3,6 +3,7 @@ import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/
 
 import { FUNCTIONS_REGION } from '../config';
 import { ensureAdminApp } from '../firebaseAdmin';
+import { recordProfileResource, runXRequest } from '../xUsage';
 import { createAuthorizationFlow, type AuthorizationFlow } from './authorizationFlow';
 import { createCandidateFlow, type CandidateFlow, type PublicPendingCandidate } from './candidateFlow';
 import { createCandidateStore } from './candidateStore';
@@ -114,7 +115,7 @@ export async function createProductionAuthorizationFlow(): Promise<Authorization
     credentials: config.credentials,
     redirectUri: config.redirectUri,
     stateTtlMs: config.stateTtlMs,
-    fetch: (url, init) => globalThis.fetch(url, init),
+    fetch: (url, init) => runXRequest('token_exchange', () => globalThis.fetch(url, init)),
     stage: (input) => tokenStore.stage(input),
   });
 }
@@ -128,7 +129,8 @@ export async function createProductionCandidateFlow(): Promise<CandidateFlow> {
       now: () => Date.now(),
       encryptionKey: config.encryptionKey,
     }),
-    fetch: (url, init) => globalThis.fetch(url, init),
+    fetch: (url, init) => runXRequest('profile_read', () => globalThis.fetch(url, init)),
+    onProfileResource: () => recordProfileResource(),
     encryptionKey: config.encryptionKey,
   });
 }

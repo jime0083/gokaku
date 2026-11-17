@@ -29,6 +29,8 @@ export interface CandidateFlowDeps {
   readonly store: CandidateStore;
   readonly fetch: ProfileFetch;
   readonly encryptionKey: string;
+  /** Observes one validated HTTP profile, before persistence; receives no data. */
+  readonly onProfileResource?: () => void;
 }
 
 async function guarded<T>(operation: () => Promise<T>): Promise<T> {
@@ -53,6 +55,11 @@ export function createCandidateFlow(deps: CandidateFlowDeps): CandidateFlow {
           uid, purpose: 'accessToken',
         });
         const profile = await requestProfile(fetch, accessToken);
+        try {
+          deps.onProfileResource?.();
+        } catch {
+          // Observability must not change persistence or the original flow error.
+        }
         await store.attachProfile(uid, candidateId, encryptedAccessToken, profile);
         pending = await store.get(uid);
         if (

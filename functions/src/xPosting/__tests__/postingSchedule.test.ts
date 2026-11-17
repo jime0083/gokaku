@@ -8,6 +8,8 @@ import { defineSecret } from 'firebase-functions/params';
 import { onSchedule, type ScheduledEvent } from 'firebase-functions/v2/scheduler';
 import { FUNCTIONS_REGION } from '../../config';
 import { ensureAdminApp } from '../../firebaseAdmin';
+import { runXRequest } from '../../xUsage';
+import { PendingPostingsError, type PendingPostingsSummary } from '../runPendingPostings';
 import { createActiveTokenStore } from '../../xAuth/activeTokenStore';
 import { X_OAUTH_CLIENT_ID, X_OAUTH_CLIENT_SECRET, X_TOKEN_ENCRYPTION_KEY,
   X_OAUTH_REDIRECT_URI, X_OAUTH_STATE_TTL_SECONDS, readAuthorizationConfig } from '../../xAuth/config';
@@ -43,7 +45,11 @@ jest.mock('../postingJobStore', () => ({ createPostingJobStore: jest.fn() }));
 jest.mock('../postingToken', () => ({ createPostingTokenProvider: jest.fn() }));
 jest.mock('../postTransport', () => ({ requestPost: jest.fn() }));
 jest.mock('../postingWorker', () => ({ processPostingDate: jest.fn() }), { virtual: true });
-jest.mock('../runPendingPostings', () => ({ runPendingPostings: jest.fn() }), { virtual: true });
+jest.mock('../runPendingPostings', () => ({
+  ...jest.requireActual<typeof import('../runPendingPostings')>('../runPendingPostings'),
+  runPendingPostings: jest.fn(),
+}));
+jest.mock('../../xUsage', () => ({ runXRequest: jest.fn() }), { virtual: true });
 
 type WorkerDeps = {
   ensureJob: (uid: string, date: string) => ReturnType<typeof ensurePostingJob>;
@@ -103,6 +109,7 @@ expectSilence();
 beforeEach(() => {
   jest.resetAllMocks();
   installGuards();
+  jest.mocked(runXRequest).mockImplementation((_operation, request) => request());
   jest.mocked(ensureAdminApp).mockImplementation(() => undefined);
   jest.mocked(getFirestore).mockReturnValue(db);
   jest.mocked(X_OAUTH_CLIENT_ID.value).mockReturnValue('synthetic-client');
@@ -119,7 +126,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   try {
-    expectSilence();
+    expectSafeSummaryLogs();
     [getApps, initializeApp, defineSecret, X_OAUTH_REDIRECT_URI.value,
       X_OAUTH_STATE_TTL_SECONDS.value, readAuthorizationConfig]
       .forEach((method) => expect(method).not.toHaveBeenCalled());
@@ -324,4 +331,200 @@ test('batch rejection is sanitized even when the thrown value has malicious acce
   });
   await expectSanitized();
   expect(runPendingPostings).toHaveBeenCalledTimes(2);
+});
+
+
+// 8-3: only the transparent request adapter is mocked; the actual partial-error class is used.
+const summaryEvent = 'x_posting_summary';
+const outcomeKeys = [
+  'posted', 'retry_wait', 'failed', 'unknown', 'cancelled', 'waiting', 'skipped', 'unavailable',
+] as const;
+function summaryFixture(): PendingPostingsSummary {
+  return {
+    processed: 36, errors: 0,
+    outcomes: {
+      posted: 1, retry_wait: 2, failed: 3, unknown: 4,
+      cancelled: 5, waiting: 6, skipped: 7, unavailable: 8,
+    },
+  };
+}
+function expectSafeSummaryLogs() {
+  [write, debug, log, warn, error, console.log, console.info, console.warn,
+    console.error, console.debug, console.trace, console.dir, console.table]
+    .forEach((method) => expect(method).not.toHaveBeenCalled());
+  for (const call of jest.mocked(info).mock.calls) {
+    expect(call).toHaveLength(1);
+    const entry = call[0] as PendingPostingsSummary & { event: string };
+    expect(Object.keys(entry).sort()).toEqual(['errors', 'event', 'outcomes', 'processed']);
+    expect(entry.event).toBe(summaryEvent);
+    expect(Object.keys(entry.outcomes).sort()).toEqual([...outcomeKeys].sort());
+    for (const count of [entry.processed, entry.errors, ...Object.values(entry.outcomes)]) {
+      expect(typeof count).toBe('number');
+      expect(Number.isSafeInteger(count)).toBe(true);
+      expect(count).toBeGreaterThanOrEqual(0);
+    }
+    expect(JSON.stringify(entry)).not.toContain(privateValue);
+    expect(JSON.stringify(entry)).not.toContain('synthetic-access');
+    expect(JSON.stringify(entry)).not.toContain('persisted-user');
+    expect(JSON.stringify(entry)).not.toContain('example.test');
+  }
+}
+
+test('8-3 logs only projected summary once after successful completion', async () => {
+  const summary = summaryFixture();
+  const extra = {
+    uid: privateValue, token: privateValue, payload: privateValue, url: privateValue,
+    rawError: new Error(privateValue),
+  };
+  const untrusted = { ...summary, ...extra, outcomes: { ...summary.outcomes, ...extra } };
+  Object.defineProperty(untrusted, 'privateField', {
+    get() { throw new Error(privateValue); },
+  });
+  runPendingPostings.mockResolvedValueOnce(untrusted);
+  await expect(scheduledStudyPosting.run(event)).resolves.toBeUndefined();
+  expect(jest.mocked(info).mock.calls).toEqual([[{ event: summaryEvent, ...summary }]]);
+  expect(runXRequest).not.toHaveBeenCalled();
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});
+
+test('8-3 logs all-zero counts and the safe integer boundary without conversion', async () => {
+  const summary = summaryFixture();
+  summary.processed = Number.MAX_SAFE_INTEGER;
+  outcomeKeys.forEach((key) => { summary.outcomes[key] = 0; });
+  runPendingPostings.mockResolvedValueOnce(summary);
+  await scheduledStudyPosting.run(event);
+  expect(jest.mocked(info).mock.calls).toEqual([[{ event: summaryEvent, ...summary }]]);
+});
+
+test('8-3 partial failure logs actual class summary then preserves generic rejection', async () => {
+  const summary = summaryFixture();
+  summary.processed += 1;
+  summary.errors = 1;
+  const failure = new PendingPostingsError(summary);
+  Object.assign(failure.summary, { uid: privateValue, token: privateValue });
+  Object.assign(failure.summary.outcomes, { payload: privateValue, url: privateValue });
+  runPendingPostings.mockRejectedValueOnce(failure);
+  await expectSanitized();
+  expect(jest.mocked(info).mock.calls).toEqual([[{ event: summaryEvent, ...summary }]]);
+});
+
+test('8-3 arbitrary error summary and forged error name are never inspected or logged', async () => {
+  const readSummary = jest.fn(() => { throw new Error(privateValue); });
+  const unknown = Object.defineProperty({ name: 'PendingPostingsError', uid: privateValue },
+    'summary', { get: readSummary });
+  runPendingPostings.mockRejectedValueOnce(unknown);
+  await expectSanitized();
+  expect(readSummary).not.toHaveBeenCalled();
+  expectSilence();
+  runPendingPostings.mockRejectedValueOnce({ name: 'PendingPostingsError', summary: summaryFixture() });
+  await expectSanitized();
+  expectSilence();
+});
+
+const invalidCounts: unknown[] = [
+  -1, 0.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1,
+  '1', privateValue, null, undefined, {}, 1n,
+];
+const countFields = ['processed', 'errors', ...outcomeKeys] as const;
+const invalidCases = countFields.flatMap((field) => invalidCounts.map((value) => ({ field, value })));
+test.each(invalidCases)('8-3 rejects invalid numeric field $field=$value in success and partial summaries', async ({ field, value }) => {
+  for (const partial of [false, true]) {
+    const summary = summaryFixture();
+    const target = field === 'processed' || field === 'errors' ? summary : summary.outcomes;
+    Object.assign(target, { [field]: value });
+    if (partial) {
+      runPendingPostings.mockRejectedValueOnce(new PendingPostingsError(summary));
+      await expectSanitized();
+    } else {
+      runPendingPostings.mockResolvedValueOnce(summary);
+      await expect(scheduledStudyPosting.run(event)).resolves.toBeUndefined();
+    }
+    expectSilence();
+  }
+});
+
+test.each([undefined, null, privateValue, {}, { processed: 0, errors: 0, outcomes: null }])(
+  '8-3 ignores unknown successful summary %#', async (summary) => {
+    runPendingPostings.mockResolvedValueOnce(summary);
+    await expect(scheduledStudyPosting.run(event)).resolves.toBeUndefined();
+    expectSilence();
+  },
+);
+
+test('8-3 summary accessors and hostile thrown proxies cannot alter invocation result', async () => {
+  const hostile = { get processed() { throw new Error(privateValue); } };
+  runPendingPostings.mockResolvedValueOnce(hostile);
+  await expect(scheduledStudyPosting.run(event)).resolves.toBeUndefined();
+  const failure = new PendingPostingsError(summaryFixture());
+  Object.defineProperty(failure, 'summary', { get() { throw new Error(privateValue); } });
+  runPendingPostings.mockRejectedValueOnce(failure);
+  await expectSanitized();
+  runPendingPostings.mockRejectedValueOnce(new Proxy({}, {
+    getPrototypeOf() { throw new Error(privateValue); },
+  }));
+  await expectSanitized();
+  expectSilence();
+});
+
+test('8-3 throwing summary logger preserves success and generic partial-failure rejection', async () => {
+  jest.mocked(info).mockImplementation(() => { throw new Error(privateValue); });
+  const summary = summaryFixture();
+  runPendingPostings.mockResolvedValueOnce(summary);
+  await expect(scheduledStudyPosting.run(event)).resolves.toBeUndefined();
+  runPendingPostings.mockRejectedValueOnce(new PendingPostingsError(summary));
+  await expectSanitized();
+  expect(jest.mocked(info).mock.calls).toEqual([
+    [{ event: summaryEvent, ...summary }], [{ event: summaryEvent, ...summary }],
+  ]);
+  expect(runPendingPostings).toHaveBeenCalledTimes(2);
+});
+
+test('8-3 deferred batch emits summary only after it settles', async () => {
+  let finish!: (summary: PendingPostingsSummary) => void;
+  const summary = summaryFixture();
+  runPendingPostings.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const pending = scheduledStudyPosting.run(event);
+  try {
+    expect(runPendingPostings).toHaveBeenCalledTimes(1);
+    expectSilence();
+  } finally { finish(summary); }
+  await expect(pending).resolves.toBeUndefined();
+  expect(jest.mocked(info).mock.calls).toEqual([[{ event: summaryEvent, ...summary }]]);
+});
+
+test('8-3 adapters count each actual fetch, including rejection, and preserve promise/value/error', async () => {
+  const deps = await workerDeps();
+  await deps.post('synthetic-access', { text: privateValue, mediaIds: [] });
+  const post: PostFetch = jest.mocked(requestPost).mock.calls[0][0];
+  const refresh: TokenFetch = jest.mocked(createPostingTokenProvider).mock.calls[0][0].fetch;
+  expect(runXRequest).not.toHaveBeenCalled();
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+  const response = new Response(null, { status: 503 });
+  const original = Promise.resolve(response);
+  jest.mocked(globalThis.fetch).mockReturnValueOnce(original);
+  const postInit: Parameters<PostFetch>[1] = {
+    method: 'POST', headers: { Authorization: 'Bearer synthetic-access' },
+    body: privateValue, redirect: 'error', signal: new AbortController().signal,
+  };
+  const pending = post('https://post.example.test', postInit);
+  expect(pending).toBe(original);
+  await expect(pending).resolves.toBe(response);
+  expect(globalThis.fetch).toHaveBeenNthCalledWith(1, 'https://post.example.test', postInit);
+  const rejection = new Error(privateValue);
+  jest.mocked(globalThis.fetch).mockRejectedValueOnce(rejection);
+  await expect(post('https://post.example.test', postInit)).rejects.toBe(rejection);
+  jest.mocked(globalThis.fetch).mockResolvedValueOnce(response);
+  const refreshInit: Parameters<TokenFetch>[1] = {
+    ...postInit, body: new URLSearchParams({ refresh_token: privateValue }),
+  };
+  await expect(refresh('https://token.example.test', refreshInit)).resolves.toBe(response);
+  expect(globalThis.fetch).toHaveBeenNthCalledWith(3, 'https://token.example.test', refreshInit);
+  expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  expect(jest.mocked(runXRequest).mock.calls.map(([operation]) => operation))
+    .toEqual(['post_create', 'post_create', 'token_refresh']);
+  jest.mocked(runXRequest).mock.calls.forEach((call) => {
+    expect(call).toHaveLength(2);
+    expect(typeof call[1]).toBe('function');
+  });
+  expectSilence();
 });
