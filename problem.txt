@@ -985,7 +985,7 @@
   - recordStudySessionEvent.ts の118〜128行で端末時刻を補正し、136行でendReason='manual'、sessionEventsにはsessionId・action・processedAtを保存する。
   - 当該ファイル冒頭コメントではcheck_timeoutを5-2bで扱うとしているが、現在の保存経路に停止理由を区別する処理はない。
 - 対応: 今回は調査結果の記録のみ。仕様の解釈と対応範囲を確認してから修正計画を確定する。既存タスク・過去問題・実装は変更しない。
-
+- 2026-11-17 監査追記: requirements 3-2・5 に書いてあるとおりに直すタスク 8-6d を切り出した(着手前に大きさを確認)。
 
 ## P-042 数値編集後に既存タイマータブの最低・努力目標の表示が更新されない
 - 記録日: 2026-10-14
@@ -1232,6 +1232,7 @@
 - 修正計画: spyOn/mockRestoreを除去し、jest.mocked(setItem)の呼出数の前後比較で書込拒否を検証する。対象3スイートを再実行する。本番データ・既存assertionは変更しない。
 
 ## P-065 accountActionFlowテストのoperation blockモック引数が契約不一致
+- 状態(2026-11-17 確認・P-172): 解決済み(npm run typecheck 成功)
 - flow所有担当の原因・修正計画追記(2026-10-17): 現物でAccountActionFlowDepsのacquireOperationBlockと実呼出しはUID/actionの2引数、テストのjest.fn callbackだけuidの1引数であることを確認。main報告のTS2322はsignature変更時のmock型追従漏れによるtuple長不一致。flowテストにAccountAction型importと未使用第2引数_action: AccountActionを追加する。既存のUID/action正常順序assertとcheckpoint実装は保持し、flow54件＋checkpoint73件、npm run typecheck、関連4ファイルlintを確認する。P-060の既存計画と問題状態は変更しない。
 - 発見日: 2026-10-17(6-4 JS writer単位の全体typecheck)
 - 状態: 原因箇所確認済み・所有担当へ申し送り
@@ -1240,6 +1241,7 @@
 - 対応計画: accountActionFlowの所有担当が契約に合わせてモック引数を修正し、typecheckと同flowテストを確認する。今回のwriter担当は所有範囲外のため変更しない。
 
 ## P-066 remote sessionのUID保持にlockscreenSyncテストの期待値が未追従
+- 状態(2026-11-17 確認・P-172): 解決済み(lockscreenSync のテスト PASS)
 - 発見日: 2026-10-17(6-4 JS writer検証)
 - 状態: 原因特定・接続unit担当へ申し送り
 - 内容・根拠: lockscreenSync.test.ts:185の取り込みテストが、実際のsessionにuid: uid-1が追加されて失敗する。
@@ -1370,6 +1372,7 @@
 - 再現: Aの目標変更時、停止済みA/B/legacy sessionを同じ端末に置く。oldSessions全件のsessionIdがoldSessionIdsへ保存され、removeReplacedLocalSessionsがIDだけで消去しB/legacyも削除される。独立securityが実storage helperを隔離メモリで再現。
 - 原因: goalReplacementFlowの旧ID収集とstorage cleanupに所有UID条件がない。今回のgate追加は待機・認証拘束のみでこの既存削除条件を変更していない。6-4本人cleanup helperは別処理でUID検査あり。
 - 対応境界: ユーザーの既存タスク/過去problemを勝手に修正しない指示に従い、6-3a task状態/既存history/source削除条件は変更していない。対象UIDの既知記録だけを扱う修正と、所有不明記録があるときの目標変更仕様の確認が必要。Phase6終了報告で未修正を明示する。
+- 2026-11-17 監査追記: 修正タスクがなかったため 8-6b を切り出した。UIDのない(legacy)記録の扱いはユーザーに確認する。
 
 ## P-082 generic iOS Simulatorビルドのx86_64依存module不一致
 - 発見日: 2026-10-20(6-4統合native build)
@@ -1652,6 +1655,7 @@
 - 観測: 登録済み有効契約のrootで再開読込/購入再確認を保留し、テストからrouter.replace('/timer')を強制すると、Launch unmount後もwaitForLaunch=trueが残る。pathnameのみ変更ではcheckが再実行されずguardが表示される。
 - 新旧: 設定/解除条件とeffect依存はHEADにも存在。今回B2の復帰先filterが適用される前の経路であり、新規回帰を示す証拠はない。HEADの動的再実行・通常ユーザー操作での再現は未実施。
 - 対応境界: 過去タスク/問題を勝手に修正しないユーザー指示に従い、既存製品sourceと過去記録は変更しない。P-115の追加テスト手順修正を本件の解決証拠にしない。通常操作での到達性と期待挙動を確認して別途判断する。
+- 2026-11-17 監査追記: 通常操作で到達するかの調査タスク 8-6c を切り出した。
 
 ## P-117 問題追記スクリプトが追記後に旧文字列を書き戻す
 - 発見日: 2026-10-22(P-115原因記録時)
@@ -2035,6 +2039,7 @@
 - 確認: P-157はauth155件/全体型成功、P-158は隔離Emulator63件/exit0。P-159と正式8-3の未完了を維持。
 
 ## P-159 8-3統合時に既存historyReader終了hookがtimeout
+- 状態(2026-11-17 整理・P-172): 対応完了(再現できた競合経路を修正。過去の未解放3件との因果は未確定)。解決記録は P-165 の下にある「P-159対応完了(2026-11-04)」。並列実行時の timeout は P-169 で扱う
 - 発見日: 2026-10-31
 - 状態: 原因未確定・調査記録
 - 再現: historyReader.test.ts:88 afterAllのdb.terminate/deleteAppが既存5000msでtimeout。テスト本体の失敗は記録されず、suite失敗になった。補助ランナーはFirestore Emulatorを終了済み。
@@ -2087,6 +2092,7 @@
 - 独立確認(2026-11-01): 統合調査reportのreview/security双方PASS。新規修正・検証の方針をユーザー確認中。型チェック/diff成功。リスク受入や修正完了の判定は未実施。
 
 - P-161方針承認(2026-11-01): ユーザーはbody-parser2.4.0互換更新を優先、iOS decoder0.5.1はESM互換性検証先行、開発ツールは互換候補から確認/major別途確認、uuidは確認済み無引数v4利用のみ従来受入継続を承認。正式8-5の調査/方針決定は完了。修正はP-161-A/B/Cへ分割し、本問題の修正完了・リリース可能性は未判定。旧問題の状態を一括変更しない。
+- 2026-11-17 監査追記: functions に fast-xml-parser<=5.11.2(moderate、ReDoS)が firebase-admin→@google-cloud/storage 経由で出ている。到達性は未確認。P-161-C の残警告に加える。2026-11-17 時点の監査: root(dev除外)27件(high14/moderate13)、functions(dev除外)8件(high0)。
 
 ## P-162 decoder隔離Metro検証ランナーの初回失敗
 - 発見日: 2026-11-01。状態: 解決済み（2026-11-02、独立review/security双方PASS）。製品不具合とは判定しない。
@@ -2126,6 +2132,7 @@
 - P-164限定診断結果(2026-11-02): 2回目も5秒deadline/exit1。固定phaseはcontroller.enter→connect.before→connect.after→post.Debugger.enable.beforeまでで、enableの応答/readyは未観測。SDK/元test/Emulator未起動。接続開始後のenable応答前まで絞れたが根因は未確定。元fixtureを保持し、同問題2回の停止規定に従い第三試行/実suite起動は行わない。証跡p159-20261102/fixture-results.json（tool出力由来要約）。P159/8-3未完了を保持。
 
 ## P-165 8-3の終了障害と観測ツール調査の混在
+- 状態(2026-11-17 整理・P-172): 解決済み(進め方の問題。P-159 の分割で対応)
 - 発見日: 2026-11-04。進め方の調査と再編に着手。
 - 根拠: 機能の小単位はレビュー済み。統合1543テスト本体成功後、既存historyReaderの終了hookのみ失敗した。複数の観測条件で原因が確定せず、さらに補助Inspectorの不成立で調査が停止した。
 - 進行上の原因: 機能実装の大きさより、終了障害で得るべき証拠と補助ツールの境界が不明確だった。条件を変えた試行の成功だけでは元の失敗原因を確定できなかった。
@@ -2180,3 +2187,93 @@
 - C12/C13隔離PASS: ip-address10.7.4とfirebase-tools配下zod4.6.6の限定回帰・独立review/security確認。C9/C10と非重複のため本体導入を1回に統合する。C11/P167は既存3系範囲の別候補なし、公式例FAILで保留。
 
 - P-161-C14完了: 合格候補5エントリのみ本体へ反映。npm11.6/Node22導入1回、圧縮10件、qs、IP、Undici4件、Zod5件、型lint、独立review/security成功。root監査86件、今回対象の残りはroot zod3系。証跡p161-c/c14。
+
+=====================================
+2026-11-17 Codex 作業分(2026-10-17〜11-06)の監査で見つかった問題
+=====================================
+※監査: Phase 6 / 課金・X OAuth / 0:00判定 / X自動投稿 / ネイティブ・未コミット / 手順・記録 / セキュリティ横断 / Emulatorテスト実行 の8観点。
+  証跡はセッションの scratchpad(audit-findings.md・logs/)。high の製品バグ・セキュリティ問題(critical/high)は見つからなかった。
+
+## P-168: npm run test:functions が Auth Emulator を起動せず authAccountAction のテスト12件が毎回失敗する
+- 記録日: 2026-11-17
+- 状態: 修正中(原因特定済み)
+- 発生箇所: package.json の test:functions / functions/src/**/authAccountAction.test.ts
+- 問題内容:
+  想定した動き: CLAUDE.md の公式コマンド npm run test:functions で Functions のテストが全件通る
+  実際の動き: authAccountAction.test.ts の12件が beforeAll の「demo-gokakuのAuth・Firestore Emulatorが必要です」で毎回失敗する(3回中3回)
+- 再現手順:
+  1. npm run test:functions
+- 原因調査: ログは「Starting emulators: functions, firestore」のみ。--only functions,firestore,auth で実行すると13/13 PASS。
+- 特定した原因: test:functions の emulators:exec が --only functions,firestore で auth を含めていない。テストは FIREBASE_AUTH_EMULATOR_HOST を必須にしている。
+- 切り出したタスク: 8-6a
+
+## P-169: npm run test:functions を並列実行すると判定・投稿系の統合テストが不規則に失敗する
+- 記録日: 2026-11-17
+- 状態: 修正中(原因の有力な根拠あり)
+- 発生箇所: functions/package.json の test("jest" = 既定の並列実行) / dailyJudgement・xPosting の統合テスト
+- 問題内容:
+  想定した動き: 何度実行しても同じ結果になる
+  実際の動き: 1回目 7suite/42件、2回目 10suite/43件が失敗し、落ちる suite が毎回変わる。内容は 5秒timeout と、処理件数が期待より多い(3→8、12→17)の2種類
+- 再現手順:
+  1. npm run test:functions を2回実行し、失敗した suite を比べる
+- 原因調査: --runInBand(直列)では P-168 の12件以外の 1752件がすべて PASS。runDailyJudgements.test.ts の冒頭に「新規 Emulator でこの suite だけを実行する」と書かれており、本番コードは users 全体を読むため、並列実行中は他 suite が作ったデータも数える。
+- 特定した原因: 単独の Emulator で動かす前提のテストを、1つの Firestore Emulator を共有したまま9並列前後で動かしている(テスト実行環境の問題。製品コードの不具合の証拠はない)。P-159/P-160/P-164/P-165 の timeout と症状は似ているが、P-159 の修正を否定する証拠ではない。
+- 切り出したタスク: 8-6a
+
+## P-170: ネイティブ(Swift)の処理に再現できる自動検証がない
+- 記録日: 2026-11-17
+- 状態: 調査中
+- 発生箇所: targets/_shared・modules/study-sync/ios(StudySyncAccountGate・Operations・Core・Module)/ Phase 5・6 の E2E
+- 問題内容:
+  想定した動き: ロック画面からの開始・停止、App Group の計測状態、Keychain の端末トークン、アカウントの所有権チェックが、自動テストか Phase 末の E2E で確かめられている
+  実際の動き: リポジトリに XCTest が1つもない。6-4 の「ネイティブの fake テストで確認」の証跡がリポジトリにも ~/.codex/verification にも残っていない。progress.txt に 5-E2E・6-E2E のタスクがなく、Phase 7 の E2E は P-151 で未合格
+- 原因調査: find で *Tests*.swift・XCTest の参照なしを確認。progress.txt の Phase 5・6 に E2E タスクなし。
+- 特定した原因: (調査中)Swift のテストの置き場所と実行方法が決まっていないまま、Swift の処理が増えた。
+- 切り出したタスク: 8-6e(Swift テストの導入方法の検証)、8-6f(Phase 5・6 の E2E)
+
+## P-171: レビュー PASS 済みの作業が約2週間コミットされていなかった
+- 記録日: 2026-11-17
+- 状態: 解決済み(コミット)/ ルールの追記は承認待ち
+- 発生箇所: 8-3・8-5・P-159・P-161 系(2026-10-31〜11-06)
+- 問題内容: PASS 済みの変更が未コミットのまま残り、xUsage.ts は未追跡なのに依存する側だけ変更済みで、HEAD に戻すとビルドが壊れる状態だった
+- 特定した原因: P-039 のときに決めた「PASS したらすぐコミットする」が CLAUDE.md に書かれておらず、Codex に伝わらなかった
+- 解決内容: 2026-11-17 に 32d2fba でコミット(秘密情報が入っていないことを確認。販促用の素材は除外)。CLAUDE.md への追記はユーザーの承認後
+- 切り出したタスク: なし(main が対応)
+
+## P-172: problem.txt の記録の不整合(P-159・P-165・P-065・P-066)
+- 記録日: 2026-11-17
+- 状態: 解決済み
+- 問題内容:
+  - P-159 の解決記録が P-165 の見出しの下にあり、P-159 本体の状態は「原因未確定」のまま。P-165 には状態の行がない
+  - P-159 は「早期エラー伝播」を直して統合テストが通ったが、過去の未解放3件との因果は未確定のまま「対応完了」になっている
+  - P-065・P-066 に解決の記録がない
+- 原因調査: 2026-11-17 に npm run typecheck(成功)と accountActionFlow・lockscreenSync を含む 57suite/1340件(PASS)を実行。P-065・P-066 の内容は現在のコードで解消している
+- 解決内容(2026-11-17):
+  - P-065: 解決済み(typecheck 成功で確認)
+  - P-066: 解決済み(lockscreenSync のテスト PASS で確認)
+  - P-159: 状態は「対応完了(再現できた競合経路を修正。過去の未解放3件との因果は未確定)」。並列実行時の timeout は P-169 で扱う
+  - P-165: 状態は「解決済み(進め方の問題。P-159 の分割で対応)」
+
+## P-173: 0:00 判定に失敗したユーザー・日・原因が記録に残らない
+- 記録日: 2026-11-17
+- 状態: 仕様確認中
+- 発生箇所: functions/src/dailyJudgement/runDailyJudgements.ts の catch
+- 問題内容:
+  想定した動き: requirements 3-3「履歴欠損はエラーとして記録し再試行する」のとおり、失敗が記録され、後から救える
+  実際の動き: 失敗はユーザーごとに件数として数えるだけで、誰の・どの日が・なぜ失敗したかが残らない。Scheduler の再試行(3回)でも失敗すると、その日の dailyResults が永久に欠ける
+- 特定した原因: 「記録」の中身(何を・どこに残すか、再判定の方法)が仕様で決まっていない
+- 切り出したタスク: (仕様決定後に追加)
+
+## P-174: アカウント削除・X 再連携のときに X 側のトークンを失効させていない
+- 記録日: 2026-11-17
+- 状態: 仕様確認中
+- 発生箇所: アカウント削除・X 連携の解除・再連携
+- 問題内容: サーバーに保存したトークンは削除しているが、X の POST /2/oauth2/revoke を呼んでいないため、X 側ではトークンが有効期限まで有効のまま。requirements の「失効」が X 側の失効まで含むか決まっていない(セキュリティ監査では low)
+- 切り出したタスク: (仕様決定後に追加)
+
+## P-175: リポジトリ直下に販促用の素材(約249MB)と未使用のアイコンがある
+- 記録日: 2026-11-17
+- 状態: 仕様確認中
+- 発生箇所: リポジトリ直下の promo-*.png(約70枚)・prom-idea.txt・prom-thema.txt・pic-data.txt、mokuhyo.txt の W14 の資格データ、assets/app-icon.png・app-icon-v2.png
+- 問題内容: 製品は参照していない W14 の素材がリポジトリ直下に置かれ、未コミットのまま。mokuhyo.txt に販促用のデータが入っていて、先頭の運用ルール(アプリの目標の内容・数値)と合わない。prom-thema.txt の細かい「決定」がユーザーの決定か記録から確認できない
+- 切り出したタスク: (置き場所の決定後に main が対応)
